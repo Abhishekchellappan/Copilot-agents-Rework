@@ -49,11 +49,15 @@ When the user provides fields for a new issue, process ALL of them. Do NOT skip 
 
 > **⚠️ CRITICAL**: Before calling `jira_create_issue`, cross-check your tool call arguments against the user's request. Every field mentioned MUST be present.
 
-## Custom Fields Initialization
+## AX Field Custom Mappings
+The following fields do not have automatic friendly aliases and MUST be explicitly passed in the `custom_fields` dictionary when calling `jira_create_issue` or `jira_update_issue`:
 
-When creating new issues:
-- `AX_phase` and `AX_Save` default to `"0"` on the backend. **Do NOT override these with AX_IMPL or any other value on creation.**
-- Issues are auto-assigned to the active sprint unless specified otherwise.
+| Friendly Name | Jira Field ID | Value Format |
+|:--------------|:--------------|:-------------|
+| `AX_phase` | `customfield_46609` | String number from the workflow table (e.g. `"1"`, `"2"`) |
+| `AX_Save` | `customfield_47009` | Always string `"0"` unless requested otherwise |
+
+> **⚠️ CRITICAL**: When adding AX fields, you MUST use `customfield_46609` and `customfield_47009`. Do NOT pass "AX_phase" as a key.
 
 ## Description Generation Rule
 

@@ -25,7 +25,7 @@ You have access to these generic Jira tools via the `gpos-jira-agent` MCP server
 ## Core Behavior Rules
 
 1. **Default Project Key**: Always default to **`SIGPOSDEV`** if the user doesn't specify a project key. Never ask the user which project to use — use `SIGPOSDEV` automatically.
-2. **STRICT TABLE OUTPUT (NO RAW LISTS)**: Whenever the user asks you to "list," "find," or "search" for issues, you **MUST NEVER** use a raw numbered list. You **MUST ALWAYS** format the results as a clean, aligned Markdown table using this exact structure: `| Key | Type | Status | Priority | Summary | Assignee |`
+2. **STRICT TABLE OUTPUT (NO RAW LISTS)**: Whenever the user asks you to "list," "find," or "search" for issues, you **MUST NEVER** use a raw numbered list. You **MUST ALWAYS** format the results as a clean, aligned Markdown table using this exact structure: `| Key | Type | Status | Priority | Summary | Assignee |`. **CRITICAL: You must generate this Markdown natively in your chat response. NEVER write or execute Python/Bash scripts in the terminal to parse JSON or format tables.**
 3. **PREVENT JSON BLOAT (STRICT TOOL USAGE)**: When calling `jira_search`, you **MUST ALWAYS** provide the `fields` parameter (e.g., `summary,status,assignee,issuetype,priority`). Never leave it empty, as Jira will return massive JSON payloads that cause hallucinations and incorrect statuses.
 4. **Sprint Handling**: If the user specifies a sprint name, use that EXACT string. Only fall back to `"active"` if the user does NOT specify a sprint.
 5. **Label Rules**: Follow the labeling rules defined in `rules/jira-governance.md`.
@@ -46,6 +46,8 @@ For complex multi-step workflows, follow the step-by-step instructions in the `s
 1. **`[SP XX]` in Summaries**: The prefix `[SP 16]` in ticket titles means **Sprint 16**, NOT 16 Story Points. Only use the Story Points value returned by the tool.
 2. **DO NOT invent summary statistics**: LLMs are bad at math. Do NOT generate a "Summary" section with counts unless the user explicitly asks. For accurate sprint metrics, use the sprint report skill.
 3. **STRICT LABEL WHITELIST**: Only use labels defined in `rules/jira-governance.md`. NEVER invent new label names.
-9. **Issue Creation Guidelines**: Before calling `jira_create_issue`, you MUST read `rules/issue-creation.md` and `rules/jira-governance.md`.
+9. **Issue Management Guidelines**: Before calling `jira_create_issue` OR `jira_update_issue`, you MUST read `rules/issue-creation.md` and `rules/jira-governance.md` to ensure you follow strict label whitelists and AX_phase number mappings.
 10. **Commenting Protocol**: Before calling `jira_add_comment`, you MUST follow the Draft & Approve workflow in `rules/jira-comments.md`.
 11. **Bulk Audit & Fix**: When asked to find or fix missing fields across multiple tickets, follow the recipe in `skills/audit-and-fix.md`.
+12. **Sprint Reports**: When asked for a "sprint report", "sprint status", or "developer breakdown", you MUST call `jira_generate_sprint_report()`. Do NOT attempt to calculate this yourself or use `jira_raw_api`.
+13. **Burndown Charts**: When asked for a "burndown" or "velocity chart", you MUST call `jira_get_sprint_burndown()`. Do NOT attempt to build this yourself.

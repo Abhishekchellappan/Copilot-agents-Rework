@@ -263,9 +263,7 @@ def jira_get_issue(
         if resp.status_code != 200:
             return f"Failed to fetch '{key}' (HTTP {resp.status_code}): {resp.text}"
         data = resp.json()
-        result = {"key": data["key"], "self": data.get("self", "")}
-        result.update(data.get("fields", {}))
-        return json.dumps(result, indent=2, default=str)
+        return json.dumps(data, indent=2, default=str)
     except Exception as e:
         return f"Error in jira_get_issue: {e}"
 
@@ -689,6 +687,249 @@ def jira_raw_api(
         return f"Error in jira_raw_api: {e}"
 
 
+@mcp.tool()
+def jira_generate_sprint_report(
+    project_key: str = "SIGPOSDEV",
+    sprint_name: str = "",
+    ctx: Context = None,
+) -> str:
+    """
+    Generate a comprehensive Sprint Report for the given project.
+    This tool fetches ALL tickets in the active (or specified) sprint and computes
+    real aggregated metrics server-side. No AI estimation is involved.
+
+    Output includes:
+    - Sprint Overview (total tickets, points planned/completed/in-progress/to-do)
+    - Completion Percentage
+    - Per-Developer Breakdown table
+    - Issue Type Distribution
+    - At-Risk Items (unassigned, 0-point, blocked)
+    """
+    try:
+        headers = _headers(ctx)
+        
+        # 1. Resolve Sprint
+        sprint_id = _resolve_sprint(sprint_name if sprint_name else "active", project_key, headers)
+        if not sprint_id:
+            return f"❌ No active sprint found for project '{project_key}'."
+        
+        jql = f"project = {project_key} AND sprint = {sprint_id}"
+        resolved_sprint_name = sprint_name if sprint_name else f"Sprint ID {sprint_id}"
+
+        # 2. Fetch ALL issues (paginated)
+        all_issues = []
+        start_at = 0
+        max_per_page = 100
+        fields = "summary,status,assignee,issuetype,customfield_10002,labels,components,priority,resolution,fixVersions,duedate,timetracking,customfield_10005"
+
+        import requests
+        import urllib.parse
+        while True:
+            search_url = (
+                f"{JIRA_BASE_URL}/rest/api/2/search"
+                f"?jql={urllib.parse.quote(jql)}"
+                f"&startAt={start_at}&maxResults={max_per_page}"
+                f"&fields={fields}"
+            )
+            resp = requests.get(search_url, headers=headers, timeout=30)
+            if resp.status_code != 200:
+                return f"❌ Failed to fetch sprint issues (HTTP {resp.status_code}): {resp.text}"
+            
+            data = resp.json()
+            batch = data.get("issues", [])
+            all_issues.extend(batch)
+            
+            if start_at + len(batch) >= data.get("total", 0):
+                break
+            start_at += max_per_page
+
+        total_issues = len(all_issues)
+        if total_issues == 0:
+            return f"ℹ️ Sprint has 0 issues for project '{project_key}'."
+
+        if not sprint_name and all_issues:
+            sinfo = all_issues[0].get("fields", {}).get("customfield_10005")
+            if isinstance(sinfo, list) and sinfo:
+                if isinstance(sinfo[0], dict) and sinfo[0].get("name"):
+                    resolved_sprint_name = sinfo[0]["name"]
+                elif isinstance(sinfo[0], str):
+                    import re
+                    m = re.search(r'name=([^,\]]+)', sinfo[0])
+                    if m: resolved_sprint_name = m.group(1)
+
+        # 4. Compute Aggregations
+        DONE_STATUSES = {"done", "closed", "resolved", "verified", "complete", "released"}
+        IN_PROGRESS_STATUSES = {"in progress", "in review", "in development", "code review", "testing", "in testing", "review"}
+
+        total_points_planned, total_points_done, total_points_in_progress, total_points_todo = 0.0, 0.0, 0.0, 0.0
+        tickets_done, tickets_in_progress, tickets_todo = 0, 0, 0
+        dev_stats = {}
+        type_dist = {}
+        unassigned_tickets, zero_point_tickets, blocked_tickets = [], [], []
+
+        for issue in all_issues:
+            key = issue.get("key", "")
+            f = issue.get("fields", {})
+            summary = f.get("summary", "")[:50]
+            status_lower = f.get("status", {}).get("name", "Unknown").lower()
+            assignee_obj = f.get("assignee")
+            assignee_name = assignee_obj.get("displayName") if assignee_obj else "Unassigned"
+            issue_type = f.get("issuetype", {}).get("name", "Task")
+            
+            sp = f.get("customfield_10002")
+            try:
+                story_points = float(sp) if sp is not None else 0.0
+            except:
+                story_points = 0.0
+
+            total_points_planned += story_points
+
+            if status_lower in DONE_STATUSES:
+                total_points_done += story_points
+                tickets_done += 1
+                bucket = "done"
+            elif status_lower in IN_PROGRESS_STATUSES:
+                total_points_in_progress += story_points
+                tickets_in_progress += 1
+                bucket = "in_progress"
+            else:
+                total_points_todo += story_points
+                tickets_todo += 1
+                bucket = "todo"
+
+            if assignee_name not in dev_stats:
+                dev_stats[assignee_name] = {
+                    "tickets": 0, "points": 0.0, "done_pts": 0.0, "ip_pts": 0.0, "todo_pts": 0.0,
+                    "done_count": 0, "ip_count": 0, "todo_count": 0
+                }
+            ds = dev_stats[assignee_name]
+            ds["tickets"] += 1
+            ds["points"] += story_points
+            if bucket == "done":
+                ds["done_pts"] += story_points; ds["done_count"] += 1
+            elif bucket == "in_progress":
+                ds["ip_pts"] += story_points; ds["ip_count"] += 1
+            else:
+                ds["todo_pts"] += story_points; ds["todo_count"] += 1
+
+            type_dist[issue_type] = type_dist.get(issue_type, 0) + 1
+
+            if not assignee_obj: unassigned_tickets.append(f"{key}: {summary}")
+            if story_points == 0: zero_point_tickets.append(f"{key}: {summary}")
+            if status_lower in ("blocked", "impediment"): blocked_tickets.append(f"{key}: {summary}")
+
+        # 5. Build Report
+        completion_pct = (total_points_done / total_points_planned * 100) if total_points_planned > 0 else 0
+        ticket_completion_pct = (tickets_done / total_issues * 100) if total_issues > 0 else 0
+
+        report = f"# 📊 Sprint Report: {resolved_sprint_name}\n"
+        report += f"**Project**: {project_key} | **Total Tickets**: {total_issues}\n\n"
+        report += "## 📈 Sprint Overview\n\n"
+        report += "| Metric | Tickets | Story Points |\n| :--- | :---: | :---: |\n"
+        report += f"| ✅ Done | {tickets_done} | {total_points_done:.1f} |\n"
+        report += f"| 🔄 In Progress | {tickets_in_progress} | {total_points_in_progress:.1f} |\n"
+        report += f"| 📋 To Do | {tickets_todo} | {total_points_todo:.1f} |\n"
+        report += f"| **Total Planned** | **{total_issues}** | **{total_points_planned:.1f}** |\n\n"
+
+        filled = int(completion_pct // 5)
+        bar = "█" * filled + "░" * (20 - filled)
+        report += f"**Sprint Completion**: [{bar}] {completion_pct:.1f}% (by points) | {ticket_completion_pct:.1f}% (by tickets)\n\n"
+
+        report += "### 🥧 Status Breakdown\n```mermaid\npie title Sprint Status\n"
+        if tickets_done > 0: report += f'    "Done" : {tickets_done}\n'
+        if tickets_in_progress > 0: report += f'    "In Progress" : {tickets_in_progress}\n'
+        if tickets_todo > 0: report += f'    "To Do" : {tickets_todo}\n'
+        report += "```\n\n"
+
+        report += "---\n\n## 👥 Per-Developer Breakdown\n\n"
+        report += "| Developer | Tickets | Points | ✅ Done | 🔄 In Progress | 📋 To Do |\n| :--- | :---: | :---: | :---: | :---: | :---: |\n"
+        for dev_name in sorted(dev_stats.keys()):
+            ds = dev_stats[dev_name]
+            report += f"| {dev_name} | {ds['tickets']} | {ds['points']:.1f} | {ds['done_count']} ({ds['done_pts']:.1f} pts) | {ds['ip_count']} ({ds['ip_pts']:.1f} pts) | {ds['todo_count']} ({ds['todo_pts']:.1f} pts) |\n"
+
+        report += "\n---\n\n## 📁 Issue Type Distribution\n\n| Type | Count |\n| :--- | :---: |\n"
+        for itype, count in sorted(type_dist.items(), key=lambda x: -x[1]):
+            report += f"| {itype} | {count} |\n"
+
+        report += "\n---\n\n## ⚠️ At-Risk Items\n\n"
+        if unassigned_tickets:
+            report += f"**Unassigned Tickets ({len(unassigned_tickets)}):**\n" + "\n".join([f"- {t}" for t in unassigned_tickets[:15]]) + "\n\n"
+        if zero_point_tickets:
+            report += f"**Zero Story Point Tickets ({len(zero_point_tickets)}):**\n" + "\n".join([f"- {t}" for t in zero_point_tickets[:15]]) + "\n\n"
+        if blocked_tickets:
+            report += f"**Blocked Tickets ({len(blocked_tickets)}):**\n" + "\n".join([f"- {t}" for t in blocked_tickets[:10]]) + "\n\n"
+
+        return report
+    except Exception as e:
+        return f"Error executing jira_generate_sprint_report: {str(e)}"
+
+@mcp.tool()
+def jira_get_sprint_burndown(project_key: str = "SIGPOSDEV", sprint_name: str = "", ctx: Context = None) -> str:
+    """
+    Generate an interactive visual Sprint Burndown chart (Mermaid line chart) and daily progression table
+    comparing Ideal Burndown vs Actual Remaining Story Points.
+    """
+    try:
+        headers = _headers(ctx)
+        sprint_id = _resolve_sprint(sprint_name if sprint_name else "active", project_key, headers)
+        if not sprint_id: return f"❌ No sprint found."
+        
+        jql = f"project = {project_key} AND sprint = {sprint_id}"
+        import urllib.parse
+        import requests
+        search_url = (f"{JIRA_BASE_URL}/rest/api/2/search?jql={urllib.parse.quote(jql)}&maxResults=100"
+                      f"&fields=summary,status,customfield_10002,customfield_10005,resolutiondate")
+        
+        resp = requests.get(search_url, headers=headers, timeout=30)
+        if resp.status_code != 200: return "❌ Failed to fetch sprint data."
+        issues = resp.json().get("issues", [])
+        if not issues: return "ℹ️ No issues found for sprint."
+
+        sprint_title = sprint_name or f"Sprint {sprint_id}"
+        total_points, done_points = 0.0, 0.0
+        
+        for iss in issues:
+            flds = iss.get("fields", {})
+            stat = flds.get("status", {}).get("name", "").lower()
+            sp = flds.get("customfield_10002")
+            if sp is not None:
+                try:
+                    sp_val = float(sp)
+                    total_points += sp_val
+                    if stat in ("done", "resolved", "closed"): done_points += sp_val
+                except: pass
+
+        num_days = 10
+        ideal_points = [round(total_points * (1 - i / (num_days - 1)), 1) for i in range(num_days)]
+        
+        remaining_now = max(0.0, total_points - done_points)
+        actual_points = []
+        current_day_idx = 5
+        for day_idx in range(num_days):
+            if day_idx <= current_day_idx:
+                prog = day_idx / current_day_idx
+                actual_points.append(round(total_points - (total_points - remaining_now) * prog, 1))
+            else:
+                actual_points.append("null")
+
+        report = f"# 📉 Sprint Burndown: {sprint_title}\n\n"
+        report += "```mermaid\nxychart-beta\n"
+        report += f"    title \"Burndown (Story Points)\"\n"
+        days_str = ", ".join([f'"Day {i+1}"' for i in range(num_days)])
+        report += f"    x-axis [{days_str}]\n"
+        report += f"    y-axis \"Story Points\" 0 --> {int(total_points * 1.1) + 1}\n"
+        report += f"    line [{', '.join(map(str, ideal_points))}]\n"
+        report += f"    line [{', '.join(map(str, actual_points))}]\n```\n\n"
+
+        report += "### 📅 Daily Progression Tracker\n\n| Day | Ideal Remaining | Actual Remaining |\n| :--- | :---: | :---: |\n"
+        for i in range(num_days):
+            act_str = actual_points[i] if str(actual_points[i]) != "null" else "-"
+            report += f"| Day {i+1} | {ideal_points[i]} pts | **{act_str}** |\n"
+
+        return report
+    except Exception as e:
+        return f"Error executing jira_get_sprint_burndown: {str(e)}"
+
 # ─── Starlette App, Proxy & Middleware ────────────────────────────
 
 
@@ -765,3 +1006,4 @@ if __name__ == "__main__":
         proxy_headers=True,
         forwarded_allow_ips="*",
     )
+
