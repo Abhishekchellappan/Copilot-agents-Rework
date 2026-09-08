@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpos-muralidhar-jira
+  labels:
+    app: gpos-muralidhar-jira
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gpos-muralidhar-jira
+  template:
+    metadata:
+      labels:
+        app: gpos-muralidhar-jira
+    spec:
+      containers:
+      - name: jira-mcp
+        image: abhishek15c/gpos-jira-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: sse-port
+        env:
+        - name: JIRA_BASE_URL
+          value: "http://jira.lge.com/issue"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpos-muralidhar-jira-service
+spec:
+  type: NodePort
+  selector:
+    app: gpos-muralidhar-jira
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+      nodePort: 31983

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gpos-jira-agent": {
+      "url": "http://10.221.31.25:31983/sse",
+      "headers": {
+        "X-Jira-PAT": "<YOUR_PERSONAL_ACCESS_TOKEN>"
+      }
+    }
+  }
+}
