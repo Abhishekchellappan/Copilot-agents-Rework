@@ -22,6 +22,13 @@ You have access to these generic Jira tools via the `gpos-jira-agent` MCP server
 | `jira_get_fields` | Discover field names and IDs |
 | `jira_raw_api` | Execute any raw Jira REST API call |
 
+## Jira Knowledge Base (Do not guess or search blindly)
+Your entire "brain" regarding Jira custom fields, labels, and workflows is stored in the `rules/` directory of this repository. 
+Whenever you are asked about `AX_phase`, fields, or labels, you MUST read these files directly instead of searching the workspace:
+- `rules/jira-fields.md`: Contains exact custom field IDs (like AX_phase -> customfield_46609).
+- `rules/jira-governance.md`: Contains all valid Labels and AX Phase mappings.
+- `rules/issue-creation.md`: Contains the checklist for making tickets.
+
 ## Core Behavior Rules
 
 1. **Default Project Key**: Always default to **`SIGPOSDEV`** if the user doesn't specify a project key. Never ask the user which project to use — use `SIGPOSDEV` automatically.
@@ -46,8 +53,16 @@ For complex multi-step workflows, follow the step-by-step instructions in the `s
 1. **`[SP XX]` in Summaries**: The prefix `[SP 16]` in ticket titles means **Sprint 16**, NOT 16 Story Points. Only use the Story Points value returned by the tool.
 2. **DO NOT invent summary statistics**: LLMs are bad at math. Do NOT generate a "Summary" section with counts unless the user explicitly asks. For accurate sprint metrics, use the sprint report skill.
 3. **STRICT LABEL WHITELIST**: Only use labels defined in `rules/jira-governance.md`. NEVER invent new label names.
-9. **Issue Management Guidelines**: Before calling `jira_create_issue` OR `jira_update_issue`, you MUST read `rules/issue-creation.md` and `rules/jira-governance.md` to ensure you follow strict label whitelists and AX_phase number mappings.
-10. **Commenting Protocol**: Before calling `jira_add_comment`, you MUST follow the Draft & Approve workflow in `rules/jira-comments.md`.
-11. **Bulk Audit & Fix**: When asked to find or fix missing fields across multiple tickets, follow the recipe in `skills/audit-and-fix.md`.
-12. **Sprint Reports**: When asked for a "sprint report", "sprint status", or "developer breakdown", you MUST call `jira_generate_sprint_report()`. Do NOT attempt to calculate this yourself or use `jira_raw_api`.
-13. **Burndown Charts**: When asked for a "burndown" or "velocity chart", you MUST call `jira_get_sprint_burndown()`. Do NOT attempt to build this yourself.
+9. **Strict Field Modification (No Over-Helping)**: When a user asks to update a specific field (e.g., "update AX_phase"), you MUST ONLY update that exact field. Do NOT "helpfully" auto-update other fields like `labels` or `components` unless the user explicitly asks you to, even if they seem related in the governance rules.
+10. **Issue Management Guidelines**: Before updating or creating a ticket, you MUST read the appropriate governance rulebooks.
+    - **Global Rules**: First, read `rules/global-governance.md` for company-wide Jira policies, statuses, and standard workflows.
+    - **Team Rules**: Next, determine the Jira Project Key of the ticket you are working on (e.g. `SIGPOSDEV`). You MUST then read the file `rules/<PROJECT_KEY>-governance.md` to load the team's specific components and labels.
+    - If the team file does not exist, ask the user to create it from `rules/_template-governance.md`.
+11. **JQL Accuracy**: Before searching for tickets via `jira_search`, you MUST read `rules/jql-cheatsheet.md` to learn how to correctly translate relative terms like "my", "backlog", or "sprint".
+12. **Bulk Operation Safety Protocol**: Before executing any loop or script that updates more than 3 tickets at once, you MUST render a "Dry-Run" Markdown table showing exactly what you plan to change, and wait for the user to explicitly say "Approve".
+13. **Commenting Protocol**: Before calling `jira_add_comment`, you MUST follow the Draft & Approve workflow in `rules/jira-comments.md`.
+14. **Bulk Audit & Fix**: When asked to find or fix missing fields across multiple tickets, follow the recipe in `skills/audit-and-fix.md`.
+15. **Subagent & Terminal Ban**: You are STRICTLY FORBIDDEN from spawning Subagents, using `grep`, `awk`, Python, or any terminal bash commands to parse or search through the `.json` files returned by Jira MCP tools. You must read the JSON directly using your native LLM context window. Spawning subagents to parse JSON creates massive, unnecessary delays.
+16. **NO RAW API UPDATES**: You MUST use the `jira_create_issue` and `jira_update_issue` tools to modify tickets. You are strictly forbidden from using `jira_raw_api` to `PUT` or `POST` updates.
+17. **Sprint Reports**: When asked for a "sprint report", "sprint status", or "developer breakdown", you MUST call `jira_generate_sprint_report()`. Do NOT attempt to calculate this yourself or use `jira_raw_api`.
+18. **Burndown Charts**: When asked for a "burndown" or "velocity chart", you MUST call `jira_get_sprint_burndown()`. Do NOT attempt to build this yourself.

@@ -662,23 +662,21 @@ def jira_get_fields(
 
 @mcp.tool()
 def jira_raw_api(
-    method: str, endpoint: str, body: str = "", ctx: Context = None
+    endpoint: str, ctx: Context = None
 ) -> str:
     """
-    Execute a raw Jira REST API call. Use for any endpoint not covered by other tools
-    (e.g. Agile boards, sprints, versions, components, attachments).
+    Execute a raw Jira REST API call. STRICTLY READ-ONLY (GET).
+    Use for any endpoint not covered by other tools to fetch metadata (e.g. Agile boards, components, field schemas).
+    You CANNOT use this to update or create issues.
 
-    :param method: HTTP method — GET, POST, PUT, or DELETE.
     :param endpoint: API path after base URL (e.g. 'rest/agile/1.0/board', 'rest/api/2/project').
-    :param body: Optional JSON string for POST/PUT request body.
     """
     try:
         headers = _headers(ctx)
         url = f"{JIRA_BASE_URL}/{endpoint.lstrip('/')}"
         kwargs = {"headers": headers, "timeout": 30}
-        if body and method.upper() in ("POST", "PUT"):
-            kwargs["json"] = json.loads(body) if isinstance(body, str) and body else {}
-        resp = requests.request(method.upper(), url, **kwargs)
+        
+        resp = requests.request("GET", url, **kwargs)
         try:
             return json.dumps(resp.json(), indent=2, default=str)
         except Exception:
@@ -689,7 +687,7 @@ def jira_raw_api(
 
 @mcp.tool()
 def jira_generate_sprint_report(
-    project_key: str = "SIGPOSDEV",
+    project_key: str,
     sprint_name: str = "",
     ctx: Context = None,
 ) -> str:
@@ -864,7 +862,7 @@ def jira_generate_sprint_report(
         return f"Error executing jira_generate_sprint_report: {str(e)}"
 
 @mcp.tool()
-def jira_get_sprint_burndown(project_key: str = "SIGPOSDEV", sprint_name: str = "", ctx: Context = None) -> str:
+def jira_get_sprint_burndown(project_key: str, sprint_name: str = "", ctx: Context = None) -> str:
     """
     Generate an interactive visual Sprint Burndown chart (Mermaid line chart) and daily progression table
     comparing Ideal Burndown vs Actual Remaining Story Points.
@@ -991,6 +989,111 @@ async def _proxy(request: Request):
 app.routes.append(
     Route("/rest/{path:path}", _proxy, methods=["GET", "POST", "PUT", "DELETE"])
 )
+
+# ---------------------------------------------------------------------------
+# ENTERPRISE TOOLS (LINKS, SUBTASKS, ATTACHMENTS)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def jira_link_issues(
+    inward_issue: str, outward_issue: str, link_type: str = "Blocks", ctx: Context = None
+) -> str:
+    """
+    Create a link between two Jira issues.
+    
+    :param inward_issue: The key of the issue being linked from (e.g. 'PROJ-1').
+    :param outward_issue: The key of the issue being linked to (e.g. 'PROJ-2').
+    :param link_type: The name of the link type (e.g. 'Blocks', 'Clones', 'Relates', 'Duplicates').
+    """
+    try:
+        headers = _headers(ctx)
+        url = f"{JIRA_BASE_URL}/rest/api/2/issueLink"
+        payload = {
+            "type": {"name": link_type},
+            "inwardIssue": {"key": inward_issue.strip().upper()},
+            "outwardIssue": {"key": outward_issue.strip().upper()}
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=15)
+        if resp.status_code == 201:
+            return f"Successfully linked {inward_issue} -> {outward_issue} as '{link_type}'."
+        return f"Failed to link issues (HTTP {resp.status_code}): {resp.text}"
+    except Exception as e:
+        return f"Error linking issues: {e}"
+
+@mcp.tool()
+def jira_create_subtasks(
+    parent_key: str, subtasks_json: str, ctx: Context = None
+) -> str:
+    """
+    Bulk create sub-tasks under a parent issue.
+    
+    :param parent_key: The key of the parent issue (e.g. 'PROJ-123').
+    :param subtasks_json: A JSON string containing an array of subtask summaries and descriptions.
+                          Format: [{"summary": "Sub 1", "description": "Desc 1"}, ...]
+    """
+    try:
+        parent_key = parent_key.strip().upper()
+        subtasks = json.loads(subtasks_json)
+        if not isinstance(subtasks, list):
+            return "Error: subtasks_json must be a JSON array of objects."
+            
+        headers = _headers(ctx)
+        project_key = parent_key.split("-")[0]
+        url = f"{JIRA_BASE_URL}/rest/api/2/issue"
+        
+        results = []
+        for st in subtasks:
+            payload = {
+                "fields": {
+                    "project": {"key": project_key},
+                    "parent": {"key": parent_key},
+                    "summary": st.get("summary", "Sub-task"),
+                    "description": st.get("description", ""),
+                    "issuetype": {"name": "Sub-task"}
+                }
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=15)
+            if resp.status_code == 201:
+                results.append(f"Created: {resp.json().get('key')} - {st.get('summary')}")
+            else:
+                results.append(f"Failed '{st.get('summary')}': {resp.text}")
+                
+        return "\n".join(results)
+    except Exception as e:
+        return f"Error creating subtasks: {e}"
+
+@mcp.tool()
+def jira_manage_attachment(
+    issue_key: str, file_path: str, ctx: Context = None
+) -> str:
+    """
+    Upload a local file as an attachment to a Jira issue.
+    
+    :param issue_key: The key of the issue (e.g. 'PROJ-123').
+    :param file_path: The absolute path to the local file to upload.
+    """
+    try:
+        if not os.path.exists(file_path):
+            return f"Error: File not found at {file_path}"
+            
+        headers = _headers(ctx)
+        headers["X-Atlassian-Token"] = "no-check"
+        if "Content-Type" in headers:
+            del headers["Content-Type"]
+            
+        key = issue_key.strip().upper()
+        url = f"{JIRA_BASE_URL}/rest/api/2/issue/{key}/attachments"
+        
+        with open(file_path, "rb") as f:
+            files = {"file": (os.path.basename(file_path), f)}
+            resp = requests.post(url, headers=headers, files=files, timeout=30)
+            
+        if resp.status_code == 200:
+            return f"Successfully attached {os.path.basename(file_path)} to {key}."
+        return f"Failed to attach file (HTTP {resp.status_code}): {resp.text}"
+    except Exception as e:
+        return f"Error uploading attachment: {e}"
+
 
 if __name__ == "__main__":
     import uvicorn

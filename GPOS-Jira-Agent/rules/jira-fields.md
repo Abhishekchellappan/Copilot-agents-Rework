@@ -54,7 +54,7 @@ The following fields do not have automatic friendly aliases and MUST be explicit
 
 | Friendly Name | Jira Field ID | Value Format |
 |:--------------|:--------------|:-------------|
-| `AX_phase` | `customfield_46609` | String number from the workflow table (e.g. `"1"`, `"2"`) |
+| `AX_phase` | `customfield_46609` | STRICTLY a single-digit string (e.g. `"1"`, `"2"`). NEVER text like `"AX_SDS"`! |
 | `AX_Save` | `customfield_47009` | Always string `"0"` unless requested otherwise |
 
 > **⚠️ CRITICAL**: When adding AX fields, you MUST use `customfield_46609` and `customfield_47009`. Do NOT pass "AX_phase" as a key.
