@@ -14,6 +14,7 @@ Tools: jira_search, jira_get_issue, jira_create_issue, jira_update_issue,
 import os
 import re
 import json
+import glob
 import requests
 from starlette.requests import Request
 from starlette.responses import Response
@@ -27,8 +28,50 @@ except ImportError:
     except ImportError:
         raise ImportError("Install 'mcp[cli]' or 'fastmcp' via pip.")
 
+# ─── Dynamic Markdown Knowledge Loader ────────────────────────────
+# Automatically scans .github/, rules/, and skills/ directories at startup.
+# Bundles all .md files into a single string that gets injected into the MCP server
+# instructions. This way, ANY chat client (Exacode, Copilot, Claude, Cursor)
+# receives the exact same rules through the MCP protocol — zero client config needed.
+# To add new rules or skills, simply drop a .md file into the appropriate folder.
+# No Python code changes required.
+
+def _load_markdown_knowledge() -> str:
+    """Scan .github/, rules/, and skills/ for .md files and return bundled text."""
+    sections = []
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # 1. Core instructions (.github/*.md)
+    for filepath in sorted(glob.glob(os.path.join(base_dir, ".github", "*.md"))):
+        name = os.path.basename(filepath)
+        with open(filepath, "r", encoding="utf-8") as f:
+            sections.append(f"### [CORE INSTRUCTIONS: {name}]\n{f.read().strip()}")
+
+    # 2. Governance rules (rules/*.md) — skip templates starting with _
+    for filepath in sorted(glob.glob(os.path.join(base_dir, "rules", "*.md"))):
+        name = os.path.basename(filepath)
+        if name.startswith("_"):
+            continue
+        with open(filepath, "r", encoding="utf-8") as f:
+            sections.append(f"### [GOVERNANCE RULE: {name}]\n{f.read().strip()}")
+
+    # 3. Workflow skills (skills/*.md)
+    for filepath in sorted(glob.glob(os.path.join(base_dir, "skills", "*.md"))):
+        name = os.path.basename(filepath)
+        with open(filepath, "r", encoding="utf-8") as f:
+            sections.append(f"### [WORKFLOW SKILL: {name}]\n{f.read().strip()}")
+
+    return "\n\n---\n\n".join(sections) if sections else ""
+
+
+# Load all markdown knowledge once at startup
+AGENT_KNOWLEDGE = _load_markdown_knowledge()
+_knowledge_file_count = AGENT_KNOWLEDGE.count("### [")
+print(f"📚 Loaded {_knowledge_file_count} markdown knowledge files into agent context.")
+
+
 # ─── Server & Config ──────────────────────────────────────────────
-mcp = FastMCP("GPOS Jira Agent")
+mcp = FastMCP("GPOS Jira Agent", instructions=AGENT_KNOWLEDGE if AGENT_KNOWLEDGE else None)
 JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "http://jira.lge.com/issue").rstrip("/")
 DEFAULT_PAT = os.environ.get("JIRA_PAT", "")
 
@@ -201,14 +244,29 @@ def _resolve_sprint(sprint_input: str, project_key: str, headers: dict):
 
 
 @mcp.tool()
+def get_agent_instructions() -> str:
+    """
+    IMPORTANT: You MUST call this tool ONCE at the start of every new conversation
+    before calling any other Jira tool. It returns the complete set of behavioral
+    rules, JQL accuracy rules, governance policies, label whitelists, and workflow
+    skills that you MUST follow for all subsequent operations.
+
+    Call this with no arguments. Do NOT skip this step.
+    """
+    if not AGENT_KNOWLEDGE:
+        return "No agent instructions found. Markdown files may be missing from .github/, rules/, or skills/ directories."
+    return AGENT_KNOWLEDGE
+
+
+@mcp.tool()
 def jira_search(
     jql: str, fields: str = "", max_results: int = 50, ctx: Context = None
 ) -> str:
     """
     Search Jira issues using a JQL query. Returns matching issues as JSON.
 
-    :param jql: JQL query (e.g. 'project = PROJ AND status = "In Progress"').
-    :param fields: Comma-separated field names to return (e.g. 'summary,status,assignee,labels,customfield_10002'). Empty returns default fields.
+    :param jql: JQL query string. Follow JQL rules and syntax defined in agent governance instructions.
+    :param fields: Comma-separated field names to return (e.g. 'summary,status,assignee,labels'). Empty returns default fields.
     :param max_results: Maximum number of issues to return (default 50, max 100).
     """
     try:
@@ -228,14 +286,60 @@ def jira_search(
         issues = data.get("issues", [])
         if not issues:
             return f"No issues found for JQL: {jql}"
+
+        def _compact(raw_fields: dict) -> dict:
+            """
+            Extract clean, flat string values from raw Jira field objects.
+            Strips all verbose nested structures (avatarUrls, self, iconUrl, timeZone, etc.)
+            so the total response stays well under Exacode's 4000-character tool result limit.
+            """
+            # These fields are complex and should be passed through as-is if they exist
+            passthrough_keys = {"comment", "worklog", "description"}
+
+            out = {}
+            for k, v in raw_fields.items():
+                if v is None:
+                    continue
+                # Always pass through heavy text fields unmodified
+                if k in passthrough_keys:
+                    out[k] = v
+                    continue
+                # Scalar values — keep as-is
+                if isinstance(v, (str, int, float, bool)):
+                    out[k] = v
+                # Jira object with a "name" key (issuetype, priority, status, component, etc.)
+                elif isinstance(v, dict) and "name" in v:
+                    out[k] = v["name"]
+                # Assignee / reporter — extract displayName
+                elif isinstance(v, dict) and "displayName" in v:
+                    out[k] = v["displayName"]
+                # Status — extract the category name for brevity
+                elif isinstance(v, dict) and "statusCategory" in v:
+                    out[k] = v.get("name", str(v))
+                # List of objects with "name" (e.g. labels as objects, components)
+                elif isinstance(v, list):
+                    names = []
+                    for item in v:
+                        if isinstance(item, dict) and "name" in item:
+                            names.append(item["name"])
+                        elif isinstance(item, str):
+                            names.append(item)
+                    if names:
+                        out[k] = names
+                # All other dicts — skip (they are verbose Jira metadata objects)
+                # e.g. avatarUrls, project (nested), votes, watches, etc.
+
+            return out
+
         results = []
         for issue in issues:
             entry = {"key": issue["key"]}
-            entry.update(issue.get("fields", {}))
+            entry.update(_compact(issue.get("fields", {})))
             results.append(entry)
+
         return json.dumps(
             {"total": data.get("total", 0), "count": len(issues), "issues": results},
-            indent=2,
+            separators=(",", ":"),  # No extra whitespace — minimises character count further
             default=str,
         )
     except Exception as e:
