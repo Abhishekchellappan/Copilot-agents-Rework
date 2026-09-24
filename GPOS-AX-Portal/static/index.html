@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPOS AX Portal</title>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/portal.css?v=3">
+    <style>
+        /* Base styles */
+        body { font-family: 'Inter', sans-serif; }
+        
+        /* Light Theme Overrides */
+        body.light-theme {
+            background-color: #f4f5f7 !important;
+            color: #1e293b !important;
+        }
+        body.light-theme .bg-slate-900 { background-color: #f4f5f7 !important; }
+        body.light-theme .bg-slate-900\/90 { background-color: rgba(244, 245, 247, 0.9) !important; }
+        body.light-theme .bg-slate-900\/50 { background-color: rgba(244, 245, 247, 0.5) !important; }
+        body.light-theme .bg-slate-800 { background-color: #ffffff !important; }
+        body.light-theme .bg-slate-800\/80 { background-color: rgba(255, 255, 255, 0.8) !important; }
+        body.light-theme .bg-slate-800\/50 { background-color: rgba(255, 255, 255, 0.5) !important; }
+        body.light-theme .bg-slate-700 { background-color: #f1f5f9 !important; }
+        
+        body.light-theme .text-white { color: #0f172a !important; }
+        body.light-theme .text-slate-100 { color: #1e293b !important; }
+        body.light-theme .text-slate-200 { color: #334155 !important; }
+        body.light-theme .text-slate-300 { color: #475569 !important; }
+        body.light-theme .text-slate-400 { color: #64748b !important; }
+        
+        body.light-theme .border-slate-800 { border-color: #e2e8f0 !important; }
+        body.light-theme .border-slate-700 { border-color: #cbd5e1 !important; }
+        body.light-theme .border-slate-700\/50 { border-color: rgba(203, 213, 225, 0.5) !important; }
+        body.light-theme .border-slate-600 { border-color: #94a3b8 !important; }
+        
+        body.light-theme aside { background-color: #ffffff !important; border-right-color: #e2e8f0 !important; }
+        body.light-theme .agent-card { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03) !important; }
+        
+        /* Agent Card tags text in light mode */
+        body.light-theme .text-blue-400 { color: #2563eb !important; }
+        body.light-theme .text-purple-400 { color: #9333ea !important; }
+        body.light-theme .text-red-400 { color: #dc2626 !important; }
+        body.light-theme .text-teal-400 { color: #0d9488 !important; }
+        body.light-theme .text-amber-400 { color: #d97706 !important; }
+        body.light-theme .text-cyan-400 { color: #0891b2 !important; }
+        body.light-theme .text-green-400 { color: #16a34a !important; }
+        
+        /* Red accents to match reference */
+        body.light-theme nav .bg-slate-800.text-white { 
+            background-color: #dc2626 !important; 
+            color: #ffffff !important;
+            box-shadow: 0 4px 10px rgba(220, 38, 38, 0.2);
+        }
+        body.light-theme .bg-blue-600.filter-btn {
+            background-color: #dc2626 !important;
+            border-color: #dc2626 !important;
+            color: white !important;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            750: '#2d3748',
+                            850: '#1a202c',
+                            900: '#0f172a',
+                            950: '#020617',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans min-h-screen flex selection:bg-blue-500/30">
+
+    <!-- Fixed Left Sidebar -->
+    <aside class="w-60 bg-[#0b1120] border-r border-slate-800 flex flex-col fixed h-full z-20">
+        <!-- Top Logo -->
+        <div class="h-14 flex items-center px-4 border-b border-slate-800 shrink-0">
+            <i data-lucide="sparkles" class="w-5 h-5 text-blue-400 mr-2"></i>
+            <span class="font-semibold text-sm tracking-wide text-slate-200">GPOS AX Portal</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/20 text-blue-400">LGSI</span>
+        </div>
+
+        <!-- Nav Items -->
+        <nav class="flex-1 overflow-y-auto py-4 px-2 space-y-1">
+            <button id="nav-agents" onclick="switchView('agents')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
+                <i data-lucide="bot" class="w-4 h-4 mr-3"></i> Agents Catalog
+            </button>
+            
+            <div class="pt-4 pb-1">
+                <p class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">GPOS Jira Workspace</p>
+            </div>
+            
+            <button id="nav-dashboard" onclick="switchView('dashboard')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
+                <i data-lucide="layout-dashboard" class="w-4 h-4 mr-3"></i> Sprint Dashboard
+            </button>
+            <button id="nav-studio" onclick="switchView('studio')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
+                <i data-lucide="message-square" class="w-4 h-4 mr-3"></i> Agent Studio
+            </button>
+            
+            <div class="pt-4 pb-1">
+                <p class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Global Views</p>
+            </div>
+
+            <button id="nav-pipeline" onclick="switchView('pipeline')" class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
+                <div class="flex items-center">
+                    <i data-lucide="git-merge" class="w-4 h-4 mr-3"></i> SDLC Pipeline
+                </div>
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400">Soon</span>
+            </button>
+            <button onclick="toggleSettings()" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors mt-8">
+                <i data-lucide="settings" class="w-4 h-4 mr-3"></i> Settings
+            </button>
+        </nav>
+
+        <!-- User Profile -->
+        <div class="p-4 border-t border-slate-800">
+            <div class="flex items-center gap-3">
+                <div id="sidebar-user-initials" class="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-sm ring-1 ring-indigo-500/30">AC</div>
+                <div class="flex-1 min-w-0">
+                    <div id="sidebar-user-name" class="text-sm font-medium text-slate-200 truncate">Loading...</div>
+                    <div id="sidebar-user-division" class="text-[11px] text-slate-400 truncate">LGSI GPOS & Apps</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 ml-60 flex flex-col min-h-screen relative">
+        <!-- Top Header -->
+        <header class="h-14 sticky top-0 z-10 bg-slate-900/90 backdrop-blur border-b border-slate-800 flex items-center justify-between px-6">
+            <div id="user-greeting" class="text-sm font-medium text-slate-300">
+                Welcome to GPOS AX Portal 👋
+            </div>
+            <div class="flex items-center gap-4">
+                <div id="sprint-indicator" class="px-2.5 py-1 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    Active Sprint
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                    <div id="connection-status" class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
+                    Connected
+                </div>
+                <button onclick="toggleTheme()" class="text-slate-400 hover:text-white transition-colors" title="Toggle Theme">
+                    <i data-lucide="moon" id="theme-icon" class="w-4 h-4"></i>
+                </button>
+                <button onclick="toggleSettings()" class="text-slate-400 hover:text-white transition-colors">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- View Container -->
+        <div class="flex-1 p-6 max-w-7xl mx-auto w-full relative z-10">
+            
+            <!-- VIEW 1: Agents Catalog -->
+            <div id="view-agents" class="view-section hidden space-y-6">
+                <!-- Header -->
+                <div class="flex justify-between items-end mb-8">
+                    <div>
+                        <h1 class="text-2xl font-bold text-white mb-1">Agent</h1>
+                        <p class="text-sm text-slate-400">
+                            Explore AI agents and start your workflow
+                            <button onclick="spawnPenguin()" class="ml-2 px-2 py-0.5 bg-slate-800 border border-slate-700 rounded text-xs hover:bg-slate-700 transition-colors" title="Distract Me">🐧</button>
+                            <button onclick="clearPenguins()" class="ml-1 px-2 py-0.5 bg-slate-800 border border-slate-700 rounded text-xs hover:bg-slate-700 transition-colors" title="Clear Penguins">❌</button>
+                        </p>
+                    </div>
+                    <div class="text-right">
+                        <div id="total-agents-count" class="text-2xl font-bold text-white leading-none">-</div>
+                        <div id="active-agents-count" class="text-xs text-green-400 mt-1">- active</div>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="flex gap-2 mb-6" id="agent-filters">
+                    <button onclick="filterAgents('All', this)" class="px-3 py-1.5 rounded-full text-xs font-medium bg-blue-600 text-white border border-blue-500 filter-btn">All</button>
+                    <button onclick="filterAgents('SW', this)" class="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 filter-btn">SW</button>
+                    <button onclick="filterAgents('HW', this)" class="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 filter-btn">HW</button>
+                    <button onclick="filterAgents('DevOps', this)" class="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 filter-btn">DevOps</button>
+                </div>
+
+                <!-- Grid -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" id="agents-grid">
+                    <!-- Dynamic agent cards will be inserted here by loadAgents() -->
+                </div>
+            </div>
+
+            <!-- VIEW 2: Dashboard -->
+            <div id="view-dashboard" class="view-section hidden space-y-6">
+                <!-- KPI Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-slate-800 rounded-lg p-4 border border-slate-700 shadow-sm">
+                        <h3 class="text-sm font-medium text-slate-400">Total Tickets</h3>
+                        <div class="mt-2 flex items-baseline gap-2">
+                            <p class="text-2xl font-semibold text-white" id="kpi-total">--</p>
+                            <span class="text-sm text-slate-500">in sprint</span>
+                        </div>
+                    </div>
+                    <div class="bg-slate-800 rounded-lg p-4 border border-slate-700 shadow-sm">
+                        <h3 class="text-sm font-medium text-slate-400">Points Completed</h3>
+                        <div class="mt-2 flex items-baseline gap-2">
+                            <p class="text-2xl font-semibold text-blue-400" id="kpi-points">--</p>
+                            <span class="text-sm text-slate-500">/ -- total</span>
+                        </div>
+                    </div>
+                    <div class="bg-slate-800 rounded-lg p-4 border border-slate-700 shadow-sm flex items-center justify-between">
+                        <div>
+                            <h3 class="text-sm font-medium text-slate-400">Sprint Completion</h3>
+                            <div class="mt-2 flex items-baseline gap-2">
+                                <p class="text-2xl font-semibold text-emerald-400" id="kpi-completion">--%</p>
+                            </div>
+                        </div>
+                        <div class="w-12 h-12 relative">
+                            <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                                <path class="text-slate-700" stroke-width="3" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                <path id="kpi-completion-circle" class="text-emerald-500 transition-all duration-1000 ease-out" stroke-width="3" stroke-dasharray="0, 100" stroke="currentColor" fill="none" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="bg-slate-800 rounded-lg p-4 border border-slate-700 shadow-sm">
+                        <h3 class="text-sm font-medium text-slate-400">At-Risk Items</h3>
+                        <div class="mt-2 flex items-baseline gap-2">
+                            <p class="text-2xl font-semibold text-red-400" id="kpi-risk">--</p>
+                            <span class="text-sm text-slate-500">needs attention</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Burndown Chart -->
+                    <div class="bg-slate-800 rounded-lg border border-slate-700 shadow-sm p-4 lg:col-span-2">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-lg font-semibold text-white">Sprint Burndown</h2>
+                            <button class="p-1 text-slate-400 hover:text-white transition-colors" title="Refresh">
+                                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        <div class="relative w-full h-64">
+                            <canvas id="burndownChart" style="width: 100%; height: 100%;"></canvas>
+                        </div>
+                    </div>
+                    
+                    <!-- Status Doughnut -->
+                    <div class="bg-slate-800 rounded-lg border border-slate-700 shadow-sm p-4 flex flex-col">
+                        <h2 class="text-lg font-semibold text-white mb-4">Ticket Status</h2>
+                        <div class="relative w-full flex-1 min-h-[16rem]">
+                            <canvas id="statusChart" style="width: 100%; height: 100%;"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Row: Workload & Risks -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Developer Workload Table -->
+                    <div class="bg-slate-800 rounded-lg border border-slate-700 shadow-sm overflow-hidden lg:col-span-2 flex flex-col">
+                        <div class="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/80">
+                            <h2 class="text-lg font-semibold text-white">Developer Workload</h2>
+                            <span class="text-xs font-medium text-slate-400 bg-slate-900 px-2 py-1 rounded-md border border-slate-700">Top 5 by points</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="text-xs text-slate-400 bg-slate-900/50 uppercase">
+                                    <tr>
+                                        <th class="px-4 py-3 font-medium">Assignee</th>
+                                        <th class="px-4 py-3 font-medium text-right">Tickets</th>
+                                        <th class="px-4 py-3 font-medium text-right">Points</th>
+                                        <th class="px-4 py-3 font-medium text-center">Done</th>
+                                        <th class="px-4 py-3 font-medium text-center">In Progress</th>
+                                        <th class="px-4 py-3 font-medium text-center">To Do</th>
+                                        <th class="px-4 py-3 font-medium text-center">Missing Fields</th>
+                                        <th class="px-4 py-3 font-medium">Load Level</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="workload-table-body" class="divide-y divide-slate-700/50">
+                                    <!-- Populated by JS -->
+                                    <tr><td colspan="8" class="px-4 py-8 text-center text-slate-500">Loading workload data...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- At Risk Panel -->
+                    <div class="bg-slate-800 rounded-lg border border-slate-700 shadow-sm p-0 flex flex-col h-full">
+                        <div class="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/80">
+                            <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                                <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-500"></i>
+                                At Risk
+                            </h2>
+                            <span class="flex h-2 w-2 relative">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                            </span>
+                        </div>
+                        <div id="at-risk-container" class="p-4 space-y-3 overflow-y-auto max-h-[650px]">
+                            <!-- Populated by JS -->
+                            <div class="text-center text-slate-500 py-8">Scanning for risks...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Activity Stream Row -->
+                <div class="mt-6 bg-slate-800 rounded-lg border border-slate-700 shadow-sm p-0 flex flex-col">
+                    <div class="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/80">
+                        <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                            <i data-lucide="activity" class="w-4 h-4 text-blue-400"></i>
+                            Activity Stream (Mentions Today)
+                        </h2>
+                    </div>
+                    <div id="activity-stream-container" class="p-0 overflow-y-auto max-h-[650px]">
+                        <div class="text-center text-slate-500 py-8">Fetching activity...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW 3: Agent Studio -->
+            <div id="view-studio" class="view-section hidden h-[calc(100vh-8rem)] flex flex-col bg-slate-800 rounded-xl border border-slate-700 shadow-xl overflow-hidden">
+                <div class="p-4 border-b border-slate-700 bg-slate-800/80 flex items-center gap-3">
+                    <div class="w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center text-blue-400">
+                        <i data-lucide="bot" class="w-5 h-5"></i>
+                    </div>
+                    <div class="flex-1">
+                        <h2 id="chat-agent-title" class="text-sm font-semibold text-white">GPOS Jira & Governance Agent</h2>
+                        <p id="chat-agent-desc" class="text-xs text-slate-400">Ask about sprint health, blockages, or auto-grooming</p>
+                    </div>
+                    <button onclick="if(window.chat) window.chat.showHistoryModal()" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors border border-slate-700 mr-2">
+                        <i data-lucide="history" class="w-3.5 h-3.5"></i>
+                        History
+                    </button>
+                    <button onclick="if(window.chat) { window.chat.createNewSession(); } else { document.getElementById('chat-messages').innerHTML = ''; }" class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium rounded-lg transition-colors border border-slate-600">
+                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                        New Chat
+                    </button>
+                </div>
+                
+                <!-- Chat Messages Area -->
+                <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
+                    <!-- Initial Greeting -->
+                    <div class="flex gap-4">
+                        <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                            <i data-lucide="bot" class="w-4 h-4 text-white"></i>
+                        </div>
+                        <div class="bg-slate-700 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] text-sm text-slate-200">
+                            <p class="mb-2" id="user-greeting-chat">Hello! I'm connected to the GPOS Jira project.</p>
+                            <p>Here are some things you can ask me:</p>
+                            <div class="flex flex-wrap gap-2 mt-3">
+                                <button onclick="document.getElementById('chat-input').value='Generate sprint report'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors">📊 Generate sprint report</button>
+                                <button onclick="document.getElementById('chat-input').value='Show burndown status'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors">📉 Show burndown status</button>
+                                <button onclick="document.getElementById('chat-input').value='Audit unassigned tickets'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors">🔍 Audit unassigned tickets</button>
+                                <button onclick="document.getElementById('chat-input').value='Weekly Status'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-purple-500/50 text-purple-400 text-xs hover:bg-slate-700 transition-colors">?? Weekly Status</button>
+                                <button onclick="document.getElementById('chat-input').value='I want to create a new story. Please guide me and ask me to provide the Summary, Story Points, Description, Assignee, Label, and Sprint one by one.'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-blue-500/50 text-blue-400 text-xs hover:bg-slate-700 transition-colors">➕ Create new story</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Chat Input Area -->
+                <div class="p-4 bg-slate-800/90 border-t border-slate-700">
+                    <form id="chat-form" class="flex gap-2">
+                        <div class="relative flex-1">
+                            <textarea id="chat-input" rows="1" class="w-full bg-slate-900 border border-slate-700 rounded-lg pl-4 pr-10 py-3 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none overflow-hidden" placeholder="Ask the agent a question..."></textarea>
+                            <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-white transition-colors">
+                                <i data-lucide="paperclip" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        <button type="submit" id="chat-submit-btn" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center justify-center transition-colors">
+                            <i data-lucide="send" class="w-4 h-4"></i>
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- VIEW 4: Pipeline -->
+            <div id="view-pipeline" class="view-section hidden h-[60vh] flex flex-col items-center justify-center text-center">
+                <div class="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mb-6 border border-slate-700">
+                    <i data-lucide="git-merge" class="w-10 h-10 text-slate-400"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-white mb-2">SDLC Pipeline Visualization — Coming Soon</h2>
+                <p class="text-slate-400 max-w-md">Visualize the complete software delivery lifecycle across all 6 agents.</p>
+            </div>
+            
+        </div>
+    </main>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm hidden z-50 flex items-center justify-center">
+        <div class="bg-slate-800 rounded-xl border border-slate-700 shadow-2xl w-full max-w-md overflow-hidden">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-white flex items-center gap-2">
+                    <i data-lucide="settings" class="w-5 h-5"></i> Settings
+                </h3>
+                <button onclick="toggleSettings()" class="text-slate-400 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label for="pat-input" class="block text-sm font-medium text-slate-300 mb-1">Jira Personal Access Token (PAT)</label>
+                    <input type="password" id="pat-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="Paste your token here...">
+                    <p class="mt-1 text-xs text-slate-500">Required to fetch live data from Jira. Stored locally in your browser.</p>
+                </div>
+                
+                <div class="pt-2 border-t border-slate-700">
+                    <label for="llm-url-input" class="block text-sm font-medium text-slate-300 mb-1 mt-2">LLM API Endpoint</label>
+                    <input type="text" id="llm-url-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="e.g., https://api.exacode.lge.com/v1/chat/completions">
+                    
+                    <label for="llm-key-input" class="block text-sm font-medium text-slate-300 mb-1 mt-3">LLM API Key</label>
+                    <input type="password" id="llm-key-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="Paste your LLM API Key here...">
+                    
+                    <label for="llm-model-input" class="block text-sm font-medium text-slate-300 mb-1 mt-3">LLM Model Name</label>
+                    <input type="text" id="llm-model-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="e.g., Chat-EXACODE-A or gpt-4o">
+                    <p class="mt-1 text-xs text-slate-500">Enables Natural Language to JQL in the Agent Studio. Works with Exacode, OpenAI, etc.</p>
+                </div>
+            </div>
+            <div class="p-4 border-t border-slate-700 bg-slate-800/50 flex justify-end gap-3">
+                <button onclick="toggleSettings()" class="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">Cancel</button>
+                <button onclick="saveSettings()" class="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Modal -->
+    <div id="history-modal" class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 hidden items-center justify-center">
+        <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800/80">
+                <h2 class="text-lg font-semibold text-white">Chat History</h2>
+                <button onclick="document.getElementById('history-modal').classList.add('hidden'); document.getElementById('history-modal').classList.remove('flex');" class="text-slate-400 hover:text-white transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="p-4 overflow-y-auto flex-1">
+                <div id="history-list" class="space-y-2">
+                    <!-- JS will populate this -->
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/js/api_v2.js"></script>
+    <script src="/static/js/dashboard_v2.js"></script>
+    <script src="/static/js/chat_v2.js?v=2"></script>
+    <script>
+        // Initialize plugins
+        if (typeof mermaid !== 'undefined') {
+            mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+        }
+
+        // Initialize lucide icons
+        lucide.createIcons();
+        
+        // Agent Filtering Logic
+        function filterAgents(category, btnElement) {
+            // Update active state on buttons
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-500');
+                btn.classList.add('bg-slate-800', 'text-slate-300', 'border-slate-700');
+            });
+            btnElement.classList.remove('bg-slate-800', 'text-slate-300', 'border-slate-700');
+            btnElement.classList.add('bg-blue-600', 'text-white', 'border-blue-500');
+            
+            // Filter cards
+            const cards = document.querySelectorAll('.agent-card');
+            cards.forEach(card => {
+                if (category === 'All' || (card.getAttribute('data-category') || '').includes(category)) {
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+        
+        async function loadAgents() {
+            try {
+                if (typeof API === 'undefined' || !API.getAgents) return;
+                const agents = await API.getAgents();
+                const grid = document.getElementById('agents-grid');
+                if (!grid) return;
+                
+                let activeCount = 0;
+                grid.innerHTML = '';
+                
+                agents.forEach(agent => {
+                    if (agent.status === 'Active') activeCount++;
+                    
+                    const statusColor = agent.status === 'Active' ? 'bg-green-500' : (agent.status === 'Next' ? 'bg-amber-500' : 'bg-slate-500');
+                    const tagsHtml = agent.tags.map(tag => 
+                        `<span class="px-2 py-0.5 rounded text-[10px] font-medium bg-${agent.theme}-500/10 text-${agent.theme}-400 border border-${agent.theme}-500/20">${tag}</span>`
+                    ).join('');
+                    
+                    const btnAction = agent.id === 'jira-agent' ? 
+                        `onclick="window.currentAgentId = '${agent.id}'; switchView('studio')"` : 
+                        `onclick="alert('${agent.name} is currently ${agent.status.toLowerCase()} and will be available in future releases.');"`;
+                    
+                    const card = document.createElement('div');
+                    card.className = `agent-card bg-slate-800/50 rounded-xl border border-slate-700/50 border-l-[4px] border-l-${agent.theme}-500 p-5 flex flex-col hover:bg-slate-800 transition-colors`;
+                    card.setAttribute('data-category', agent.categories.join(' '));
+                    
+                    card.innerHTML = `
+                        <div class="flex justify-between items-start mb-4">
+                            <div class="w-10 h-10 rounded-full bg-${agent.theme}-500/10 flex items-center justify-center text-${agent.theme}-400">
+                                <i data-lucide="${agent.icon}" class="w-5 h-5"></i>
+                            </div>
+                            <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-800 text-xs font-medium text-slate-300">
+                                <div class="w-1.5 h-1.5 rounded-full ${statusColor}"></div> ${agent.status}
+                            </div>
+                        </div>
+                        <h3 class="text-base font-semibold text-white mb-2">${agent.name}</h3>
+                        <p class="text-sm text-slate-400 mb-4 flex-1 line-clamp-3">${agent.description}</p>
+                        <div class="flex flex-wrap gap-1.5 mb-5 mt-auto">
+                            ${tagsHtml}
+                        </div>
+                        <button ${btnAction} class="w-full py-2 rounded-lg text-sm font-medium bg-${agent.theme}-600 hover:bg-${agent.theme}-500 text-white transition-colors">Open Agent</button>
+                    `;
+                    grid.appendChild(card);
+                });
+                
+                document.getElementById('total-agents-count').textContent = agents.length;
+                document.getElementById('active-agents-count').textContent = activeCount + ' active';
+                lucide.createIcons(); // Re-init icons for new DOM elements
+                
+            } catch (e) {
+                console.error("Error loading agents:", e);
+            }
+        }
+
+        // View switching logic
+        function switchView(viewId) {
+            // Hide all views
+            document.querySelectorAll('.view-section').forEach(function(el) {
+                el.classList.add('hidden');
+            });
+            
+            // Show target view
+            const targetView = document.getElementById('view-' + viewId);
+            if (targetView) {
+                targetView.classList.remove('hidden');
+            }
+            
+            // Refresh data if switching to dashboard
+            if (viewId === 'dashboard' && typeof dashboard !== 'undefined') {
+                dashboard.loadData();
+            }
+
+            // Load chat history if switching to studio
+            if (viewId === 'studio' && typeof chat !== 'undefined') {
+                chat.loadHistory(window.currentAgentId || 'jira-agent');
+            }
+
+            // Update sidebar active states
+            document.querySelectorAll('.nav-item').forEach(function(el) {
+                el.classList.remove('bg-slate-800', 'text-white');
+                el.classList.add('text-slate-300');
+            });
+            
+            const activeNav = document.getElementById('nav-' + viewId);
+            if (activeNav) {
+                activeNav.classList.remove('text-slate-300');
+                activeNav.classList.add('bg-slate-800', 'text-white');
+            }
+        }
+
+        // Settings Modal logic
+        function toggleSettings() {
+            const modal = document.getElementById('settings-modal');
+            const isHidden = modal.classList.contains('hidden');
+            
+            if (isHidden) {
+                // Populate input
+                const input = document.getElementById('pat-input');
+                const llmUrlInput = document.getElementById('llm-url-input');
+                const llmKeyInput = document.getElementById('llm-key-input');
+                const llmModelInput = document.getElementById('llm-model-input');
+                if (input) input.value = localStorage.getItem('jira_pat') || '';
+                if (llmUrlInput) llmUrlInput.value = localStorage.getItem('llm_api_url') || '';
+                if (llmKeyInput) llmKeyInput.value = localStorage.getItem('llm_api_key') || '';
+                if (llmModelInput) llmModelInput.value = localStorage.getItem('llm_api_model') || 'Chat-EXACODE-A';
+                
+                modal.classList.remove('hidden');
+            } else {
+                modal.classList.add('hidden');
+            }
+        }
+        
+        // Easter Egg: Bouncing Penguin
+        function spawnPenguin() {
+            const img = document.createElement('img');
+            img.className = 'penguin-egg';
+            img.src = '/static/img/penguin.png';
+            img.style.position = 'fixed';
+            img.style.width = '100px';
+            img.style.height = 'auto';
+            img.style.zIndex = '0';
+            img.style.opacity = '0.4'; // Semi-transparent so it's less distracting
+            img.style.cursor = 'crosshair'; // Fun cursor to catch them!
+            
+            // Random start position
+            let x = Math.random() * (window.innerWidth - 100);
+            let y = Math.random() * (window.innerHeight - 100);
+            
+            // Random speed and direction
+            let dx = (Math.random() * 2 + 2) * (Math.random() > 0.5 ? 1 : -1);
+            let dy = (Math.random() * 2 + 2) * (Math.random() > 0.5 ? 1 : -1);
+            
+            let isAnimating = true;
+
+            // Remove on click
+            img.onclick = function() {
+                isAnimating = false;
+                img.remove();
+            };
+            
+            document.body.appendChild(img);
+            
+            function animate() {
+                if (!isAnimating) return;
+                
+                const rect = img.getBoundingClientRect();
+                
+                // Bounce off left/right
+                if (x + dx > window.innerWidth - rect.width || x + dx < 0) {
+                    dx = -dx;
+                }
+                
+                // Bounce off top/bottom
+                if (y + dy > window.innerHeight - rect.height || y + dy < 0) {
+                    dy = -dy;
+                }
+                
+                x += dx;
+                y += dy;
+                
+                img.style.left = x + 'px';
+                img.style.top = y + 'px';
+                
+                requestAnimationFrame(animate);
+            }
+            
+            animate();
+        }
+
+        function clearPenguins() {
+            document.querySelectorAll('.penguin-egg').forEach(p => p.remove());
+        }
+
+        // Theme Toggle Logic
+        function toggleTheme() {
+            const body = document.body;
+            const isLight = body.classList.contains('light-theme');
+            
+            if (isLight) {
+                body.classList.remove('light-theme');
+                document.getElementById('theme-icon').setAttribute('data-lucide', 'moon');
+                localStorage.setItem('theme', 'dark');
+            } else {
+                body.classList.add('light-theme');
+                document.getElementById('theme-icon').setAttribute('data-lucide', 'sun');
+                localStorage.setItem('theme', 'light');
+            }
+            lucide.createIcons();
+        }
+        
+        // Save settings logic
+        function saveSettings() {
+            const pat = document.getElementById('pat-input').value.trim();
+            const llmUrl = document.getElementById('llm-url-input').value.trim();
+            const llmKey = document.getElementById('llm-key-input').value.trim();
+            const llmModel = document.getElementById('llm-model-input').value.trim() || 'Chat-EXACODE-A';
+            
+            if (window.api && typeof window.api.setPAT === 'function') {
+                window.api.setPAT(pat);
+            } else {
+                localStorage.setItem('jira_pat', pat);
+            }
+            
+            localStorage.setItem('llm_api_url', llmUrl);
+            localStorage.setItem('llm_api_key', llmKey);
+            localStorage.setItem('llm_api_model', llmModel);
+            
+            toggleSettings();
+            
+            // Show toast
+            const toast = document.getElementById('toast');
+            toast.classList.remove('translate-y-[150%]', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-[150%]', 'opacity-0');
+            }, 3000);
+            
+            // Reload page if needed
+            window.location.reload();
+        }
+        
+        // Search specific user's tickets
+        window.searchUserTickets = function(username, statusStr) {
+            switchView('studio');
+            const chatInput = document.getElementById('chat-input');
+            const chatForm = document.getElementById('chat-form');
+            if (chatInput && chatForm) {
+                let jql = `project = SIGPOSDEV AND sprint in openSprints() AND assignee = "${username}"`;
+                if (statusStr) {
+                    jql += ` AND status = "${statusStr}"`;
+                }
+                jql += ` ORDER BY updated DESC`;
+                chatInput.value = jql;
+                
+                // Trigger form submission
+                chatForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            }
+        };
+
+        // Initialize on DOM ready
+        document.addEventListener('DOMContentLoaded', function() {
+            // Restore Theme
+            if (localStorage.getItem('theme') === 'light') {
+                document.body.classList.add('light-theme');
+                const icon = document.getElementById('theme-icon');
+                if (icon) icon.setAttribute('data-lucide', 'sun');
+            }
+
+            // Set default view
+            switchView('agents');
+            loadAgents();
+
+            // Initialize components
+            if (typeof dashboard !== 'undefined' && typeof dashboard.init === 'function') {
+                dashboard.init();
+            }
+            if (typeof chat !== 'undefined' && typeof chat.init === 'function') {
+                chat.init();
+            }
+            
+            // Fetch User Profile
+            if (localStorage.getItem('jira_pat')) {
+                API.getUserProfile().then(user => {
+                    if (user && user.name) {
+                        const initials = user.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+                        
+                        // Update Header Greeting
+                        const greetingEl = document.getElementById('user-greeting');
+                        if (greetingEl) {
+                            const hour = new Date().getHours();
+                            let greeting = "Good evening";
+                            if (hour < 12) greeting = "Good morning";
+                            else if (hour < 17) greeting = "Good afternoon";
+                            greetingEl.textContent = `${greeting}, ${user.name} / ${user.division} 👋`;
+                        }
+                        
+                        // Update Sidebar Profile
+                        const profileNameEl = document.getElementById('sidebar-user-name');
+                        const profileInitialsEl = document.getElementById('sidebar-user-initials');
+                        const profileDivEl = document.getElementById('sidebar-user-division');
+                        
+                        if (profileNameEl) profileNameEl.textContent = user.name;
+                        if (profileInitialsEl) profileInitialsEl.textContent = initials;
+                        if (profileDivEl) profileDivEl.textContent = user.division;
+                        
+                        // Update Chat Greeting
+                        const chatGreetingEl = document.getElementById('user-greeting-chat');
+                        if (chatGreetingEl) {
+                            const firstName = user.name.split(' ')[0];
+                            chatGreetingEl.textContent = `Hello ${firstName}! I'm connected to the GPOS Jira project.`;
+                        }
+                    }
+                }).catch(err => console.error("Could not fetch user profile", err));
+            }
+            
+            // Adjust textarea height automatically
+            const chatInput = document.getElementById('chat-input');
+            if (chatInput) {
+                chatInput.addEventListener('input', function() {
+                    this.style.height = 'auto';
+                    this.style.height = (this.scrollHeight) + 'px';
+                });
+            }
+        });
+    </script>
+</body>
+</html>
