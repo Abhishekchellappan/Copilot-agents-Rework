@@ -157,6 +157,16 @@ def _field_map(headers: dict) -> dict:
     return _FIELD_CACHE or base
 
 
+def _get_current_user(headers: dict) -> str:
+    """Fetch the actual username of the PAT owner from Jira."""
+    try:
+        resp = requests.get(f"{JIRA_BASE_URL}/rest/api/2/myself", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.json().get("name", "")
+    except Exception:
+        pass
+    return ""
+
 def _translate(fields: dict, headers: dict, project_key: str = None) -> dict:
     """Translate user-friendly field aliases to Jira API field IDs and structures."""
     mapping = _field_map(headers)
@@ -169,7 +179,15 @@ def _translate(fields: dict, headers: dict, project_key: str = None) -> dict:
             sid = _resolve_sprint(str(v), project_key, headers)
             out[mapped] = sid if sid else v
         elif key == "assignee":
-            out["assignee"] = {"name": v.strip()} if isinstance(v, str) else v
+            if isinstance(v, str):
+                assignee_val = v.strip()
+                if assignee_val.lower() in ("me", "myself", "current user"):
+                    actual_user = _get_current_user(headers)
+                    if actual_user:
+                        assignee_val = actual_user
+                out["assignee"] = {"name": assignee_val}
+            else:
+                out["assignee"] = v
         elif key == "labels":
             if isinstance(v, str):
                 out["labels"] = [l.strip() for l in v.split(",") if l.strip()]
@@ -382,6 +400,9 @@ def jira_create_issue(
     ctx: Context = None,
 ) -> str:
     """
+    CRITICAL INSTRUCTION: Before creating an issue, you MUST verify the labels and components against the governance rules.
+    If you have not called `get_agent_instructions` in this exact chat session, DO IT NOW before calling this tool, otherwise your labels will be rejected.
+    
     Create a new Jira issue. Supports user-friendly field aliases.
 
     :param project_key: Project key (e.g. 'PROJ').
@@ -430,6 +451,9 @@ def jira_update_issue(
     issue_key: str, fields: str = "{}", ctx: Context = None
 ) -> str:
     """
+    CRITICAL INSTRUCTION: Before updating an issue, you MUST verify the labels and components against the governance rules.
+    If you have not called `get_agent_instructions` in this exact chat session, DO IT NOW before calling this tool.
+
     Update fields on an existing Jira issue. Supports user-friendly field aliases.
 
     :param issue_key: Issue key (e.g. 'PROJ-123').
@@ -1198,6 +1222,44 @@ def jira_manage_attachment(
     except Exception as e:
         return f"Error uploading attachment: {e}"
 
+
+# ---------------------------------------------------------------------------
+# DASHBOARD & AGILE TOOLS
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def publish_wiki_report(project_key: str, summary: str, markdown_content: str, ctx: Context = None) -> str:
+    """
+    Fallback for Dashboard automation: Converts a markdown report into a Jira Wiki format and publishes it as a new 'Story' ticket.
+    """
+    try:
+        return jira_create_issue(project_key, summary, issue_type="Story", description=markdown_content, ctx=ctx)
+    except Exception as e:
+        return f"Error publishing wiki report: {e}"
+
+@mcp.tool()
+def jira_manage_sprint(sprint_id: str, issue_keys: str, action: str = "add", ctx: Context = None) -> str:
+    """
+    Move issues in or out of an active sprint.
+    
+    :param sprint_id: Numeric Sprint ID
+    :param issue_keys: Comma-separated Jira issue keys
+    :param action: 'add' (move to sprint) or 'remove' (move to backlog)
+    """
+    try:
+        headers = _headers(ctx)
+        keys = [k.strip().upper() for k in issue_keys.split(",")]
+        if action == "add":
+            url = f"{JIRA_BASE_URL}/rest/agile/1.0/sprint/{sprint_id}/issue"
+        else:
+            url = f"{JIRA_BASE_URL}/rest/agile/1.0/backlog/issue"
+            
+        resp = requests.post(url, headers=headers, json={"issues": keys}, timeout=15)
+        if resp.status_code in (200, 204):
+            return f"Successfully {action}ed {len(keys)} issues to sprint {sprint_id if action == 'add' else 'backlog'}."
+        return f"Failed to manage sprint (HTTP {resp.status_code}): {resp.text}"
+    except Exception as e:
+        return f"Error managing sprint: {e}"
 
 if __name__ == "__main__":
     import uvicorn
