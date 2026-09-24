@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gpos-implementation-agent": {
+      "type": "sse",
+      "url": "http://10.221.31.97:31988/sse"
+    }
+  }
+}
