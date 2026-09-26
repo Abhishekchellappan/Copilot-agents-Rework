@@ -209,7 +209,7 @@ window.chat = {
                 const pat = localStorage.getItem('jira_pat') || '';
                 const resp = await fetch('/api/weekly_status', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-Jira-PAT': pat },
+                    headers: API.getHeaders(),
                     body: JSON.stringify({ message: text, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel }),
                     signal: this.abortController.signal
                 });
@@ -220,7 +220,7 @@ window.chat = {
                 llmResp = await resp.json();              } else if (text.toLowerCase().includes('burndown')) {
                   const pat = localStorage.getItem('jira_pat') || '';
                   const resp = await fetch('/api/sprint/burndown', {
-                      headers: { 'X-Jira-PAT': pat },
+                      headers: API.getHeaders(),
                       signal: this.abortController.signal
                   });
                   if (!resp.ok) throw new Error("Burndown API Failed: " + resp.statusText);
@@ -231,7 +231,7 @@ window.chat = {
               } else if (text.toLowerCase().includes('audit unassigned tickets')) {
                 const pat = localStorage.getItem('jira_pat') || '';
                 const resp = await fetch('/api/quick_action?action=sprint_audit', {
-                    headers: { 'X-Jira-PAT': pat },
+                    headers: API.getHeaders(),
                     signal: this.abortController.signal
                 });
                 if (!resp.ok) throw new Error("Quick Action API Failed: " + resp.statusText);
@@ -787,3 +787,4 @@ window.chat = {
     });
   }
 };
+

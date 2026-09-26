@@ -3,13 +3,16 @@ import re
 import logging
 from datetime import date
 from typing import Optional, Dict, Any, List, Tuple
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import requests
 from dotenv import load_dotenv
+import jwt
+import hashlib
+from datetime import datetime, timedelta
 
 # Load env variables
 load_dotenv()
@@ -40,10 +43,119 @@ STORY_POINTS_FIELD = "customfield_10002"
 SPRINT_FIELD = "customfield_10005"
 VALID_LABELS = {"AX_REQ", "AX_HLD", "AX_SDS", "AX_IMPL", "training", "development", "operations", "Analysis-Done", "unplanned_leave"}
 
+# Authentication Configuration
+LDAP_SERVER = os.environ.get('LDAP_SERVER', '').strip()
+LDAP_DOMAIN = os.environ.get('LDAP_DOMAIN', '').strip()
+LDAP_BASE_DN = os.environ.get('LDAP_BASE_DN', '').strip()
+JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'gpos-ax-portal-secret-key-change-me')
+JWT_ALGORITHM = 'HS256'
+JWT_EXPIRATION_HOURS = 24
+
 
 class AgentAction(BaseModel):
     action: str
     project_key: str = "SIGPOSDEV"
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+def _create_jwt_token(username: str) -> str:
+    """Generate a JWT token for an authenticated user."""
+    payload = {
+        'sub': username,
+        'iat': datetime.utcnow(),
+        'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def _verify_jwt_token(token: str) -> dict:
+    """Verify and decode a JWT token. Returns the payload dict or None."""
+    try:
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+
+def _authenticate_ldap(username: str, password: str) -> bool:
+    """Authenticate against LDAP/Active Directory."""
+    try:
+        from ldap3 import Server, Connection, ALL, NTLM
+        server = Server(LDAP_SERVER, get_info=ALL, connect_timeout=5)
+        user_dn = f"{LDAP_DOMAIN}\\{username}" if LDAP_DOMAIN else username
+        conn = Connection(server, user=user_dn, password=password, authentication=NTLM, auto_bind=True)
+        conn.unbind()
+        return True
+    except Exception as e:
+        logger.error(f"LDAP auth failed for {username}: {e}")
+        return False
+
+
+@app.post('/api/login')
+async def login(req: LoginRequest):
+    """Authenticate user and return JWT token."""
+    username = req.username.strip()
+    password = req.password
+    
+    if not username or not password:
+        raise HTTPException(status_code=400, detail='Username and password are required')
+    
+    if LDAP_SERVER:
+        # Real LDAP authentication
+        if not _authenticate_ldap(username, password):
+            raise HTTPException(status_code=401, detail='Invalid credentials. Please check your username and password.')
+    else:
+        # Mock mode - accept any non-empty credentials
+        logger.warning(f"[MOCK AUTH] LDAP_SERVER not configured. Accepting login for user: {username}")
+    
+    token = _create_jwt_token(username)
+    return {
+        'token': token,
+        'username': username,
+        'message': f'Welcome, {username}!'
+    }
+
+
+@app.get('/api/auth/verify')
+async def verify_auth(request: Request):
+    """Verify if the current JWT token is still valid."""
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Not authenticated')
+    
+    token = auth_header[7:]
+    payload = _verify_jwt_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail='Token expired or invalid')
+    
+    return {'valid': True, 'username': payload.get('sub', '')}
+
+def get_current_user(request: Request) -> str:
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        raise HTTPException(status_code=401, detail='Not authenticated')
+    token = auth_header[7:]
+    payload = _verify_jwt_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail='Token expired or invalid')
+    return payload.get('sub', '')
+
+@app.middleware("http")
+async def verify_api_auth(request: Request, call_next):
+    if request.url.path.startswith("/api/") and request.url.path not in ["/api/login", "/api/auth/verify"]:
+        if request.method != "OPTIONS":  # Skip auth check for CORS preflight
+            try:
+                get_current_user(request)
+            except HTTPException as e:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+    return await call_next(request)
+
 
 
 def get_jira_pat(request: Request) -> Optional[str]:
@@ -1014,7 +1126,7 @@ CRITICAL RULES:
 - Categorize each ticket into exactly ONE of the 3 sections based on its 'Status' and 'Comments'.
 - If Jira Status is 'Resolved', 'Closed', or 'Done', it MUST go to 'Completed Tasks'.
 - If Jira Status is 'In Progress', 'Active', or 'Working', it MUST go to 'In Progress'.
-- If Jira Status is 'Open', 'To Do', or 'Backlog', it MUST go to 'ToDo', UNLESS the comments explicitly prove the work is finished (in which case, put it in 'Completed Tasks').
+- If Jira Status is 'Open', 'To Do', or 'Backlog', it MUST go to 'ToDo', regardless of comments.
 - STRICT DUPLICATION BAN: You MUST ensure no ticket appears more than once. If you place a ticket in 'Completed Tasks', you CANNOT place it in 'ToDo' or 'In Progress'.
 - Provide exactly ONE bullet point per ticket containing the ticket number and a brief 2-line summary of the work done (extract heavily from comments).
 - DO NOT include tickets related to 'leave', 'vacation', or 'time off'. Completely omit them.
@@ -1099,3 +1211,4 @@ def quick_action(action: str, request: Request):
             raise HTTPException(status_code=500, detail=str(e))
             
     raise HTTPException(status_code=400, detail="Unknown action")
+

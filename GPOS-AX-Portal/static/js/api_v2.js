@@ -3,10 +3,15 @@ const API = {
   
   getHeaders() {
     const pat = localStorage.getItem('jira_pat') || '';
-    return { 
+    const token = localStorage.getItem('auth_token') || '';
+    const headers = { 
       'Content-Type': 'application/json', 
       'X-Jira-PAT': pat 
     };
+    if (token) {
+      headers['Authorization'] = 'Bearer ' + token;
+    }
+    return headers;
   },
 
   async _fetch(endpoint, options = {}, abortSignal = null) {
@@ -78,5 +83,41 @@ const API = {
       method: 'POST',
       body: JSON.stringify({ action, ...params })
     });
+  },
+
+  async login(username, password) {
+    const response = await fetch(this.baseUrl + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password })
+    });
+    if (!response.ok) {
+      let errMsg = 'Login failed';
+      try {
+        const errJson = await response.json();
+        if (errJson.detail) errMsg = errJson.detail;
+      } catch(e) {}
+      throw new Error(errMsg);
+    }
+    return await response.json();
+  },
+
+  async verifyAuth() {
+    const token = localStorage.getItem('auth_token');
+    if (!token) return false;
+    try {
+      const response = await fetch(this.baseUrl + '/auth/verify', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      return response.ok;
+    } catch(e) {
+      return false;
+    }
+  },
+
+  logout() {
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_username');
+    window.location.reload();
   }
 };

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPOS AX Portal</title>
+    <title>GPOS AX Portal</title><link rel="icon" type="image/png" href="/static/img/favicon.png">
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
@@ -63,6 +63,145 @@
             border-color: #dc2626 !important;
             color: white !important;
         }
+        /* ===== Login Page Animations ===== */
+        .login-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.4;
+        }
+        .login-orb-1 {
+            width: 400px; height: 400px;
+            background: radial-gradient(circle, #3b82f6, transparent 70%);
+            top: -100px; left: -100px;
+            animation: orbFloat1 15s ease-in-out infinite;
+        }
+        .login-orb-2 {
+            width: 350px; height: 350px;
+            background: radial-gradient(circle, #8b5cf6, transparent 70%);
+            bottom: -80px; right: -80px;
+            animation: orbFloat2 18s ease-in-out infinite;
+        }
+        .login-orb-3 {
+            width: 250px; height: 250px;
+            background: radial-gradient(circle, #06b6d4, transparent 70%);
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            animation: orbFloat3 12s ease-in-out infinite;
+        }
+        @keyframes orbFloat1 {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(60px, 40px) scale(1.1); }
+            66% { transform: translate(-30px, 60px) scale(0.95); }
+        }
+        @keyframes orbFloat2 {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(-50px, -30px) scale(1.05); }
+            66% { transform: translate(40px, -50px) scale(0.9); }
+        }
+        @keyframes orbFloat3 {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; }
+            50% { transform: translate(-40%, -60%) scale(1.2); opacity: 0.5; }
+        }
+
+        /* Penguin levitation and breathing */
+        .login-penguin-container {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            perspective: 1000px;
+        }
+        .login-penguin {
+            animation: penguinFloat 5s ease-in-out infinite, penguinBreathe 4s ease-in-out infinite;
+            filter: drop-shadow(0 20px 30px rgba(59, 130, 246, 0.4));
+            transform-style: preserve-3d;
+            transition: transform 0.1s ease-out;
+            will-change: transform;
+        }
+        
+        .mascot-aura {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 140%; height: 140%;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 60%);
+            animation: auraPulse 4s ease-in-out infinite;
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        .login-penguin-glow {
+            width: 150px;
+            height: 25px;
+            background: radial-gradient(ellipse, rgba(59, 130, 246, 0.5), transparent 70%);
+            border-radius: 50%;
+            margin-top: -15px;
+            animation: penguinShadow 5s ease-in-out infinite;
+        }
+        @keyframes floatBody {
+            0%, 100% { transform: translate(200px, 170px); }
+            50% { transform: translate(200px, 155px); }
+        }
+        @keyframes pulseRing {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+        @keyframes rotateRing {
+            0% { stroke-dashoffset: 0; transform: rotate(0deg); }
+            100% { stroke-dashoffset: 100; transform: rotate(360deg); }
+        }
+        @keyframes blinkEye {
+            0%, 96%, 100% { transform: scaleY(1); }
+            98% { transform: scaleY(0.1); }
+        }
+        @keyframes pulseCore {
+            0%, 100% { opacity: 0.7; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+        @keyframes floatNode1 {
+            0%, 100% { transform: translate(0, 0); }
+            50% { transform: translate(-15px, -20px); }
+        }
+        @keyframes floatNode2 {
+            0%, 100% { transform: translate(0, 0); }
+            50% { transform: translate(20px, -15px); }
+        }
+        @keyframes flapLeft {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(-10deg); }
+        }
+        @keyframes flapRight {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(10deg); }
+        }
+
+        /* Pulsing dot */
+        .login-pulse-dot {
+            animation: loginPulse 2s ease-in-out infinite;
+        }
+        @keyframes loginPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Login card entrance */
+        .login-card {
+            animation: loginCardSlide 0.6s ease-out;
+        }
+        @keyframes loginCardSlide {
+            from { opacity: 0; transform: translateY(30px) scale(0.97); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        /* App reveal transition */
+        .app-reveal {
+            animation: appReveal 0.5s ease-out forwards;
+        }
+        @keyframes appReveal {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
     </style>
     <script>
         tailwind.config = {
@@ -84,8 +223,161 @@
 </head>
 <body class="bg-slate-900 text-slate-100 font-sans min-h-screen flex selection:bg-blue-500/30">
 
+    <!-- LOGIN PAGE -->
+    <div id="view-login" class="fixed inset-0 z-50 flex items-center justify-center min-h-screen" style="background: #0b1120;">
+        <!-- Animated Background Orbs -->
+        <div class="absolute inset-0 overflow-hidden pointer-events-none">
+            <div class="login-orb login-orb-1"></div>
+            <div class="login-orb login-orb-2"></div>
+            <div class="login-orb login-orb-3"></div>
+            <!-- Grid pattern -->
+            <div class="absolute inset-0" style="background-image: radial-gradient(rgba(59,130,246,0.07) 1px, transparent 1px); background-size: 40px 40px;"></div>
+        </div>
+        
+        <!-- Login Content -->
+        <div class="relative z-10 flex items-center justify-center gap-20 w-full max-w-6xl px-8">
+            
+            <!-- Left Side: Mascot -->
+            <div class="hidden lg:flex flex-col items-center text-center max-w-lg">
+                <!-- Logo -->
+                <div class="flex items-center gap-3 mb-2 relative z-20">
+                    <svg class="w-10 h-10 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
+                    <h1 class="text-4xl font-bold text-white tracking-tight">GPOS <span class="text-blue-400">AX</span> Portal</h1>
+                    <span class="px-2 py-1 rounded text-xs font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">LGSI</span>
+                </div>
+
+                <div class="my-4 relative w-full flex justify-center" style="height: 350px;">
+                    <svg viewBox="0 0 400 400" class="w-full h-full" id="3d-mascot" style="transform-style: preserve-3d; will-change: transform; transition: transform 0.1s ease-out;">
+                        <defs>
+                            <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#1e293b" />
+                                <stop offset="100%" stop-color="#0f172a" />
+                            </linearGradient>
+                            <linearGradient id="bellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#3b82f6" />
+                                <stop offset="100%" stop-color="#1e40af" />
+                            </linearGradient>
+                            <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.8"/>
+                                <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+                            </linearGradient>
+                            <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
+                                <feGaussianBlur stdDeviation="8" result="blur" />
+                                <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                            </filter>
+                        </defs>
+
+                        <!-- Hologram Rings -->
+                        <g transform="translate(200, 320)">
+                            <ellipse cx="0" cy="0" rx="110" ry="25" fill="none" stroke="#3b82f6" stroke-width="2" opacity="0.5" style="animation: pulseRing 3s ease-in-out infinite; transform-origin: center;" />
+                            <ellipse cx="0" cy="0" rx="130" ry="30" fill="none" stroke="#60a5fa" stroke-width="1" stroke-dasharray="10 5" style="animation: rotateRing 10s linear infinite; transform-origin: center;" />
+                            <ellipse cx="0" cy="0" rx="80" ry="15" fill="url(#glowGrad)" style="animation: pulseCore 4s infinite;" />
+                        </g>
+
+                        <!-- Floating Data Nodes -->
+                        <g>
+                            <circle cx="80" cy="120" r="4" fill="#60a5fa" filter="url(#neonGlow)" style="animation: floatNode1 4s ease-in-out infinite alternate;" />
+                            <circle cx="320" cy="100" r="6" fill="#3b82f6" filter="url(#neonGlow)" style="animation: floatNode2 5s ease-in-out infinite alternate;" />
+                            <circle cx="90" cy="280" r="5" fill="#3b82f6" filter="url(#neonGlow)" style="animation: floatNode2 6s ease-in-out infinite alternate-reverse;" />
+                            <circle cx="330" cy="260" r="3" fill="#60a5fa" filter="url(#neonGlow)" style="animation: floatNode1 4.5s ease-in-out infinite alternate-reverse;" />
+                        </g>
+
+                        <!-- Robot Body -->
+                        <g transform="translate(200, 170)" style="animation: floatBody 4s ease-in-out infinite;">
+                            <!-- Main Chassis -->
+                            <path d="M-80,0 C-80,-90 80,-90 80,0 C90,90 60,130 0,130 C-60,130 -90,90 -80,0 Z" fill="url(#bodyGrad)" stroke="#334155" stroke-width="3"/>
+                            
+                            <!-- Inner Display Panel -->
+                            <path d="M-55,10 C-55,-30 55,-30 55,10 C60,65 35,105 0,105 C-35,105 -60,65 -55,10 Z" fill="url(#bellyGrad)" opacity="0.9"/>
+                            
+                            <!-- Power Core -->
+                            <circle cx="0" cy="55" r="18" fill="#60a5fa" filter="url(#neonGlow)" style="animation: pulseCore 2s ease-in-out infinite alternate;" />
+                            <circle cx="0" cy="55" r="8" fill="#ffffff" />
+                            <polygon points="-6,50 6,50 0,62" fill="#1e40af" />
+                            
+                            <!-- Wings / Arms -->
+                            <path d="M-80,10 C-100,30 -115,80 -90,100 C-100,70 -80,30 -75,20 Z" fill="url(#bodyGrad)" style="animation: flapLeft 6s ease-in-out infinite; transform-origin: -75px 20px;" />
+                            <path d="M80,10 C100,30 115,80 90,100 C100,70 80,30 75,20 Z" fill="url(#bodyGrad)" style="animation: flapRight 6s ease-in-out infinite; transform-origin: 75px 20px;" />
+
+                            <!-- Face Plate -->
+                            <rect x="-45" y="-45" width="90" height="35" rx="10" fill="#0f172a" stroke="#3b82f6" stroke-width="2" />
+                            
+                            <!-- Eyes -->
+                            <circle cx="-25" cy="-27" r="6" fill="#60a5fa" filter="url(#neonGlow)" style="animation: blinkEye 4s infinite; transform-origin: center;" />
+                            <circle cx="25" cy="-27" r="6" fill="#60a5fa" filter="url(#neonGlow)" style="animation: blinkEye 4s infinite; transform-origin: center;" />
+                            
+                            <!-- Antennas -->
+                            <path d="M-50,-60 L-65,-85" stroke="#60a5fa" stroke-width="3" fill="none" stroke-linecap="round"/>
+                            <circle cx="-65" cy="-85" r="5" fill="#3b82f6" filter="url(#neonGlow)" style="animation: pulseCore 1.5s infinite alternate;" />
+                            
+                            <path d="M50,-60 L65,-85" stroke="#60a5fa" stroke-width="3" fill="none" stroke-linecap="round"/>
+                            <circle cx="65" cy="-85" r="5" fill="#3b82f6" filter="url(#neonGlow)" style="animation: pulseCore 1.5s infinite alternate;" />
+                        </g>
+                    </svg>
+                </div>
+                
+                <p class="text-slate-400 text-sm mb-4 max-w-xs leading-relaxed relative z-20">Enterprise AI-Powered Development Platform</p>
+                <div class="flex items-center gap-2 relative z-20">
+                    <div class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)] login-pulse-dot"></div>
+                    <span class="text-xs text-emerald-400 font-medium tracking-wide uppercase">System Online</span>
+                </div>
+            </div>
+
+            <!-- Right Side: Login Card -->
+            <div class="login-card w-full max-w-md relative z-20">
+                <div class="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-8 shadow-2xl shadow-blue-500/10">
+                    <!-- Login Icon -->
+                    <div class="flex justify-center mb-6">
+                        <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/25">
+                            <i data-lucide="shield-check" class="w-7 h-7 text-white"></i>
+                        </div>
+                    </div>
+                    
+                    <h2 class="text-2xl font-bold text-white text-center mb-1 tracking-tight">GPOS AX</h2>
+                    <p class="text-slate-400 text-sm text-center mb-8">Sign in with your corporate credentials</p>
+
+                    <!-- Login Error -->
+                    <div id="login-error" class="hidden mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm text-center"></div>
+
+                    <!-- Login Form -->
+                    <form id="login-form" onsubmit="handleLogin(event)" class="space-y-5">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Username</label>
+                            <div class="relative">
+                                <i data-lucide="user" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"></i>
+                                <input type="text" id="login-username" placeholder="AD username" required
+                                    class="w-full pl-10 pr-4 py-3 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 transition-all text-sm">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-slate-400 mb-1.5 uppercase tracking-wider">Password</label>
+                            <div class="relative">
+                                <i data-lucide="lock" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"></i>
+                                <input type="password" id="login-password" placeholder="••••••••••" required
+                                    class="w-full pl-10 pr-10 py-3 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 transition-all text-sm">
+                                <button type="button" onclick="togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
+                                    <i data-lucide="eye-off" id="password-toggle-icon" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <button type="submit" id="login-btn" 
+                            class="w-full py-3 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-semibold rounded-xl shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 transition-all duration-200 flex items-center justify-center gap-2 text-sm">
+                            <span id="login-btn-text">Authenticate</span>
+                            <span id="login-btn-arrow">→</span>
+                            <span id="login-spinner" class="hidden">
+                                <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            </span>
+                        </button>
+                    </form>
+
+                    <p class="text-center text-xs text-slate-500 mt-6">Trouble logging in? <span class="text-blue-400 hover:text-blue-300 cursor-pointer">Contact IT Support</span></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Fixed Left Sidebar -->
-    <aside class="w-60 bg-[#0b1120] border-r border-slate-800 flex flex-col fixed h-full z-20">
+    <aside class="w-60 bg-[#0b1120] border-r border-slate-800 flex flex-col fixed h-full z-20 hidden">
         <!-- Top Logo -->
         <div class="h-14 flex items-center px-4 border-b border-slate-800 shrink-0">
             <i data-lucide="sparkles" class="w-5 h-5 text-blue-400 mr-2"></i>
@@ -133,12 +425,15 @@
                     <div id="sidebar-user-name" class="text-sm font-medium text-slate-200 truncate">Loading...</div>
                     <div id="sidebar-user-division" class="text-[11px] text-slate-400 truncate">LGSI GPOS & Apps</div>
                 </div>
+                <button onclick="handleLogout()" class="text-slate-500 hover:text-red-400 transition-colors ml-auto" title="Sign Out">
+                    <i data-lucide="log-out" class="w-4 h-4"></i>
+                </button>
             </div>
         </div>
     </aside>
 
     <!-- Main Content Area -->
-    <main class="flex-1 ml-60 flex flex-col min-h-screen relative">
+    <main class="flex-1 ml-60 flex flex-col min-h-screen relative hidden">
         <!-- Top Header -->
         <header class="h-14 sticky top-0 z-10 bg-slate-900/90 backdrop-blur border-b border-slate-800 flex items-center justify-between px-6">
             <div id="user-greeting" class="text-sm font-medium text-slate-300">
@@ -446,9 +741,9 @@
             </div>
         </div>
     </div>
-    <script src="/static/js/api_v2.js"></script>
-    <script src="/static/js/dashboard_v2.js"></script>
-    <script src="/static/js/chat_v2.js?v=2"></script>
+    <script src="/static/js/api_v2.js?v=5"></script>
+    <script src="/static/js/dashboard_v2.js?v=2"></script>
+    <script src="/static/js/chat_v2.js?v=5"></script>
     <script>
         // Initialize plugins
         if (typeof mermaid !== 'undefined') {
@@ -726,8 +1021,130 @@
             }
         };
 
+        // ===== Authentication Logic =====
+        function handleLogin(event) {
+            event.preventDefault();
+            var username = document.getElementById('login-username').value.trim();
+            var password = document.getElementById('login-password').value;
+            var errorEl = document.getElementById('login-error');
+            var btnText = document.getElementById('login-btn-text');
+            var btnArrow = document.getElementById('login-btn-arrow');
+            var spinner = document.getElementById('login-spinner');
+            var btn = document.getElementById('login-btn');
+            
+            errorEl.classList.add('hidden');
+            btnText.textContent = 'Authenticating...';
+            btnArrow.classList.add('hidden');
+            spinner.classList.remove('hidden');
+            btn.disabled = true;
+            
+            API.login(username, password).then(function(data) {
+                localStorage.setItem('auth_token', data.token);
+                localStorage.setItem('auth_username', data.username);
+                showApp();
+            }).catch(function(err) {
+                errorEl.textContent = err.message || 'Authentication failed. Please try again.';
+                errorEl.classList.remove('hidden');
+                btnText.textContent = 'Authenticate';
+                btnArrow.classList.remove('hidden');
+                spinner.classList.add('hidden');
+                btn.disabled = false;
+            });
+        }
+
+        function showApp() {
+            var loginView = document.getElementById('view-login');
+            if (loginView) loginView.style.display = 'none';
+            
+            // Show sidebar and main content
+            var sidebar = document.querySelector('aside');
+            var mainContent = document.querySelector('main');
+            if (sidebar) sidebar.classList.remove('hidden');
+            if (mainContent) mainContent.classList.remove('hidden');
+            if (mainContent) mainContent.classList.add('app-reveal');
+            if (sidebar) sidebar.classList.add('app-reveal');
+            
+            // Re-init icons
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+
+            // Load agents and update user profile AFTER auth
+            if (typeof loadAgents === 'function') loadAgents();
+            
+            var username = localStorage.getItem('auth_username') || 'User';
+            var profileNameEl = document.getElementById('sidebar-user-name');
+            var profileInitialsEl = document.getElementById('sidebar-user-initials');
+            var profileDivEl = document.getElementById('sidebar-user-division');
+            
+            if (profileNameEl) profileNameEl.textContent = username;
+            if (profileInitialsEl) profileInitialsEl.textContent = username.substring(0, 2).toUpperCase();
+            if (profileDivEl) profileDivEl.textContent = 'LGSI GPOS & Apps';
+            
+            var greetingEl = document.getElementById('user-greeting');
+            if (greetingEl) {
+                var hour = new Date().getHours();
+                var greeting = "Good evening";
+                if (hour < 12) greeting = "Good morning";
+                else if (hour < 17) greeting = "Good afternoon";
+                greetingEl.textContent = greeting + ", " + username + " 👋";
+            }
+        }
+
+        function showLogin() {
+            var loginView = document.getElementById('view-login');
+            if (loginView) loginView.style.display = 'flex';
+            
+            // Hide sidebar and main content
+            var sidebar = document.querySelector('aside');
+            var mainContent = document.querySelector('main');
+            if (sidebar) sidebar.classList.add('hidden');
+            if (mainContent) mainContent.classList.add('hidden');
+            
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+
+        function handleLogout() {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_username');
+            window.location.reload();
+        }
+
+        function togglePasswordVisibility() {
+            var pwInput = document.getElementById('login-password');
+            var icon = document.getElementById('password-toggle-icon');
+            if (pwInput.type === 'password') {
+                pwInput.type = 'text';
+                icon.setAttribute('data-lucide', 'eye');
+            } else {
+                pwInput.type = 'password';
+                icon.setAttribute('data-lucide', 'eye-off');
+            }
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+
+        function checkAuth() {
+            var token = localStorage.getItem('auth_token');
+            if (token) {
+                showApp();
+            } else {
+                showLogin();
+            }
+        }
+
         // Initialize on DOM ready
         document.addEventListener('DOMContentLoaded', function() {
+            checkAuth();
+            
+            // 3D Parallax effect for login penguin
+            document.addEventListener('mousemove', function(e) {
+                var mascot = document.getElementById('3d-mascot');
+                if (mascot && document.getElementById('view-login').style.display !== 'none') {
+                    // Limit rotation angle so it doesn't flip over
+                    var xAxis = Math.max(-15, Math.min(15, (window.innerWidth / 2 - e.pageX) / 40));
+                    var yAxis = Math.max(-15, Math.min(15, (window.innerHeight / 2 - e.pageY) / 40));
+                    mascot.style.transform = `rotateY(${xAxis}deg) rotateX(${yAxis}deg)`;
+                }
+            });
+            
             // Restore Theme
             if (localStorage.getItem('theme') === 'light') {
                 document.body.classList.add('light-theme');
@@ -794,3 +1211,4 @@
     </script>
 </body>
 </html>
+
