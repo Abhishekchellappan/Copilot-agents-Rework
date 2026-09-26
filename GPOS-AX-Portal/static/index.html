@@ -705,10 +705,19 @@
             const chatInput = document.getElementById('chat-input');
             const chatForm = document.getElementById('chat-form');
             if (chatInput && chatForm) {
-                let jql = `project = SIGPOSDEV AND sprint in openSprints() AND assignee = "${username}"`;
-                if (statusStr) {
-                    jql += ` AND status = "${statusStr}"`;
-                }
+                    let actualUser = username;
+
+
+
+
+
+                  let jql = `project = SIGPOSDEV AND sprint in openSprints() AND assignee = "${actualUser}"`;
+                  if (statusStr) {
+                        if (statusStr === 'To Do') jql += ` AND statusCategory = "To Do"`;
+                        else if (statusStr === 'In Progress') jql += ` AND statusCategory = "In Progress"`;
+                        else if (statusStr === 'Done') jql += ` AND statusCategory = "Done"`;
+                      else jql += ` AND status = "${statusStr}"`;
+                  }
                 jql += ` ORDER BY updated DESC`;
                 chatInput.value = jql;
                 

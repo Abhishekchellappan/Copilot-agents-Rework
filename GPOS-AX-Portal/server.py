@@ -575,11 +575,26 @@ def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_n
             if not assignee_obj:
                 unassigned.append({"key": key, "summary": summary})
                 dev_name = "Unassigned"
+                dev_username = ""
             else:
-                dev_name = assignee_obj.get("displayName", assignee_obj.get("name", "Unknown"))
-                
+                dev_name = assignee_obj.get("displayName") or assignee_obj.get("name") or "Unknown"
+                # Robustly extract the Jira login username
+                dev_username = assignee_obj.get("name") or assignee_obj.get("key") or ""
+                if not dev_username:
+                    # Try email prefix
+                    email = assignee_obj.get("emailAddress") or ""
+                    if "@" in email:
+                        dev_username = email.split("@")[0]
+                if not dev_username:
+                    # displayName often contains username as last word e.g. "Muralidhar N muralidhar.n"
+                    name_parts = dev_name.split()
+                    if len(name_parts) > 1:
+                        dev_username = name_parts[-1]
+                    else:
+                        dev_username = dev_name
             if dev_name not in dev_stats:
-                dev_stats[dev_name] = {"name": dev_name, "tickets": 0, "points": 0.0, "done": 0, "in_progress": 0, "todo": 0, "non_compliant": []}
+                logger.info(f"[ASSIGNEE DEBUG] dev_name='{dev_name}' dev_username='{dev_username}' raw_assignee_keys={list(assignee_obj.keys()) if assignee_obj else 'None'} name_field={assignee_obj.get('name') if assignee_obj else 'N/A'} key_field={assignee_obj.get('key') if assignee_obj else 'N/A'}")
+                dev_stats[dev_name] = {"name": dev_name, "username": dev_username, "tickets": 0, "points": 0.0, "done": 0, "in_progress": 0, "todo": 0, "non_compliant": []}
             
             dev_stats[dev_name]["tickets"] += 1
             dev_stats[dev_name]["points"] += points
@@ -996,12 +1011,13 @@ async def weekly_status(req: ChatRequest, request: Request):
         # 5. Call LLM
         base_rules = '''
 CRITICAL RULES:
-- Categorize each ticket into the 3 sections based on its 'Status' and 'Comments'.
-- If a ticket is 'Open' or 'To Do' and has NO comments, it MUST be placed in 'ToDo'. DO NOT place it in 'Completed'.
-- If the comments clearly state the work is completely finished or merged, you may place it in 'Completed Tasks' even if the status is not updated.
-- List each unique ticket exactly ONCE under the correct section. DO NOT duplicate ticket numbers.
-- Provide exactly ONE bullet point per ticket containing the ticket number and a brief 2-line summary of the work done/doing (extract this heavily from the comments).
-- DO NOT include tickets related to 'leave', 'vacation', or 'time off' in the output at all. Completely omit them from your response.
+- Categorize each ticket into exactly ONE of the 3 sections based on its 'Status' and 'Comments'.
+- If Jira Status is 'Resolved', 'Closed', or 'Done', it MUST go to 'Completed Tasks'.
+- If Jira Status is 'In Progress', 'Active', or 'Working', it MUST go to 'In Progress'.
+- If Jira Status is 'Open', 'To Do', or 'Backlog', it MUST go to 'ToDo', UNLESS the comments explicitly prove the work is finished (in which case, put it in 'Completed Tasks').
+- STRICT DUPLICATION BAN: You MUST ensure no ticket appears more than once. If you place a ticket in 'Completed Tasks', you CANNOT place it in 'ToDo' or 'In Progress'.
+- Provide exactly ONE bullet point per ticket containing the ticket number and a brief 2-line summary of the work done (extract heavily from comments).
+- DO NOT include tickets related to 'leave', 'vacation', or 'time off'. Completely omit them.
 '''
         if is_all_members:
             sys_prompt = f'''You are analyzing the TEAM's weekly progress. Based on the tickets and comments, generate a status report. Group the report by DEVELOPER NAME. Under each developer, include EXACTLY these sections:

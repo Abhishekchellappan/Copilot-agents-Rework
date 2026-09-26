@@ -46,6 +46,7 @@ const dashboard = {
       const workload = (raw.developers || []).map(function(d) {
         return {
           developer: d.name,
+          username: d.username || '',
           tickets: d.tickets,
           points: d.points,
           done: d.done || 0,
@@ -224,12 +225,13 @@ const dashboard = {
         ncHtml = '<div class="inline-flex items-center justify-center min-w-[1.5rem] text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded cursor-help border border-red-500/30 font-bold whitespace-nowrap" title="' + tooltipItems + '">' + dev.non_compliant.length + '</div>';
       }
       
-      row.innerHTML = '<td class="px-5 py-3 text-blue-400 font-medium cursor-pointer hover:underline" onclick="window.searchUserTickets(\'' + dev.developer.replace(/'/g, "\\'") + '\')">' + dev.developer + '</td>' +
-        '<td class="px-5 py-3 text-blue-400 font-medium text-right cursor-pointer hover:underline" onclick="window.searchUserTickets(\'' + dev.developer.replace(/'/g, "\\'") + '\')">' + dev.tickets + '</td>' +
+      var uname = dev.username || dev.developer;
+      row.innerHTML = '<td class="px-5 py-3 text-blue-400 font-medium cursor-pointer hover:underline" onclick="window.searchUserTickets(\'' + uname.replace(/'/g, "\\'") + '\')">' + dev.developer + '</td>' +
+        '<td class="px-5 py-3 text-blue-400 font-medium text-right cursor-pointer hover:underline" onclick="window.searchUserTickets(\'' + uname.replace(/'/g, "\\'") + '\')">' + dev.tickets + '</td>' +
         '<td class="px-5 py-3 text-slate-300 text-right">' + dev.points + '</td>' +
-        '<td class="px-5 py-3 text-center"><span class="badge badge-done cursor-pointer hover:opacity-80" onclick="window.searchUserTickets(\'' + dev.developer.replace(/'/g, "\\'") + '\', \'Done\')">' + dev.done + '</span></td>' +
-        '<td class="px-5 py-3 text-center"><span class="badge badge-in-progress cursor-pointer hover:opacity-80" onclick="window.searchUserTickets(\'' + dev.developer.replace(/'/g, "\\'") + '\', \'In Progress\')">' + dev.in_progress + '</span></td>' +
-        '<td class="px-5 py-3 text-center"><span class="badge badge-todo cursor-pointer hover:opacity-80" onclick="window.searchUserTickets(\'' + dev.developer.replace(/'/g, "\\'") + '\', \'To Do\')">' + dev.to_do + '</span></td>' +
+        '<td class="px-5 py-3 text-center"><span class="badge badge-done cursor-pointer hover:opacity-80" onclick="window.searchUserTickets(\'' + uname.replace(/'/g, "\\'") + '\', \'Done\')">' + dev.done + '</span></td>' +
+        '<td class="px-5 py-3 text-center"><span class="badge badge-in-progress cursor-pointer hover:opacity-80" onclick="window.searchUserTickets(\'' + uname.replace(/'/g, "\\'") + '\', \'In Progress\')">' + dev.in_progress + '</span></td>' +
+        '<td class="px-5 py-3 text-center"><span class="badge badge-todo cursor-pointer hover:opacity-80" onclick="window.searchUserTickets(\'' + uname.replace(/'/g, "\\'") + '\', \'To Do\')">' + dev.to_do + '</span></td>' +
         '<td class="px-5 py-3 text-center">' + ncHtml + '</td>' +
         '<td class="px-5 py-3"><div class="flex items-center gap-2"><div class="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden"><div class="h-full rounded-full transition-all duration-700 ease-out ' + barColor + '" style="width: ' + dev.progress + '%"></div></div><span class="text-xs text-slate-400 w-8 text-right">' + dev.progress + '%</span></div></td>';
       tbody.appendChild(row);
