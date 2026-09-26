@@ -240,7 +240,8 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
     # Map fields to fetch
     required_fields = {
         "duedate", STORY_POINTS_FIELD, "components", "labels", "description",
-        "summary", "status", "assignee", "issuetype", "priority", "comment"
+        "summary", "status", "assignee", "issuetype", "priority", "comment",
+        "resolutiondate", "updated"
     }
     for k, v in field_names.items():
         if v:
@@ -841,6 +842,7 @@ def get_sprint_burndown(request: Request, project_key: str = "SIGPOSDEV", sprint
         # Calculate current day dynamically if possible, or default to Day 5 (index 4)
         import datetime
         current_day_idx = 4 # Default to 5th day (0-indexed)
+        start_date = None
         try:
             # Try to parse sprint dates like 09/14-09/25
             match = re.search(r'\((\d{2}/\d{2})-(\d{2}/\d{2})\)', resolved_sprint_name)
@@ -862,11 +864,54 @@ def get_sprint_burndown(request: Request, project_key: str = "SIGPOSDEV", sprint
         except:
             pass
 
+        # Calculate exact historical burn mapped by day
+        points_burned_per_day = [0.0] * num_days
+        for issue in issues:
+            fields = issue.get("fields", {})
+            status_obj = fields.get("status", {})
+            status_name = status_obj.get("name", "") if isinstance(status_obj, dict) else str(status_obj)
+            
+            if _classify_status(status_name, status_obj) == "done":
+                sp_val = fields.get(STORY_POINTS_FIELD)
+                try:
+                    sp = float(sp_val) if sp_val is not None else 0.0
+                except:
+                    sp = 0.0
+                
+                res_date_str = fields.get("resolutiondate") or fields.get("updated")
+                if res_date_str and start_date:
+                    try:
+                        clean_date = res_date_str.replace('Z', '+00:00')
+                        if '.' in clean_date and clean_date.endswith('+00:00'):
+                            clean_date = clean_date.split('.')[0] + '+00:00'
+                        res_date = datetime.datetime.fromisoformat(clean_date).date()
+                        
+                        days_passed = 0
+                        temp_date = start_date.date()
+                        if res_date <= temp_date:
+                            points_burned_per_day[0] += sp
+                        else:
+                            while temp_date < res_date:
+                                if temp_date.weekday() < 5:
+                                    days_passed += 1
+                                temp_date += datetime.timedelta(days=1)
+                            
+                            if days_passed < num_days:
+                                points_burned_per_day[days_passed] += sp
+                            else:
+                                points_burned_per_day[num_days - 1] += sp
+                    except Exception as e:
+                        logger.error(f"Error parsing date {res_date_str}: {e}")
+                        points_burned_per_day[current_day_idx] += sp
+                else:
+                    points_burned_per_day[current_day_idx] += sp
+
         actual = []
+        running_remaining = total_points
         for day in range(num_days):
             if day <= current_day_idx:
-                prog = day / current_day_idx if current_day_idx else 0
-                actual.append(round(total_points - (total_points - remaining_now) * prog, 1))
+                running_remaining -= points_burned_per_day[day]
+                actual.append(round(max(0.0, running_remaining), 1))
             else:
                 actual.append(None)
                 
