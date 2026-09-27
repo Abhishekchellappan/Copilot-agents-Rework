@@ -118,6 +118,36 @@ const API = {
   logout() {
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_username');
+    localStorage.removeItem('auth_role');
     window.location.reload();
+  },
+
+  async recordTelemetry(agentId, sessionId, durationSeconds) {
+    try {
+      await this._fetch('/telemetry', {
+        method: 'POST',
+        body: JSON.stringify({ agent_id: agentId, session_id: sessionId, duration_seconds: durationSeconds })
+      });
+    } catch(e) {
+      // Silent fail - telemetry is non-critical
+    }
+  },
+
+  async getAdminStats() {
+    return this._fetch('/admin/stats');
+  },
+
+    async getAdminUserStats(username) {
+    const response = await fetch(this.baseUrl + '/admin/user/' + encodeURIComponent(username) + '/stats', {
+      headers: this.getHeaders()
+    });
+    if (!response.ok) throw new Error('Failed to fetch user stats');
+    return await response.json();
+  },
+  async toggleUserAccess(username, allowed) {
+    return this._fetch('/admin/toggle-user', {
+      method: 'POST',
+      body: JSON.stringify({ username: username, allowed: allowed })
+    });
   }
 };

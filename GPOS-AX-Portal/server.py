@@ -1,5 +1,6 @@
 import os
 import re
+import sqlite3
 import logging
 from datetime import date
 from typing import Optional, Dict, Any, List, Tuple
@@ -51,6 +52,79 @@ JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'gpos-ax-portal-secret-key-cha
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION_HOURS = 24
 
+# Admin Configuration
+ADMIN_USERS = {'abhishek15.c', 'admin'}  # Users who get admin role by default
+
+# Database setup
+DB_PATH = os.environ.get('DB_PATH', '/tmp/gpos_portal.db')
+
+def init_db():
+    """Initialize SQLite database with required tables."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            is_admin INTEGER DEFAULT 0,
+            is_allowed INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_login TEXT
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS agent_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            duration_seconds INTEGER DEFAULT 0,
+            recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Ensure admin users exist
+    for admin in ADMIN_USERS:
+        c.execute('''
+            INSERT OR IGNORE INTO users (username, is_admin, is_allowed)
+            VALUES (?, 1, 1)
+        ''', (admin,))
+    conn.commit()
+    conn.close()
+
+def get_db():
+    """Get database connection."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def is_user_allowed(username: str) -> bool:
+    """Check if a user is allowed to log in."""
+    conn = get_db()
+    try:
+        row = conn.execute('SELECT is_allowed FROM users WHERE username = ?', (username,)).fetchone()
+        if row is None:
+            return True  # New users are allowed by default
+        return bool(row['is_allowed'])
+    finally:
+        conn.close()
+
+def upsert_user(username: str, is_admin: bool = False):
+    """Insert or update user in the database."""
+    conn = get_db()
+    try:
+        conn.execute('''
+            INSERT INTO users (username, is_admin, is_allowed, last_login)
+            VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(username) DO UPDATE SET
+                last_login = CURRENT_TIMESTAMP,
+                is_admin = CASE WHEN username IN ('abhishek15.c','admin') THEN 1 ELSE is_admin END
+        ''', (username, 1 if is_admin else 0))
+        conn.commit()
+    finally:
+        conn.close()
+
+# Initialize DB on startup
+init_db()
+
 
 class AgentAction(BaseModel):
     action: str
@@ -64,8 +138,10 @@ class LoginRequest(BaseModel):
 
 def _create_jwt_token(username: str) -> str:
     """Generate a JWT token for an authenticated user."""
+    role = 'admin' if username in ADMIN_USERS else 'user'
     payload = {
         'sub': username,
+        'role': role,
         'iat': datetime.utcnow(),
         'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
     }
@@ -113,10 +189,18 @@ async def login(req: LoginRequest):
         # Mock mode - accept any non-empty credentials
         logger.warning(f"[MOCK AUTH] LDAP_SERVER not configured. Accepting login for user: {username}")
     
+    # Check if user is allowed
+    if not is_user_allowed(username):
+        raise HTTPException(status_code=403, detail='Access denied. Your account has been disabled by the administrator.')
+
+    is_admin = username in ADMIN_USERS
+    upsert_user(username, is_admin)
     token = _create_jwt_token(username)
     return {
         'token': token,
         'username': username,
+        'is_admin': is_admin,
+        'role': 'admin' if is_admin else 'user',
         'message': f'Welcome, {username}!'
     }
 
@@ -133,7 +217,12 @@ async def verify_auth(request: Request):
     if not payload:
         raise HTTPException(status_code=401, detail='Token expired or invalid')
     
-    return {'valid': True, 'username': payload.get('sub', '')}
+    return {
+        'valid': True,
+        'username': payload.get('sub', ''),
+        'role': payload.get('role', 'user'),
+        'is_admin': payload.get('role', 'user') == 'admin'
+    }
 
 def get_current_user(request: Request) -> str:
     auth_header = request.headers.get('Authorization', '')
@@ -401,7 +490,7 @@ Whenever you audit tickets (e.g. for missing labels or assignees), you MUST outp
 Use this exact HTML structure:
 <agent-html>
 <div class="bg-slate-800 border border-amber-500/30 rounded-lg p-4 mb-4">
-  <h3 class="text-amber-400 font-bold mb-2">⚠️ Governance Audit Findings</h3>
+  <h3 class="text-amber-400 font-bold mb-2">Ã¢Å¡Â Ã¯Â¸Â Governance Audit Findings</h3>
   <table class="w-full text-sm text-left text-slate-300">
     <thead class="text-xs text-slate-400 bg-slate-900 uppercase">
       <tr><th>Key</th><th>Summary</th><th>Missing Element</th></tr>
@@ -577,7 +666,7 @@ def get_mentions(request: Request):
     if not pat:
         raise HTTPException(
             status_code=401, 
-            detail="Missing Jira PAT. Please click ⚙️ Settings in the top-right corner to enter your Personal Access Token."
+            detail="Missing Jira PAT. Please click Ã¢Å¡â„¢Ã¯Â¸Â Settings in the top-right corner to enter your Personal Access Token."
         )
 
     jql = "text ~ currentUser() AND updated >= startOfDay() ORDER BY updated DESC"
@@ -622,7 +711,7 @@ def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_n
     if not pat:
         raise HTTPException(
             status_code=401, 
-            detail="Missing Jira PAT. Please click ⚙️ Settings in the top-right corner to enter your Personal Access Token."
+            detail="Missing Jira PAT. Please click Ã¢Å¡â„¢Ã¯Â¸Â Settings in the top-right corner to enter your Personal Access Token."
         )
 
     try:
@@ -806,6 +895,174 @@ def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_n
         logger.error(f"Error generating real sprint report: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch sprint report: {str(e)}")
 
+
+class TelemetryRequest(BaseModel):
+    agent_id: str
+    session_id: str
+    duration_seconds: int = 60
+
+
+@app.post('/api/telemetry')
+async def record_telemetry(req: TelemetryRequest, request: Request):
+    """Record agent usage telemetry for analytics."""
+    username = get_current_user(request)
+    conn = get_db()
+    try:
+        # Upsert: if same session exists, add duration, else insert new row
+        existing = conn.execute(
+            'SELECT id, duration_seconds FROM agent_metrics WHERE session_id = ? AND username = ? AND agent_id = ?',
+            (req.session_id, username, req.agent_id)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                'UPDATE agent_metrics SET duration_seconds = ?, recorded_at = CURRENT_TIMESTAMP WHERE id = ?',
+                (existing['duration_seconds'] + req.duration_seconds, existing['id'])
+            )
+        else:
+            conn.execute(
+                'INSERT INTO agent_metrics (username, agent_id, session_id, duration_seconds) VALUES (?, ?, ?, ?)',
+                (username, req.agent_id, req.session_id, req.duration_seconds)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {'status': 'ok'}
+
+
+@app.get('/api/admin/user/{target_user}/stats')
+async def get_admin_user_stats(target_user: str, request: Request):
+    username = get_current_user(request)
+    conn = get_db()
+    try:
+        user_row = conn.execute('SELECT is_admin FROM users WHERE username = ?', (username,)).fetchone()
+        if not user_row or not user_row['is_admin']:
+            if username not in ADMIN_USERS:
+                raise HTTPException(status_code=403, detail='Admin access required')
+
+        agent_usage = conn.execute('''
+            SELECT agent_id, SUM(duration_seconds) as total_seconds
+            FROM agent_metrics
+            WHERE username = ?
+            GROUP BY agent_id
+        ''', (target_user,)).fetchall()
+
+        daily = conn.execute('''
+            SELECT date(recorded_at) as day, SUM(duration_seconds) as total_seconds
+            FROM agent_metrics
+            WHERE username = ? AND recorded_at >= datetime('now', '-14 days')
+            GROUP BY day
+            ORDER BY day
+        ''', (target_user,)).fetchall()
+
+        return {
+            'username': target_user,
+            'agent_usage': [dict(a) for a in agent_usage],
+            'daily_activity': [dict(d) for d in daily]
+        }
+    finally:
+        conn.close()
+
+@app.get('/api/admin/stats')
+async def get_admin_stats(request: Request):
+    """Get admin statistics - only accessible to admin users."""
+    username = get_current_user(request)
+    # Check admin role from DB
+    conn = get_db()
+    try:
+        user_row = conn.execute('SELECT is_admin FROM users WHERE username = ?', (username,)).fetchone()
+        if not user_row or not user_row['is_admin']:
+            if username not in ADMIN_USERS:
+                raise HTTPException(status_code=403, detail='Admin access required')
+
+        # All users with stats
+        users = conn.execute('''
+            SELECT u.username, u.is_admin, u.is_allowed, u.last_login,
+                   COALESCE(SUM(m.duration_seconds), 0) as total_seconds,
+                   COUNT(DISTINCT m.session_id) as total_sessions
+            FROM users u
+            LEFT JOIN agent_metrics m ON u.username = m.username
+            GROUP BY u.username
+            ORDER BY total_seconds DESC
+        ''').fetchall()
+
+        # Agent usage breakdown
+        agent_usage = conn.execute('''
+            SELECT agent_id,
+                   COUNT(DISTINCT username) as unique_users,
+                   COUNT(DISTINCT session_id) as total_sessions,
+                   COALESCE(SUM(duration_seconds), 0) as total_seconds
+            FROM agent_metrics
+            GROUP BY agent_id
+            ORDER BY total_seconds DESC
+        ''').fetchall()
+
+        # Hourly activity (last 7 days)
+        hourly = conn.execute('''
+            SELECT strftime('%H', recorded_at) as hour,
+                   COUNT(*) as count
+            FROM agent_metrics
+            WHERE recorded_at >= datetime('now', '-7 days')
+            GROUP BY hour
+            ORDER BY hour
+        ''').fetchall()
+
+        # Daily activity (last 14 days)
+        daily = conn.execute('''
+            SELECT strftime('%Y-%m-%d', recorded_at) as day,
+                   COALESCE(SUM(duration_seconds), 0) as total_seconds
+            FROM agent_metrics
+            WHERE recorded_at >= datetime('now', '-14 days')
+            GROUP BY day
+            ORDER BY day
+        ''').fetchall()
+
+        # Currently "active" users (had activity in last 10 minutes)
+        active_users = conn.execute('''
+            SELECT DISTINCT username FROM agent_metrics
+            WHERE recorded_at >= datetime('now', '-2 minutes')
+        ''').fetchall()
+
+        return {
+            'users': [dict(u) for u in users],
+            'agent_usage': [dict(a) for a in agent_usage],
+            'hourly_activity': [dict(h) for h in hourly],
+            'daily_activity': [dict(d) for d in daily],
+            'active_users': [u['username'] for u in active_users],
+            'total_users': len(users),
+            'total_sessions': sum(u['total_sessions'] for u in users)
+        }
+    finally:
+        conn.close()
+
+
+@app.post('/api/admin/toggle-user')
+async def toggle_user_access(request: Request):
+    """Admin endpoint to enable/disable user access."""
+    username = get_current_user(request)
+    conn = get_db()
+    try:
+        user_row = conn.execute('SELECT is_admin FROM users WHERE username = ?', (username,)).fetchone()
+        if not user_row or not user_row['is_admin']:
+            if username not in ADMIN_USERS:
+                raise HTTPException(status_code=403, detail='Admin access required')
+
+        body = await request.json()
+        target_user = body.get('username', '').strip()
+        allowed = body.get('allowed', True)
+
+        if not target_user:
+            raise HTTPException(status_code=400, detail='Username required')
+        if target_user in ADMIN_USERS:
+            raise HTTPException(status_code=400, detail='Cannot modify admin users')
+
+        conn.execute(
+            'UPDATE users SET is_allowed = ? WHERE username = ?',
+            (1 if allowed else 0, target_user)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {'status': 'ok', 'username': target_user, 'allowed': allowed}
 
 @app.get("/api/sprint/burndown")
 def get_sprint_burndown(request: Request, project_key: str = "SIGPOSDEV", sprint_name: str = ""):
