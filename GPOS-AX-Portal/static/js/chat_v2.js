@@ -85,7 +85,7 @@ window.chat = {
           list.innerHTML = sessions.sort((a,b) => b.id - a.id).map(s => `
               <div class="p-3 bg-slate-900/50 border border-slate-700 rounded-lg hover:border-blue-500/50 cursor-pointer transition-colors" onclick="window.chat.loadSession('${s.id}')">
                   <div class="text-sm text-slate-200 font-medium mb-1">${s.summary}</div>
-                  <div class="text-xs text-slate-500">${s.date} • ${s.history.length} messages</div>
+                  <div class="text-xs text-slate-500">${s.date} â€¢ ${s.history.length} messages</div>
               </div>
           `).join('');
       }
@@ -146,7 +146,7 @@ window.chat = {
                 <i data-lucide="bot" class="w-4 h-4 text-white"></i>
             </div>
             <div class="bg-slate-700 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] text-sm text-slate-200">
-                <p class="mb-2">Hello! I'm connected to the GPOS project.</p>
+                <p class="mb-2">Hello! I'm connected to the <span class="font-bold text-blue-400 font-mono">${(localStorage.getItem('jira_project_key') || 'SIGPOSDEV')}</span> Jira project.</p>
                 <p>Here are some things you can ask me:</p>
                                   <div class="flex flex-wrap gap-2 mt-3">
                       <button onclick="document.getElementById('chat-input').value='Generate sprint report'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="bar-chart-2" class="w-3 h-3"></i>Generate sprint report</button>
@@ -210,7 +210,7 @@ window.chat = {
                 const resp = await fetch('/api/weekly_status', {
                     method: 'POST',
                     headers: API.getHeaders(),
-                    body: JSON.stringify({ message: text, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel }),
+                    body: JSON.stringify({ message: text, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, project_key: localStorage.getItem('jira_project_key') || 'SIGPOSDEV' }),
                     signal: this.abortController.signal
                 });
                 if (!resp.ok) {
@@ -219,7 +219,7 @@ window.chat = {
                 }
                 llmResp = await resp.json();              } else if (text.toLowerCase().includes('burndown')) {
                   const pat = localStorage.getItem('jira_pat') || '';
-                  const resp = await fetch('/api/sprint/burndown', {
+                  const resp = await fetch('/api/sprint/burndown?project_key=' + (localStorage.getItem('jira_project_key') || 'SIGPOSDEV'), {
                       headers: API.getHeaders(),
                       signal: this.abortController.signal
                   });
@@ -230,14 +230,14 @@ window.chat = {
                   return;
               } else if (text.toLowerCase().includes('audit unassigned tickets')) {
                 const pat = localStorage.getItem('jira_pat') || '';
-                const resp = await fetch('/api/quick_action?action=sprint_audit', {
+                const resp = await fetch('/api/quick_action?action=sprint_audit&project_key=' + (localStorage.getItem('jira_project_key') || 'SIGPOSDEV'), {
                     headers: API.getHeaders(),
                     signal: this.abortController.signal
                 });
                 if (!resp.ok) throw new Error("Quick Action API Failed: " + resp.statusText);
                 const data = await resp.json();
                 
-                let html = '<agent-html><div class="bg-slate-800 border border-amber-500/30 rounded-lg p-4 mb-4"><h3 class="text-amber-400 font-bold mb-2">??? Governance Audit Findings</h3><table class="w-full text-sm text-left text-slate-300"><thead class="text-xs text-slate-400 bg-slate-900 uppercase"><tr><th>Key</th><th>Summary</th><th>Missing Element</th></tr></thead><tbody>';
+                let html = '<agent-html><div class="bg-slate-800 border border-amber-500/30 rounded-lg p-4 mb-4"><h3 class="text-amber-400 font-bold mb-2">&#9888; Governance Audit Findings</h3><table class="w-full text-sm text-left text-slate-300"><thead class="text-xs text-slate-400 bg-slate-900 uppercase"><tr><th>Key</th><th>Summary</th><th>Missing Element</th></tr></thead><tbody>';
                 let found = false;
                 if (data.audit_results && data.audit_results.missing_assignees) {
                     data.audit_results.missing_assignees.forEach(t => {
@@ -306,7 +306,7 @@ window.chat = {
             } else if (htmlMatch) {
                 let htmlContent = htmlMatch[1].trim();
                 // Convert Jira keys to clickable links inside custom HTML tables
-                htmlContent = htmlContent.replace(/SIGPOSDEV-\d+/g, match => `<a href="http://jira.lge.com/issue/browse/${match}" target="_blank" class="text-blue-400 hover:underline">${match}</a>`);
+                htmlContent = htmlContent.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, match => `<a href="http://jira.lge.com/issue/browse/${match}" target="_blank" class="text-blue-400 hover:underline">${match}</a>`);
                 rawText = rawText.replace(htmlMatch[0], '').trim();
                 if (rawText) this.addMessage(rawText, 'agent');
                 
@@ -411,7 +411,7 @@ window.chat = {
       marked.setOptions({ gfm: true, breaks: true });
       formattedText = marked.parse(text);
       // Convert Jira keys to clickable links if they are not already in a link
-      formattedText = formattedText.replace(/SIGPOSDEV-\d+/g, match => `<a href="http://jira.lge.com/issue/browse/${match}" target="_blank" class="text-blue-400 hover:underline">${match}</a>`);
+      formattedText = formattedText.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, match => `<a href="http://jira.lge.com/issue/browse/${match}" target="_blank" class="text-blue-400 hover:underline">${match}</a>`);
       // marked doesn't always preserve plain-text table spacing if the LLM forgot to use pipes,
       // so if there's no HTML table generated, we could inject white-space pre-wrap, 
       // but let's just let marked handle it.

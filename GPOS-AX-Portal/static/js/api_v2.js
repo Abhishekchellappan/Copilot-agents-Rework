@@ -1,6 +1,11 @@
 const API = {
   baseUrl: '/api',
   
+  // Dynamic project key: reads from localStorage, defaults to SIGPOSDEV
+  getProjectKey() {
+    return localStorage.getItem('jira_project_key') || 'SIGPOSDEV';
+  },
+
   getHeaders() {
     const pat = localStorage.getItem('jira_pat') || '';
     const token = localStorage.getItem('auth_token') || '';
@@ -37,12 +42,14 @@ const API = {
     }
   },
   
-  async getSprintReport(projectKey = 'SIGPOSDEV') {
-    return this._fetch(`/sprint/report?project_key=${projectKey}`);
+  async getSprintReport(projectKey) {
+    const pk = projectKey || this.getProjectKey();
+    return this._fetch(`/sprint/report?project_key=${pk}`);
   },
   
-  async getSprintBurndown(projectKey = 'SIGPOSDEV') {
-    return this._fetch(`/sprint/burndown?project_key=${projectKey}`);
+  async getSprintBurndown(projectKey) {
+    const pk = projectKey || this.getProjectKey();
+    return this._fetch(`/sprint/burndown?project_key=${pk}`);
   },
   
   async getMentions() {
@@ -68,9 +75,10 @@ const API = {
       history = llmModel;
       llmModel = 'Chat-EXACODE-A';
     }
+    const projectKey = this.getProjectKey();
     return this._fetch('/chat', {
       method: 'POST',
-      body: JSON.stringify({ message: message, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, history: history })
+      body: JSON.stringify({ message: message, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, project_key: projectKey, history: history })
     }, abortSignal);
   },
   

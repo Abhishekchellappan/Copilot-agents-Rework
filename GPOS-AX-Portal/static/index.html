@@ -446,6 +446,10 @@
             <div id="user-greeting" class="text-sm font-medium text-slate-300">
                 Welcome to GPOS AX Portal &#128075;</div>
             <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-slate-400 font-medium hidden md:block">Project:</span>
+                    <input type="text" id="header-project-key" onchange="updateHeaderProjectKey(this.value)" placeholder="Enter Project Key" value="SIGPOSDEV" class="bg-slate-800/50 border border-slate-700 rounded px-2 py-1 text-xs text-blue-400 font-mono focus:outline-none focus:border-blue-500 shadow-inner w-32 uppercase">
+                </div>
                 <div id="sprint-indicator" class="px-2.5 py-1 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
                     Active Sprint
                 </div>
@@ -847,7 +851,8 @@
                     <input type="password" id="pat-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="Paste your token here...">
                     <p class="mt-1 text-xs text-slate-500">Required to fetch live data from Jira. Stored locally in your browser.</p>
                 </div>
-                
+
+
                 <div class="pt-2 border-t border-slate-700">
                     <label for="llm-url-input" class="block text-sm font-medium text-slate-300 mb-1 mt-2">LLM API Endpoint</label>
                     <input type="text" id="llm-url-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="e.g., https://api.exacode.lge.com/v1/chat/completions">
@@ -1106,6 +1111,18 @@
             lucide.createIcons();
         }
         
+        // Update Project Key from Header Dropdown
+        function updateHeaderProjectKey(val) {
+            if (val) {
+                localStorage.setItem('jira_project_key', val);
+                document.querySelectorAll('.project-name-display').forEach(el => el.textContent = val);
+                // Optionally reload or refresh dashboard
+                if (typeof dashboard !== 'undefined' && dashboard.loadData) {
+                    dashboard.loadData();
+                }
+            }
+        }
+
         // Save settings logic
         function saveSettings() {
             const pat = document.getElementById('pat-input').value.trim();
@@ -1148,7 +1165,8 @@
 
 
 
-                  let jql = `project = SIGPOSDEV AND sprint in openSprints() AND assignee = "${actualUser}"`;
+                  const projectKey = API.getProjectKey();
+                  let jql = `project = ${projectKey} AND sprint in openSprints() AND assignee = "${actualUser}"`;
                   if (statusStr) {
                         if (statusStr === 'To Do') jql += ` AND statusCategory = "To Do"`;
                         else if (statusStr === 'In Progress') jql += ` AND statusCategory = "In Progress"`;
@@ -1334,6 +1352,14 @@
         document.addEventListener('DOMContentLoaded', function() {
             checkAuth();
             
+            // Initialize header project key
+            const storedProjectKey = localStorage.getItem('jira_project_key') || 'SIGPOSDEV';
+            const headerProjectKeySelect = document.getElementById('header-project-key');
+            if (headerProjectKeySelect) {
+                headerProjectKeySelect.value = storedProjectKey;
+            }
+            document.querySelectorAll('.project-name-display').forEach(el => el.textContent = storedProjectKey);
+            
             // 3D Parallax effect for login penguin
             document.addEventListener('mousemove', function(e) {
                 var mascot = document.getElementById('3d-mascot');
@@ -1393,7 +1419,7 @@
                         const chatGreetingEl = document.getElementById('user-greeting-chat');
                         if (chatGreetingEl) {
                             const firstName = user.name.split(' ')[0];
-                            chatGreetingEl.textContent = `Hello ${firstName}! I'm connected to the GPOS Jira project.`;
+                            chatGreetingEl.innerHTML = `Hello ${firstName}! I'm connected to the <span class="project-name-display">${localStorage.getItem("jira_project_key") || "SIGPOSDEV"}</span> project.`;
                         }
                     }
                 }).catch(err => console.error("Could not fetch user profile", err));
@@ -1548,6 +1574,13 @@
     </script>
 </body>
 </html>
+
+
+
+
+
+
+
 
 
 
