@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "gpos-device-agent": {
+      "type": "sse",
+      "url": "http://10.221.31.25:30724/sse",
+      "autoStart": true
+    }
+  },
+  "inputs": []
+}

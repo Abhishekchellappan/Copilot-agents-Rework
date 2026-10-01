@@ -1,0 +1,6 @@
+fastmcp>=2.0.0
+uvicorn>=0.30.0
+paramiko>=3.5.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+html2text>=2024.2.26
