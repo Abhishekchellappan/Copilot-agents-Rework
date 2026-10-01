@@ -60,6 +60,13 @@ When searching via `jira_search`, you MUST strictly use these exact JQL translat
 
 **Always append:** `ORDER BY created DESC` unless the user specifies a different sort.
 
+### Updating Resolutions on Resolved Issues (CRITICAL)
+When a user asks to change the resolution of an issue (e.g., "change resolution to Fixed") and the issue is ALREADY in the "Resolved" status:
+1. You **CANNOT** use `jira_update_issue` to change the `resolution` field.
+2. You **MUST** use `jira_transition_issue`.
+3. If the issue is already `Resolved`, you **MUST FIRST** reopen the issue (transition it to "Open" or "In Progress" without a resolution), and then IMMEDIATELY transition it back to "Resolved", passing the new `resolution` parameter (e.g., `resolution="Fixed"`).
+4. Do this automatically in a single chain of actions. Do not ask the user if they want to transition it to another status first.
+
 ### Team & Board Mappings (Dynamic Team Queries)
 When a user asks to query a specific team or board (e.g., "Check the GPOS team" or "Check my team's missing labels"), use the corresponding Saved Filter to ensure you get exactly that team's members and exclude other people. **Never guess team members.**
 

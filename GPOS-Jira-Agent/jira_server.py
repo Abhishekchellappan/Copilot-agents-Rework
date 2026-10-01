@@ -178,16 +178,16 @@ def _translate(fields: dict, headers: dict, project_key: str = None) -> dict:
         if key == "sprint" and project_key:
             sid = _resolve_sprint(str(v), project_key, headers)
             out[mapped] = sid if sid else v
-        elif key == "assignee":
+        elif key in ("assignee", "reporter"):
             if isinstance(v, str):
-                assignee_val = v.strip()
-                if assignee_val.lower() in ("me", "myself", "current user"):
+                user_val = v.strip()
+                if user_val.lower() in ("me", "myself", "current user"):
                     actual_user = _get_current_user(headers)
                     if actual_user:
-                        assignee_val = actual_user
-                out["assignee"] = {"name": assignee_val}
+                        user_val = actual_user
+                out[key] = {"name": user_val}
             else:
-                out["assignee"] = v
+                out[key] = v
         elif key == "labels":
             if isinstance(v, str):
                 out["labels"] = [l.strip() for l in v.split(",") if l.strip()]
@@ -458,6 +458,7 @@ def jira_update_issue(
 
     :param issue_key: Issue key (e.g. 'PROJ-123').
     :param fields: JSON string of fields to update. Supports aliases: sprint, assignee, labels, component, fix_version, due_date, story_points, epic_link, etc.
+                   NOTE: 'resolution' cannot be updated via this tool due to Jira screen constraints. You MUST use jira_transition_issue to set resolution.
     """
     try:
         headers = _headers(ctx)
@@ -656,13 +657,16 @@ def jira_get_transitions(issue_key: str, ctx: Context = None) -> str:
 
 @mcp.tool()
 def jira_transition_issue(
-    issue_key: str, transition: str, ctx: Context = None
+    issue_key: str, transition: str, resolution: str = "", ctx: Context = None
 ) -> str:
     """
+    CRITICAL INSTRUCTION: If you need to change the resolution of a ticket that is ALREADY resolved or closed, you MUST first transition the issue to an open state (e.g., 'Reopen Issue') before calling this tool again to transition it back to resolved with the new resolution.
+
     Transition a Jira issue to a new workflow status.
 
     :param issue_key: Issue key (e.g. 'PROJ-123').
     :param transition: Transition ID (e.g. '31') or target status name (e.g. 'In Progress', 'Resolved').
+    :param resolution: Optional resolution name (e.g. 'Done', 'Fixed', 'Duplicate') to set during the transition.
     """
     try:
         headers = _headers(ctx)
@@ -691,10 +695,14 @@ def jira_transition_issue(
                 available = [t["name"] for t in resp.json().get("transitions", [])]
                 return f"Transition '{transition}' not found. Available: {available}"
 
+        payload = {"transition": {"id": tid}}
+        if resolution:
+            payload["fields"] = {"resolution": {"name": resolution}}
+
         resp = requests.post(
             f"{JIRA_BASE_URL}/rest/api/2/issue/{key}/transitions",
             headers=headers,
-            json={"transition": {"id": tid}},
+            json=payload,
             timeout=15,
         )
         if resp.status_code not in (200, 204):
