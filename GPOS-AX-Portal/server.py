@@ -355,7 +355,7 @@ def _get_field_names(project_key: str, pat: str) -> dict:
     except:
         return {}
 
-sprint_cache = TTLCache(maxsize=100, ttl=300)
+sprint_cache = TTLCache(maxsize=100, ttl=10)
 
 @cached(cache=sprint_cache, key=lambda project_key, sprint_name, pat: (project_key, sprint_name))
 def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[List[dict], str, dict]:
@@ -432,6 +432,7 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
 # ============================================================================
 class ChatRequest(BaseModel):
     message: str
+    images: list = []
     llm_url: str = ""
     llm_key: str = ""
     llm_model: str = "Chat-EXACODE-A"
@@ -571,7 +572,16 @@ If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and th
             for h in req.history[-10:]: # Limit to last 10 messages for context window
                 if h.get("role") and h.get("content"):
                     messages.append({"role": h["role"], "content": h["content"]})
-            messages.append({"role": "user", "content": req.message})
+            if hasattr(req, 'images') and req.images:
+                content_list = [{"type": "text", "text": req.message}]
+                for img_data in req.images:
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {"url": img_data}
+                    })
+                messages.append({"role": "user", "content": content_list})
+            else:
+                messages.append({"role": "user", "content": req.message})
             
             async with httpx.AsyncClient() as client:
                 for _ in range(15): # Max 15 tool calls per chat

@@ -17,6 +17,25 @@ window.chat = {
       }
     });
 
+    this.input.addEventListener('paste', (e) => {
+      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+      let hasImage = false;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          hasImage = true;
+          const blob = items[i].getAsFile();
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            this.selectedImages.push(evt.target.result);
+            this.renderImagePreviews();
+          };
+          reader.readAsDataURL(blob);
+        }
+      }
+      // If we only pasted an image without text, we don't necessarily preventDefault()
+      // but if the user pasted a mix of text and image, text will still be pasted.
+    });
+
     this.form.addEventListener('submit', (e) => {
       e.preventDefault();
       if (this.abortController) {
@@ -34,7 +53,53 @@ window.chat = {
         this.handleSendMessage(action, text);
       });
     });
+
+    // Image Upload
+    this.selectedImages = [];
+    this.fileUpload = document.getElementById('chat-file-upload');
+    this.previewContainer = document.getElementById('chat-image-preview-container');
+
+    if (this.fileUpload) {
+      this.fileUpload.addEventListener('change', (e) => {
+        const files = Array.from(e.target.files);
+        files.forEach(file => {
+          if (!file.type.startsWith('image/')) return;
+          const reader = new FileReader();
+          reader.onload = (evt) => {
+            this.selectedImages.push(evt.target.result);
+            this.renderImagePreviews();
+          };
+          reader.readAsDataURL(file);
+        });
+        this.fileUpload.value = ''; // Reset
+      });
+    }
   },
+
+  renderImagePreviews() {
+    if (!this.previewContainer) return;
+    if (this.selectedImages.length === 0) {
+      this.previewContainer.classList.add('hidden');
+      this.previewContainer.innerHTML = '';
+      return;
+    }
+    this.previewContainer.classList.remove('hidden');
+    this.previewContainer.innerHTML = this.selectedImages.map((src, index) => `
+      <div class="relative w-16 h-16 rounded-md overflow-hidden border border-slate-600 group">
+        <img src="${src}" class="w-full h-full object-cover" />
+        <button type="button" onclick="window.chat.removeImage(${index})" class="absolute top-1 right-1 bg-red-500/80 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <i data-lucide="x" class="w-3 h-3"></i>
+        </button>
+      </div>
+    `).join('');
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+  },
+
+  removeImage(index) {
+    this.selectedImages.splice(index, 1);
+    this.renderImagePreviews();
+  },
+
 
   currentAgentId: 'jira-agent',
   messageHistory: [],
@@ -172,15 +237,20 @@ window.chat = {
   async handleSendMessage(forcedAction = null, label = null) {
     if (this.abortController) return;
     const text = (forcedAction ? label : this.input.value).trim();
-    if (!text && !forcedAction) return;
+    const imagesToSubmit = [...(this.selectedImages || [])];
+    if (!text && !forcedAction && imagesToSubmit.length === 0) return;
 
     if (!forcedAction) {
       this.input.value = '';
       this.input.style.height = 'auto';
+      if (this.selectedImages) {
+          this.selectedImages = [];
+          this.renderImagePreviews();
+      }
     }
 
     // Add user message bubble
-    this.addMessage(text, 'user');
+    this.addMessage(text, 'user', false, imagesToSubmit);
 
     // Show loading spinner
     const loadingId = this.showLoading();
@@ -254,7 +324,7 @@ window.chat = {
                 }
             } else {
                 const historyToSend = this.messageHistory.slice(0, -1);
-                llmResp = await API.llmChat(text, llmUrl, llmKey, llmModel, historyToSend, this.abortController.signal);
+                llmResp = await API.llmChat(text, llmUrl, llmKey, llmModel, historyToSend, this.abortController.signal, imagesToSubmit);
             }
             
             this.removeLoading(loadingId);
@@ -371,7 +441,7 @@ window.chat = {
     return null;
   },
 
-  addMessage(text, sender, isError = false) {
+  addMessage(text, sender, isError = false, images = []) {
     const div = document.createElement('div');
     div.className = `flex gap-4 max-w-3xl ${sender === 'user' ? 'ml-auto flex-row-reverse group' : ''}`;
     
@@ -412,15 +482,17 @@ window.chat = {
       formattedText = marked.parse(text);
       // Convert Jira keys to clickable links if they are not already in a link
       formattedText = formattedText.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, match => `<a href="http://jira.lge.com/issue/browse/${match}" target="_blank" class="text-blue-400 hover:underline">${match}</a>`);
-      // marked doesn't always preserve plain-text table spacing if the LLM forgot to use pipes,
-      // so if there's no HTML table generated, we could inject white-space pre-wrap, 
-      // but let's just let marked handle it.
     } else {
       formattedText = text
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        .replace(/  +/g, match => '&nbsp;'.repeat(match.length)) // Preserve spacing for LLM plain-text tables
+        .replace(/  +/g, match => '&nbsp;'.repeat(match.length))
         .replace(/\n/g, '<br>');
+        
+      if (images && images.length > 0) {
+        const imgTags = images.map(src => `<img src="${src}" class="max-w-[200px] mt-2 rounded-md border border-slate-700" />`).join('');
+        formattedText += `<div class="flex flex-wrap gap-2">${imgTags}</div>`;
+      }
     }
 
     div.innerHTML = `
