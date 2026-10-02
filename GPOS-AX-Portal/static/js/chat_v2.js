@@ -150,7 +150,7 @@ window.chat = {
           list.innerHTML = sessions.sort((a,b) => b.id - a.id).map(s => `
               <div class="p-3 bg-slate-900/50 border border-slate-700 rounded-lg hover:border-blue-500/50 cursor-pointer transition-colors" onclick="window.chat.loadSession('${s.id}')">
                   <div class="text-sm text-slate-200 font-medium mb-1">${s.summary}</div>
-                  <div class="text-xs text-slate-500">${s.date} • ${s.history.length} messages</div>
+                  <div class="text-xs text-slate-500">${s.date} G ${s.history.length} messages</div>
               </div>
           `).join('');
       }
@@ -194,7 +194,8 @@ window.chat = {
     // Update the header title based on current agent
     const agents = {
         'jira-agent': { name: 'GPOS Jira & Governance Agent', desc: 'Ask about sprint health, blockages, or auto-grooming' },
-        'design-agent': { name: 'GPOS HLD Design Studio', desc: 'Generates High-Level Designs and architecture specs' }
+        'design-agent': { name: 'GPOS HLD Design Studio', desc: 'Generates High-Level Designs and architecture specs' },
+        'device-agent': { name: 'GPOS Device Agent Studio', desc: 'Ask about GDB backtraces, kernel logs, or run Perf benchmarks.' }
     };
     
     const currentInfo = agents[this.currentAgentId] || agents['jira-agent'];
@@ -204,23 +205,41 @@ window.chat = {
     if (descEl) descEl.textContent = currentInfo.desc;
 
     if (this.messagesContainer) {
+      let greetingHTML = '';
+      let buttonsHTML = '';
+      const firstName = (localStorage.getItem('auth_username') || 'User').split('.')[0];
+
+      if (this.currentAgentId === 'device-agent') {
+          greetingHTML = `<p class="mb-2">Hello ${firstName}! I'm connected to your <b>Device HUD</b>.</p>`;
+          buttonsHTML = `
+              <button onclick="document.getElementById('chat-input').value='Run CPU benchmark'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="activity" class="w-3 h-3"></i>Run CPU benchmark</button>
+              <button onclick="document.getElementById('chat-input').value='Analyze kernel log'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="file-text" class="w-3 h-3"></i>Analyze kernel log</button>
+              <button onclick="document.getElementById('chat-input').value='Deploy app to target'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="upload-cloud" class="w-3 h-3"></i>Deploy app to target</button>
+          `;
+      } else {
+          greetingHTML = `<p class="mb-2">Hello! I'm connected to the <span class="font-bold text-blue-400 font-mono">${(localStorage.getItem('jira_project_key') || 'SIGPOSDEV')}</span> Jira project.</p>`;
+          buttonsHTML = `
+              <button onclick="document.getElementById('chat-input').value='Generate sprint report'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="bar-chart-2" class="w-3 h-3"></i>Generate sprint report</button>
+              <button onclick="document.getElementById('chat-input').value='Show burndown status'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="trending-down" class="w-3 h-3"></i>Show burndown status</button>
+              <button onclick="document.getElementById('chat-input').value='Audit unassigned tickets'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="shield-check" class="w-3 h-3"></i>Audit unassigned tickets</button>
+              <button onclick="document.getElementById('chat-input').value='Weekly Status'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-purple-500/50 text-purple-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="calendar-days" class="w-3 h-3"></i>Weekly Status</button>
+              <button onclick="document.getElementById('chat-input').value='Weekly status for all'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-blue-500/50 text-blue-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="users" class="w-3 h-3"></i>Weekly status for all</button>
+              <button onclick="document.getElementById('chat-input').value='I want to create a new story. Please guide me and ask me to provide the Summary, Story Points, Description, Assignee, Label, and Sprint one by one.'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-blue-500/50 text-blue-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="plus-circle" class="w-3 h-3"></i>Create new story</button>
+          `;
+      }
+
       this.messagesContainer.innerHTML = `
         <!-- Initial Greeting -->
         <div class="flex gap-4">
-            <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
-                <i data-lucide="bot" class="w-4 h-4 text-white"></i>
+            <div class="w-8 h-8 rounded-full ${this.currentAgentId === 'device-agent' ? 'bg-emerald-600' : 'bg-blue-600'} flex items-center justify-center flex-shrink-0">
+                <i data-lucide="${this.currentAgentId === 'device-agent' ? 'cpu' : 'bot'}" class="w-4 h-4 text-white"></i>
             </div>
             <div class="bg-slate-700 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] text-sm text-slate-200">
-                <p class="mb-2">Hello! I'm connected to the <span class="font-bold text-blue-400 font-mono">${(localStorage.getItem('jira_project_key') || 'SIGPOSDEV')}</span> Jira project.</p>
+                ${greetingHTML}
                 <p>Here are some things you can ask me:</p>
-                                  <div class="flex flex-wrap gap-2 mt-3">
-                      <button onclick="document.getElementById('chat-input').value='Generate sprint report'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="bar-chart-2" class="w-3 h-3"></i>Generate sprint report</button>
-                      <button onclick="document.getElementById('chat-input').value='Show burndown status'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="trending-down" class="w-3 h-3"></i>Show burndown status</button>
-                      <button onclick="document.getElementById('chat-input').value='Audit unassigned tickets'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="shield-check" class="w-3 h-3"></i>Audit unassigned tickets</button>
-                      <button onclick="document.getElementById('chat-input').value='Weekly Status'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-purple-500/50 text-purple-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="calendar-days" class="w-3 h-3"></i>Weekly Status</button>
-                      <button onclick="document.getElementById('chat-input').value='Weekly status for all'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-blue-500/50 text-blue-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="users" class="w-3 h-3"></i>Weekly status for all</button>
-                      <button onclick="document.getElementById('chat-input').value='I want to create a new story. Please guide me and ask me to provide the Summary, Story Points, Description, Assignee, Label, and Sprint one by one.'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-blue-500/50 text-blue-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="plus-circle" class="w-3 h-3"></i>Create new story</button>
-                  </div>
+                <div class="flex flex-wrap gap-2 mt-3">
+                    ${buttonsHTML}
+                </div>
             </div>
         </div>
       `;
@@ -328,7 +347,7 @@ window.chat = {
                 if (window.currentAgentId === 'device-agent' && window.deviceHud && window.deviceHud.currentIp && window.deviceHud.currentIp !== 'None') {
                     textToSend = `[Target Board IP: ${window.deviceHud.currentIp}]\n${text}`;
                 }
-                llmResp = await API.llmChat(textToSend, llmUrl, llmKey, llmModel, historyToSend, this.abortController.signal, imagesToSubmit);
+                llmResp = await API.llmChat(textToSend, llmUrl, llmKey, llmModel, historyToSend, this.abortController.signal, imagesToSubmit, this.currentAgentId);
             }
             
             this.removeLoading(loadingId);
@@ -399,8 +418,8 @@ window.chat = {
                 const div = document.createElement('div');
                 div.className = 'flex gap-4 max-w-4xl w-full my-2';
                 div.innerHTML = `
-                  <div class="w-8 h-8 rounded-full bg-blue-500/20 border border-blue-500/50 flex items-center justify-center shrink-0 mt-1">
-                    <i data-lucide="bot" class="w-4 h-4 text-blue-400"></i>
+                  <div class="w-8 h-8 rounded-full ${this.currentAgentId === 'device-agent' ? 'bg-emerald-600/20 border border-emerald-500/50' : 'bg-blue-500/20 border border-blue-500/50'} flex items-center justify-center shrink-0 mt-1">
+                    <i data-lucide="${this.currentAgentId === 'device-agent' ? 'cpu' : 'bot'}" class="w-4 h-4 ${this.currentAgentId === 'device-agent' ? 'text-emerald-400' : 'text-blue-400'}"></i>
                   </div>
                   <div class="flex-1 overflow-x-auto">
                     ${htmlContent}
@@ -480,9 +499,10 @@ window.chat = {
         </button>
       `;
     } else {
+      const _isDev = this.currentAgentId === 'device-agent';
       avatar = `
-        <div class="w-8 h-8 rounded-full bg-blue-500/20 border border-blue-500/50 flex items-center justify-center shrink-0 mt-1">
-          <i data-lucide="bot" class="w-4 h-4 text-blue-400"></i>
+        <div class="w-8 h-8 rounded-full ${_isDev ? 'bg-emerald-600/20 border border-emerald-500/50' : 'bg-blue-500/20 border border-blue-500/50'} flex items-center justify-center shrink-0 mt-1">
+          <i data-lucide="${_isDev ? 'cpu' : 'bot'}" class="w-4 h-4 ${_isDev ? 'text-emerald-400' : 'text-blue-400'}"></i>
         </div>
       `;
       bubbleClass = isError 
@@ -519,7 +539,7 @@ window.chat = {
           </div>
           ${editButton}
         </div>
-        <div class="text-xs text-slate-500 ${sender === 'user' ? 'mr-1' : 'ml-1'}">${sender === 'user' ? 'You' : 'GPOS Jira Agent'} &bull; Just now</div>
+        <div class="text-xs text-slate-500 ${sender === 'user' ? 'mr-1' : 'ml-1'}">${sender === 'user' ? 'You' : (this.currentAgentId === 'device-agent' ? 'GPOS Device Agent' : 'GPOS Jira Agent')} &bull; Just now</div>
       </div>
     `;
 
@@ -824,12 +844,12 @@ window.chat = {
     }
 
     div.innerHTML = `
-      <div class="w-8 h-8 rounded-full bg-blue-500/20 border border-blue-500/50 flex items-center justify-center shrink-0 mt-1">
-        <i data-lucide="bot" class="w-4 h-4 text-blue-400"></i>
+      <div class="w-8 h-8 rounded-full ${this.currentAgentId === 'device-agent' ? 'bg-emerald-600/20 border border-emerald-500/50' : 'bg-blue-500/20 border border-blue-500/50'} flex items-center justify-center shrink-0 mt-1">
+        <i data-lucide="${this.currentAgentId === 'device-agent' ? 'cpu' : 'bot'}" class="w-4 h-4 ${this.currentAgentId === 'device-agent' ? 'text-emerald-400' : 'text-blue-400'}"></i>
       </div>
       <div class="space-y-1 flex-1">
         ${content}
-        <div class="text-xs text-slate-500 ml-1">GPOS Jira Agent &bull; Just now</div>
+        <div class="text-xs text-slate-500 ml-1"> &bull; Just now</div>
       </div>
     `;
 
@@ -845,14 +865,15 @@ window.chat = {
     div.id = id;
     div.className = 'flex gap-4 max-w-3xl';
     
+    const _isD = this.currentAgentId === 'device-agent';
     div.innerHTML = `
-      <div class="w-8 h-8 rounded-full bg-blue-500/20 border border-blue-500/50 flex items-center justify-center shrink-0 mt-1">
-        <i data-lucide="bot" class="w-4 h-4 text-blue-400"></i>
+      <div class="w-8 h-8 rounded-full ${_isD ? 'bg-emerald-600/20 border border-emerald-500/50' : 'bg-blue-500/20 border border-blue-500/50'} flex items-center justify-center shrink-0 mt-1">
+        <i data-lucide="${_isD ? 'cpu' : 'bot'}" class="w-4 h-4 ${_isD ? 'text-emerald-400' : 'text-blue-400'}"></i>
       </div>
       <div class="bg-slate-700 border border-slate-600 px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-1.5 w-18 shadow-sm">
-        <div class="w-2 h-2 bg-blue-400 rounded-full typing-dot"></div>
-        <div class="w-2 h-2 bg-blue-400 rounded-full typing-dot"></div>
-        <div class="w-2 h-2 bg-blue-400 rounded-full typing-dot"></div>
+        <div class="w-2 h-2 ${_isD ? 'bg-emerald-400' : 'bg-blue-400'} rounded-full typing-dot"></div>
+        <div class="w-2 h-2 ${_isD ? 'bg-emerald-400' : 'bg-blue-400'} rounded-full typing-dot"></div>
+        <div class="w-2 h-2 ${_isD ? 'bg-emerald-400' : 'bg-blue-400'} rounded-full typing-dot"></div>
       </div>
     `;
 
@@ -874,4 +895,6 @@ window.chat = {
     });
   }
 };
+
+
 

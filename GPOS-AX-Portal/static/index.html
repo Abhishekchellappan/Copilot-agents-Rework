@@ -395,13 +395,13 @@
                 <p class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">GPOS Jira Workspace</p>
             </div>
             
-            <button id="nav-dashboard" onclick="switchView('dashboard')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
+            <button id="nav-dashboard" onclick="window.currentAgentId='jira-agent'; switchView('dashboard')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
                 <i data-lucide="layout-dashboard" class="w-4 h-4 mr-3"></i> Sprint Dashboard
             </button>
             <button id="nav-studio" onclick="switchView('studio')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
                 <i data-lucide="message-square" class="w-4 h-4 mr-3"></i> Agent Studio
             </button>
-            <button id="nav-device-hud" onclick="switchView('device-hud')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-emerald-400 hover:bg-slate-800 hover:text-emerald-300 transition-colors nav-item mt-2 border border-emerald-500/20 bg-emerald-500/5">
+            <button id="nav-device-hud" onclick="window.currentAgentId='device-agent'; switchView('device-hud')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-emerald-400 hover:bg-slate-800 hover:text-emerald-300 transition-colors nav-item mt-2 border border-emerald-500/20 bg-emerald-500/5">
                 <i data-lucide="cpu" class="w-4 h-4 mr-3"></i> Device HUD
             </button>
             
@@ -994,10 +994,10 @@
             </div>
         </div>
     </div>
-    <script src="/static/js/api_v2.js?v=6"></script>
-    <script src="/static/js/dashboard_v2.js?v=3"></script>
-    <script src="/static/js/chat_v2.js?v=7"></script>
-    <script src="/static/js/device_hud.js?v=6"></script>
+    <script src="/static/js/api_v2.js?v=15"></script>
+    <script src="/static/js/dashboard_v2.js?v=15"></script>
+    <script src="/static/js/chat_v2.js?v=15"></script>
+    <script src="/static/js/device_hud.js?v=15"></script>
     <script>
         // Initialize plugins
         if (typeof mermaid !== 'undefined') {

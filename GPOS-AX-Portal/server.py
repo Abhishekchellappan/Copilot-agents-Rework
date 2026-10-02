@@ -438,15 +438,331 @@ class ChatRequest(BaseModel):
     llm_model: str = "Chat-EXACODE-A"
     project_key: str = "SIGPOSDEV"
     history: list = []
+    agent_id: str = "jira-agent"
+
+import httpx
+import json
+import subprocess
+
+async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
+    sys_prompt = """You are the GPOS Device Agent Studio.
+You help embedded Linux developers debug, profile, and deploy to their target webOS boards via SSH.
+
+You have access to the `run_ssh_command` tool to execute ANY shell command on the target board.
+If the user asks to run a CPU benchmark, you should use `sysbench cpu run`, `top -b -n 1`, or a similar tool.
+If the user asks to analyze kernel logs, run `dmesg | tail -n 50`.
+
+WEBOS SERVICE API RULES:
+1. If the user asks to call an API/Service but doesn't provide the exact payload, DO NOT GUESS.
+2. First, find the exact service name by searching: `ls-monitor -l | grep -i <keyword>`
+3. Then, introspect the service to find its methods and required parameters: `ls-monitor -i <exact.service.name>`
+4. Only after introspecting, execute the call using: `run_ssh_command` with the appropriate luna-send syntax.
+
+CRITICAL PRESENTATION RULES (THE WOW FACTOR):
+You MUST NEVER just output plain text for command results. You must present the data using beautiful UI widgets via `<agent-html>` tags.
+1. **CPU Benchmark Results**: When you run a benchmark, output this JSON block so the frontend renders the graph:
+<device-benchmark>{"ipc": 1.25, "cacheMiss": 450, "pageFaults": 12, "totalCycles": 12500000}</device-benchmark>
+And follow it with this exact beautifully styled summary widget using `<agent-html>`:
+<agent-html>
+<div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+  <h3 class="text-emerald-400 font-bold mb-2 flex items-center gap-2"><i data-lucide="cpu" class="w-4 h-4"></i> Benchmark Complete</h3>
+  <p class="text-sm text-slate-300 mb-3">The CPU benchmark successfully executed on the target board. Here are the highlights:</p>
+  <div class="grid grid-cols-2 gap-2 text-xs">
+    <div class="bg-slate-900 p-2 rounded border border-slate-700"><span class="text-slate-400 block">Idle</span><span class="text-emerald-400 text-lg font-mono">93.3%</span></div>
+    <div class="bg-slate-900 p-2 rounded border border-slate-700"><span class="text-slate-400 block">System</span><span class="text-amber-400 text-lg font-mono">4.4%</span></div>
+  </div>
+</div>
+</agent-html>
+2. **App Launch / Action Results**: Use a beautiful card to show the status of the action.
+Example for app launch:
+<agent-html>
+<div class="bg-slate-800 border border-blue-500/30 rounded-lg p-4">
+  <h3 class="text-blue-400 font-bold mb-2 flex items-center gap-2"><i data-lucide="play-circle" class="w-4 h-4"></i> Application Launched</h3>
+  <div class="bg-slate-900 p-3 rounded border border-slate-700 flex flex-col gap-2">
+    <div class="flex justify-between items-center border-b border-slate-700 pb-2">
+      <span class="text-slate-400 text-xs uppercase tracking-wider">App ID</span>
+      <span class="text-slate-200 font-mono text-sm">com.webos.app.appliance.gallery</span>
+    </div>
+    <div class="flex justify-between items-center">
+      <span class="text-slate-400 text-xs uppercase tracking-wider">Status</span>
+      <span class="text-emerald-400 text-sm font-medium flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i> Running on Target</span>
+    </div>
+  </div>
+</div>
+</agent-html>
+3. **API / Luna-Send Results**: When you execute an API call, present the result in a beautiful card.
+Example:
+<agent-html>
+<div class="bg-slate-800 border border-purple-500/30 rounded-lg p-4">
+  <h3 class="text-purple-400 font-bold mb-2 flex items-center gap-2"><i data-lucide="radio" class="w-4 h-4"></i> API Call Executed</h3>
+  <div class="bg-slate-900 p-3 rounded border border-slate-700 flex flex-col gap-2">
+    <div class="flex justify-between items-center border-b border-slate-700 pb-2">
+      <span class="text-slate-400 text-xs uppercase tracking-wider">Endpoint</span>
+      <span class="text-slate-200 font-mono text-sm">luna://com.webos.service/method</span>
+    </div>
+    <div class="mt-2">
+      <span class="text-slate-400 text-xs uppercase tracking-wider block mb-1">Response JSON</span>
+      <pre class="text-emerald-400 text-xs font-mono bg-black/50 p-2 rounded overflow-x-auto">{ "returnValue": true }</pre>
+    </div>
+  </div>
+</div>
+</agent-html>
+
+If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for your commands. Always make your UI futuristic and professional.
+CRITICAL RULE: If any `run_ssh_command` returns "Connection timed out" or "Missing IP", YOU MUST STOP IMMEDIATELY. DO NOT RETRY THE COMMAND. Inform the user of the failure.
+"""
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "run_ssh_command",
+                "description": "Execute a shell command on the target board via SSH.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ip": {"type": "string", "description": "The IP address of the target board."},
+                        "command": {"type": "string", "description": "The shell command to execute."}
+                    },
+                    "required": ["ip", "command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "launch_app",
+                "description": "Launch an application on the target board using its exact ID (e.g. com.webos.app.appliance.gallery)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ip": {"type": "string", "description": "The IP address of the target board."},
+                        "app_id": {"type": "string", "description": "The exact application ID to launch."}
+                    },
+                    "required": ["ip", "app_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "close_app",
+                "description": "Cleanly terminate a running app via ApplicationManager.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ip": {"type": "string", "description": "The IP address of the target board."},
+                        "app_id": {"type": "string", "description": "The exact application ID to close."}
+                    },
+                    "required": ["ip", "app_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "copy_file_to_device",
+                "description": "Copy a file from a remote server to the target device via SCP.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ip": {"type": "string", "description": "The IP address of the target board."},
+                        "remote_server_ip": {"type": "string", "description": "The IP of the server holding the file."},
+                        "remote_user": {"type": "string", "description": "The user for the remote server (e.g., 'root')."},
+                        "remote_path": {"type": "string", "description": "The absolute path of the file on the remote server."},
+                        "dest_path": {"type": "string", "description": "The destination path on the target board."}
+                    },
+                    "required": ["ip", "remote_server_ip", "remote_user", "remote_path", "dest_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "auto_triage_service",
+                "description": "Automatically diagnose why a service is failing (OOM, Segfault, SMACK, or ACG). Fetches dmesg, syslog, and service status, runs regex diagnostics, and returns an actionable report.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ip": {"type": "string", "description": "The IP address of the target board."},
+                        "service_name": {"type": "string", "description": "Name of the service (e.g. 'audiod', 'com.webos.service.audio')."}
+                    },
+                    "required": ["ip", "service_name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "patch_security_permissions",
+                "description": "Automatically fix SMACK or ACG security blocks for a given service.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ip": {"type": "string", "description": "The IP address of the target board."},
+                        "service_name": {"type": "string", "description": "Name of the service (e.g. 'com.webos.service.audio')."},
+                        "fix_type": {"type": "string", "description": "'acg', 'smack', or 'both'"}
+                    },
+                    "required": ["ip", "service_name", "fix_type"]
+                }
+            }
+        }
+    ]
+
+    messages = [{"role": "system", "content": sys_prompt}]
+    for h in req.history[-10:]:
+        if h.get("role") and h.get("content"):
+            messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": req.message})
+
+    async with httpx.AsyncClient() as client:
+        for _ in range(10):
+            payload = {
+                "model": req.llm_model,
+                "messages": messages,
+                "tools": tools,
+                "temperature": 0.1
+            }
+            resp = await client.post(llm_url, json=payload, headers=headers, timeout=60)
+            resp.raise_for_status()
+            result = resp.json()
+            msg = result['choices'][0]['message']
+            messages.append(msg)
+
+            if not msg.get("tool_calls"):
+                return {"intent": "chat", "message": msg.get("content", "")}
+
+            def _run_ssh(target_ip, command):
+                import subprocess
+                ssh_args = [
+                    "ssh", "-tt",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-o", "ConnectTimeout=10",
+                    f"root@{target_ip}", command
+                ]
+                print(f"Executing SSH: {' '.join(ssh_args)}", flush=True)
+                try:
+                    result = subprocess.run(ssh_args, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+                    out = result.stdout.replace("\r\n", "\n").replace("\r", "").strip()
+                    if result.returncode != 0 and result.stderr.strip():
+                        stderr_lines = [l for l in result.stderr.strip().splitlines() if "Warning: Permanently added" not in l]
+                        if stderr_lines: out += f"\n[STDERR] {chr(10).join(stderr_lines)}"
+                    return out if out else "(Command returned empty output)"
+                except subprocess.TimeoutExpired:
+                    return f"[TIMEOUT] SSH command timed out after 30s: {command}"
+                except Exception as e:
+                    return f"[ERROR] SSH execution failed: {str(e)}"
+
+            for tool_call in msg["tool_calls"]:
+                func_name = tool_call["function"]["name"]
+                func_args = json.loads(tool_call["function"]["arguments"])
+                
+                if func_name == "run_ssh_command":
+                    ip = func_args.get("ip", "")
+                    cmd = func_args.get("command", "")
+                    if not ip or not cmd:
+                        res_text = "[ERROR] Missing IP or command. Please provide the target board IP address."
+                    else:
+                        res_text = _run_ssh(ip, cmd)
+                elif func_name == "launch_app":
+                    ip = func_args.get("ip", "")
+                    app_id = func_args.get("app_id", "")
+                    if not ip or not app_id:
+                        res_text = "[ERROR] Missing IP or app_id."
+                    else:
+                        res_text = _run_ssh(ip, f"luna-send -n 1 -f luna://com.webos.applicationManager/launch '{{\"id\":\"{app_id}\"}}'")
+                elif func_name == "close_app":
+                    ip = func_args.get("ip", "")
+                    app_id = func_args.get("app_id", "")
+                    if not ip or not app_id:
+                        res_text = "[ERROR] Missing IP or app_id."
+                    else:
+                        res1 = _run_ssh(ip, f"luna-send -n 1 -f luna://com.webos.applicationManager/closeByAppId '{{\"id\":\"{app_id}\"}}'")
+                        if "Service does not exist" in res1 or "UNKNOWN_SERVICE" in res1:
+                            res1 = _run_ssh(ip, f"luna-send -n 1 -f luna://com.webos.service.applicationmanager/closeByAppId '{{\"id\":\"{app_id}\"}}'")
+                        _run_ssh(ip, f"pkill -9 -f '{app_id}' 2>/dev/null || true")
+                        res_text = f"Close request sent. Response: {res1}"
+                elif func_name == "copy_file_to_device":
+                    ip = func_args.get("ip", "")
+                    remote_ip = func_args.get("remote_server_ip", "")
+                    remote_user = func_args.get("remote_user", "root")
+                    remote_path = func_args.get("remote_path", "")
+                    dest = func_args.get("dest_path", "/tmp")
+                    if not all([ip, remote_ip, remote_path, dest]):
+                        res_text = "[ERROR] Missing required arguments for copy_file_to_device."
+                    else:
+                        scp_cmd = f"scp -O -o StrictHostKeyChecking=no {remote_user}@{remote_ip}:{remote_path} {dest}"
+                        res_text = _run_ssh(ip, scp_cmd)
+                elif func_name == "auto_triage_service":
+                    ip = func_args.get("ip", "")
+                    name = func_args.get("service_name", "")
+                    if not ip or not name:
+                        res_text = "[ERROR] Missing IP or service_name."
+                    else:
+                        status = _run_ssh(ip, f"systemctl status {name} 2>&1 | head -n 15")
+                        if "[ERROR]" in status: status = _run_ssh(ip, f"pgrep -a {name} || echo 'Not running'")
+                        dmesg = _run_ssh(ip, f"dmesg | tail -n 200")
+                        syslog = _run_ssh(ip, f"grep -i '{name}' /var/log/messages* 2>/dev/null | tail -n 100")
+                        combined_logs = (dmesg + "\n" + syslog).lower()
+                        issues = []
+                        if "out of memory" in combined_logs or "oom-killer" in combined_logs:
+                            issues.append("🩸 **MEMORY LEAK (OOM)**: Detected 'out of memory' killer in logs.")
+                        if "segfault" in combined_logs or "signal 11" in combined_logs or "core dump" in combined_logs:
+                            issues.append("💥 **SEGFAULT (CRASH)**: Detected segmentation fault.")
+                        if "smack" in combined_logs and "denied" in combined_logs:
+                            issues.append("🛡️ **SMACK BLOCKED**: Detected SMACK security denial. Action: Run `patch_security_permissions` with fix_type='smack'.")
+                        if "ls-hubd" in combined_logs and "deny" in combined_logs or "permission denied" in combined_logs and "acg" in combined_logs:
+                            issues.append("🔑 **ACG BLOCKED**: Detected ACG permission denial. Action: Run `patch_security_permissions` with fix_type='acg'.")
+                        if not issues:
+                            issues.append("❓ **UNKNOWN CAUSE**: No standard crash signatures (OOM, Segfault, SMACK, ACG) detected.")
+                        report = f"🔍 **Auto-Triage Report for `{name}`**\n\n### 🚨 Detected Issues:\n"
+                        for issue in issues: report += f"- {issue}\n"
+                        report += "\n### 📊 Service Status:\n```\n" + status.strip() + "\n```\n"
+                        res_text = report
+                elif func_name == "patch_security_permissions":
+                    ip = func_args.get("ip", "")
+                    name = func_args.get("service_name", "")
+                    ftype = func_args.get("fix_type", "both").lower()
+                    if not ip or not name:
+                        res_text = "[ERROR] Missing IP or service_name."
+                    else:
+                        steps = []
+                        if ftype in ["smack", "both"]:
+                            rule = f"{name} * rwxa"
+                            _run_ssh(ip, f"echo '{rule}' >> /etc/smack/access.rules")
+                            _run_ssh(ip, "smackimport -c /etc/smack/access.rules 2>&1 || true")
+                            _run_ssh(ip, "smackimport < /etc/smack/access.rules 2>/dev/null || systemctl restart smackd 2>/dev/null || true")
+                            steps.append(f"🛡️ **SMACK Fix Applied**: Injected `{rule}` and reloaded SMACK.")
+                        if ftype in ["acg", "both"]:
+                            json_content = f'{{"{name}-*":["public","private"]}}'
+                            acg_cmd = (f"echo '{json_content}' > /tmp/{name}.app.json && "
+                                       f"cp /tmp/{name}.app.json /var/luna/client-permissions.d/ && "
+                                       f"chmod 644 /var/luna/client-permissions.d/{name}.app.json")
+                            _run_ssh(ip, acg_cmd)
+                            _run_ssh(ip, "systemctl reload palm-service || systemctl restart palm-service || true")
+                            steps.append(f"🔑 **ACG Fix Applied**: Injected client permissions for `{name}-*` and reloaded palm-service.")
+                        res_text = f"✅ **Security Patching Complete for `{name}`**\n\n" + "\n".join(steps)
+                else:
+                    res_text = f"Unknown tool: {func_name}"
+
+                messages.append({
+                    "role": "tool",
+                    "name": func_name,
+                    "tool_call_id": tool_call["id"],
+                    "content": res_text
+                })
+
+                # If SSH hit a fatal connection error, stop immediately — don't let the LLM retry
+                if any(err in res_text for err in ["[TIMEOUT]", "[ERROR]", "Connection timed out", "Connection refused", "No route to host"]):
+                    return {"intent": "chat", "message": f"⚠️ The target board could not be reached.\n\n```\n{res_text}\n```\n\nPlease verify the board IP and make sure it is online."}
+
+        return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
 
 @app.post("/api/chat")
 async def llm_chat(req: ChatRequest, request: Request):
     if not req.llm_url or not req.llm_key:
         raise HTTPException(status_code=400, detail="LLM URL and API Key are required.")
-        
-    pat = get_jira_pat(request)
-    if not pat:
-        raise HTTPException(status_code=401, detail="Missing Jira PAT.")
         
     llm_url = req.llm_url.rstrip('/')
     if not llm_url.endswith('chat/completions'):
@@ -460,6 +776,14 @@ async def llm_chat(req: ChatRequest, request: Request):
         "X-Model": "Chat-EXACODE-A",
         "HTTP-Referer": "http://gpos-ax-portal.lge.com"
     }
+
+    # Bypassing frontend caching: if the message contains the target IP tag, route to device agent
+    if req.agent_id == 'device-agent' or '[Target Board IP:' in req.message:
+        return await device_llm_chat(req, llm_url, headers)
+
+    pat = get_jira_pat(request)
+    if not pat:
+        raise HTTPException(status_code=401, detail="Missing Jira PAT.")
     
     # We will use the official mcp python SDK to connect to the MCP server
     from mcp.client.sse import sse_client
@@ -650,6 +974,7 @@ If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and th
                             
                             messages.append({
                                 "role": "tool",
+                                "name": func_name,
                                 "tool_call_id": tool_call["id"],
                                 "content": res_text
                             })
@@ -657,6 +982,7 @@ If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and th
                             logger.error(f"Tool call failed: {e}")
                             messages.append({
                                 "role": "tool",
+                                "name": func_name,
                                 "tool_call_id": tool_call["id"],
                                 "content": f"Error executing tool: {str(e)}"
                             })
@@ -1646,6 +1972,15 @@ def quick_action(action: str, request: Request, project_key: str = "SIGPOSDEV"):
             raise HTTPException(status_code=500, detail=str(e))
             
     raise HTTPException(status_code=400, detail="Unknown action")
+
+
+
+
+
+
+
+
+
 
 
 

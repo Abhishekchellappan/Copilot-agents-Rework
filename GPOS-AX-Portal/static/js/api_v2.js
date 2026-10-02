@@ -68,7 +68,7 @@ const API = {
     return this._fetch('/user');
   },
   
-  async llmChat(message, llmUrl, llmKey, llmModel, history = [], abortSignal = null, images = []) {
+  async llmChat(message, llmUrl, llmKey, llmModel, history = [], abortSignal = null, images = [], agentId = 'jira-agent') {
     // Backward compatibility if chat.js is cached and only passes 4 arguments
     if (Array.isArray(llmModel)) {
       abortSignal = history;
@@ -78,7 +78,7 @@ const API = {
     const projectKey = this.getProjectKey();
     return this._fetch('/chat', {
       method: 'POST',
-      body: JSON.stringify({ message: message, images: images, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, project_key: projectKey, history: history })
+      body: JSON.stringify({ message: message, images: images, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, project_key: projectKey, history: history, agent_id: agentId })
     }, abortSignal);
   },
   

@@ -211,47 +211,102 @@ class DeviceHUD {
     }
     
     renderBenchmark(ipc, cacheMiss, faults, cycles) {
-        const container = document.getElementById('performance-analytics-container');
+        const container = document.getElementById('performance-graphs-container');
         if (!container) return;
         
-        const missScore = Math.min(100, cacheMiss / 500);
-        const faultScore = Math.min(100, faults / 10);
+        // Calculate abstract scores (0 to 100) for radar chart
+        const ipcScore = Math.min(100, (ipc / 2.0) * 100);
+        const cacheScore = Math.max(0, 100 - (cacheMiss / 100));
+        const memScore = Math.max(0, 100 - (faults / 5));
         
         container.innerHTML = `
-            <div class="space-y-4 w-full text-xs">
-                <div>
-                    <div class="flex justify-between text-slate-300 mb-1">
-                        <span>Instructions / Cycle (IPC)</span>
-                        <span class="font-mono text-emerald-400">${ipc}</span>
+            <div class="flex flex-col h-full space-y-4 animate-fade-in w-full">
+                <!-- HUD Top Metrics -->
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="bg-slate-900/80 border border-emerald-500/40 p-3 rounded-lg relative overflow-hidden group shadow-[0_0_15px_rgba(16,185,129,0.15)]">
+                        <div class="absolute inset-0 bg-emerald-500/10 transition-colors"></div>
+                        <div class="text-[10px] text-emerald-400/80 font-bold uppercase tracking-widest mb-1 z-10 relative">Avg IPC</div>
+                        <div class="text-2xl font-black text-white font-mono z-10 relative drop-shadow-lg">${Number(ipc).toFixed(2)}</div>
                     </div>
-                    <div class="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden">
-                        <div class="bg-emerald-500 h-full rounded-full" style="width: ${Math.min(100, ipc*30)}%"></div>
+                    <div class="bg-slate-900/80 border border-amber-500/40 p-3 rounded-lg relative overflow-hidden group shadow-[0_0_15px_rgba(245,158,11,0.15)]">
+                        <div class="absolute inset-0 bg-amber-500/10 transition-colors"></div>
+                        <div class="text-[10px] text-amber-400/80 font-bold uppercase tracking-widest mb-1 z-10 relative">Cache Miss</div>
+                        <div class="text-2xl font-black text-white font-mono z-10 relative drop-shadow-lg">${cacheMiss}</div>
                     </div>
-                </div>
-                <div>
-                    <div class="flex justify-between text-slate-300 mb-1">
-                        <span>Cache Misses</span>
-                        <span class="font-mono text-amber-400">${cacheMiss}</span>
+                    <div class="bg-slate-900/80 border border-rose-500/40 p-3 rounded-lg relative overflow-hidden group shadow-[0_0_15px_rgba(244,63,94,0.15)]">
+                        <div class="absolute inset-0 bg-rose-500/10 transition-colors"></div>
+                        <div class="text-[10px] text-rose-400/80 font-bold uppercase tracking-widest mb-1 z-10 relative">Pg Faults</div>
+                        <div class="text-2xl font-black text-white font-mono z-10 relative drop-shadow-lg">${faults}</div>
                     </div>
-                    <div class="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden">
-                        <div class="bg-amber-500 h-full rounded-full" style="width: ${missScore}%"></div>
-                    </div>
-                </div>
-                <div>
-                    <div class="flex justify-between text-slate-300 mb-1">
-                        <span>Page Faults</span>
-                        <span class="font-mono text-red-400">${faults}</span>
-                    </div>
-                    <div class="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden">
-                        <div class="bg-red-500 h-full rounded-full" style="width: ${faultScore}%"></div>
+                    <div class="bg-slate-900/80 border border-blue-500/40 p-3 rounded-lg relative overflow-hidden group shadow-[0_0_15px_rgba(59,130,246,0.15)]">
+                        <div class="absolute inset-0 bg-blue-500/10 transition-colors"></div>
+                        <div class="text-[10px] text-blue-400/80 font-bold uppercase tracking-widest mb-1 z-10 relative">CPU Cycles</div>
+                        <div class="text-xl font-black text-white font-mono z-10 relative drop-shadow-lg">${(cycles/1000000).toFixed(1)}M</div>
                     </div>
                 </div>
-                <div class="pt-2 mt-2 border-t border-slate-700/50 flex justify-between items-center">
-                    <span class="text-slate-400">Total CPU Cycles</span>
-                    <span class="font-mono text-slate-200">${cycles.toLocaleString()}</span>
+
+                <!-- Radar Chart Container -->
+                <div class="flex-1 relative bg-slate-900/50 border border-slate-700/50 rounded-lg p-2 min-h-[220px] flex items-center justify-center mt-2 shadow-inner">
+                    <canvas id="benchmarkRadarChart"></canvas>
                 </div>
             </div>
         `;
+        
+        // Render Chart.js
+        setTimeout(() => {
+            const ctx = document.getElementById('benchmarkRadarChart');
+            if (ctx && window.Chart) {
+                new Chart(ctx, {
+                    type: 'radar',
+                    data: {
+                        labels: ['IPC Eff', 'Cache', 'Memory', 'CPU Load'],
+                        datasets: [{
+                            label: 'System Profile',
+                            data: [ipcScore, cacheScore, memScore, 85],
+                            backgroundColor: 'rgba(16, 185, 129, 0.25)',
+                            borderColor: 'rgba(16, 185, 129, 1)',
+                            pointBackgroundColor: 'rgba(16, 185, 129, 1)',
+                            pointBorderColor: '#fff',
+                            pointHoverBackgroundColor: '#fff',
+                            pointHoverBorderColor: 'rgba(16, 185, 129, 1)',
+                            borderWidth: 2,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            r: {
+                                angleLines: { color: 'rgba(255, 255, 255, 0.15)' },
+                                grid: { color: 'rgba(255, 255, 255, 0.15)' },
+                                pointLabels: { color: 'rgba(148, 163, 184, 1)', font: { size: 11, family: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', weight: 'bold' } },
+                                ticks: { 
+                                    display: true, 
+                                    min: 0, 
+                                    max: 100,
+                                    stepSize: 25,
+                                    color: 'rgba(16, 185, 129, 0.8)',
+                                    backdropColor: 'transparent',
+                                    font: { size: 10, family: 'monospace' },
+                                    z: 10
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            datalabels: { display: false }, // Hide the messy overlapping numbers on the dots
+                            tooltip: {
+                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                titleColor: '#10b981',
+                                bodyColor: '#f8fafc',
+                                borderColor: 'rgba(16, 185, 129, 0.3)',
+                                borderWidth: 1
+                            }
+                        }
+                    }
+                });
+            }
+        }, 100);
     }
 }
 
