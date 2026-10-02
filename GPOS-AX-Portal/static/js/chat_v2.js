@@ -324,7 +324,11 @@ window.chat = {
                 }
             } else {
                 const historyToSend = this.messageHistory.slice(0, -1);
-                llmResp = await API.llmChat(text, llmUrl, llmKey, llmModel, historyToSend, this.abortController.signal, imagesToSubmit);
+                let textToSend = text;
+                if (window.currentAgentId === 'device-agent' && window.deviceHud && window.deviceHud.currentIp && window.deviceHud.currentIp !== 'None') {
+                    textToSend = `[Target Board IP: ${window.deviceHud.currentIp}]\n${text}`;
+                }
+                llmResp = await API.llmChat(textToSend, llmUrl, llmKey, llmModel, historyToSend, this.abortController.signal, imagesToSubmit);
             }
             
             this.removeLoading(loadingId);
@@ -338,6 +342,17 @@ window.chat = {
             const reportMatch = rawText.match(/<jira-sprint-report>([\s\S]*?)<\/jira-sprint-report>/i);
             const burndownMatch = rawText.match(/<jira-burndown>([\s\S]*?)<\/jira-burndown>/i);
             const auditMatch = rawText.match(/<jira-audit>([\s\S]*?)<\/jira-audit>/i);
+            const benchmarkMatch = rawText.match(/<device-benchmark>([\s\S]*?)<\/device-benchmark>/i);
+            
+            if (benchmarkMatch) {
+                try {
+                    const data = JSON.parse(benchmarkMatch[1]);
+                    if (window.deviceHud) {
+                        window.deviceHud.renderBenchmark(data.ipc || 1.0, data.cacheMiss || 0, data.pageFaults || 0, data.totalCycles || 0);
+                    }
+                    rawText = rawText.replace(benchmarkMatch[0], `<div class="bg-emerald-900/30 border border-emerald-500/30 p-3 rounded text-emerald-400 text-sm mt-2"><i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i> Benchmark successfully rendered to the Device HUD Dashboard.</div>`);
+                } catch(e) { console.error(e); }
+            }
             
             // Generative UI Interception - Raw HTML
             const htmlMatch = rawText.match(/<agent-html>([\s\S]*?)<\/agent-html>/i);

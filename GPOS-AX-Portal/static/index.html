@@ -401,6 +401,9 @@
             <button id="nav-studio" onclick="switchView('studio')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors nav-item">
                 <i data-lucide="message-square" class="w-4 h-4 mr-3"></i> Agent Studio
             </button>
+            <button id="nav-device-hud" onclick="switchView('device-hud')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-emerald-400 hover:bg-slate-800 hover:text-emerald-300 transition-colors nav-item mt-2 border border-emerald-500/20 bg-emerald-500/5">
+                <i data-lucide="cpu" class="w-4 h-4 mr-3"></i> Device HUD
+            </button>
             
             <div class="pt-4 pb-1">
                 <p class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Global Views</p>
@@ -625,11 +628,99 @@
                 </div>
             </div>
 
+            <!-- VIEW: Device Agent HUD -->
+            <div id="view-device-hud" class="view-section hidden flex flex-col h-[calc(100vh-8rem)]">
+                <!-- Top Header: Target HUD -->
+                <div class="bg-slate-800 rounded-xl border border-slate-700 shadow-xl p-6 mb-4 flex justify-between items-center relative overflow-hidden">
+                    <div class="absolute inset-0 bg-gradient-to-r from-emerald-500/10 to-transparent pointer-events-none"></div>
+                    <div class="z-10 flex items-center gap-6">
+                        <div class="relative">
+                            <svg class="w-24 h-24 transform -rotate-90">
+                                <circle cx="48" cy="48" r="40" fill="none" stroke="#1e293b" stroke-width="8"></circle>
+                                <circle id="cpu-dial-circle" cx="48" cy="48" r="40" fill="none" stroke="#10b981" stroke-width="8" stroke-dasharray="251" stroke-dashoffset="80" class="transition-all duration-1000"></circle>
+                            </svg>
+                            <div class="absolute inset-0 flex flex-col items-center justify-center">
+                                <span id="cpu-dial-value" class="text-xl font-bold text-emerald-400">64%</span>
+                                <span class="text-[10px] text-slate-400 uppercase tracking-widest">CPU</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-emerald-400 font-bold tracking-widest uppercase mb-1 flex items-center gap-2">
+                                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                Live Target HUD
+                            </div>
+                            <h2 id="current-target-ip-display" class="text-4xl font-black text-white tracking-tight mb-2">192.168.1.104</h2>
+                            <div class="flex gap-4 text-sm text-slate-400">
+                                <span><strong class="text-slate-300">Target:</strong> <span id="hud-target-name">Unknown</span></span>
+                                <span><strong class="text-slate-300">OS:</strong> <span id="hud-target-os">webOS</span></span>
+                                <span><strong class="text-slate-300">Uptime:</strong> <span id="hud-target-uptime">--</span></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-1 gap-4 overflow-hidden">
+                    <!-- Left Sidebar: Board Registry -->
+                    <div class="w-72 bg-slate-800 rounded-xl border border-slate-700 flex flex-col overflow-hidden">
+                        <div class="p-4 border-b border-slate-700 bg-slate-800/80 flex justify-between items-center">
+                            <h3 class="text-sm font-semibold text-white uppercase tracking-wider">Board Registry</h3>
+                        </div>
+                        <div class="p-3 border-b border-slate-700 bg-slate-900/50 flex gap-2">
+                            <input type="text" id="new-target-ip" placeholder="Enter Board IP..." class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors">
+                            <button id="btn-add-board" class="bg-emerald-600 hover:bg-emerald-500 px-2 py-1 rounded border border-emerald-500/50 text-white transition-colors"><i data-lucide="plus" class="w-4 h-4"></i></button>
+                        </div>
+                        <div id="board-registry-list" class="flex-1 overflow-y-auto p-3 space-y-2">
+                            <!-- Populated dynamically by device_hud.js -->
+                        </div>
+                    </div>
+
+                    <!-- Middle: Artifact Vault -->
+                    <div class="flex-1 bg-slate-800 rounded-xl border border-slate-700 flex flex-col overflow-hidden">
+                        <div class="p-4 border-b border-slate-700 bg-slate-800/80 flex justify-between items-center">
+                            <h3 class="text-sm font-semibold text-white uppercase tracking-wider">Artifact Vault</h3>
+                            <button onclick="switchView('studio')" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg">Ask Agent Studio 🚀</button>
+                        </div>
+                        <div class="flex-1 overflow-y-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="text-xs text-slate-400 bg-slate-900/50">
+                                    <tr>
+                                        <th class="px-4 py-3 font-medium">Index Name</th>
+                                        <th class="px-4 py-3 font-medium">Type</th>
+                                        <th class="px-4 py-3 font-medium">Size</th>
+                                        <th class="px-4 py-3 font-medium text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="artifact-vault-list" class="divide-y divide-slate-700/50 text-slate-300">
+                                    <!-- Empty by default, populated dynamically -->
+                                    <tr>
+                                        <td colspan="4" class="text-center py-8 text-slate-500 text-sm">Vault is empty.<br>Run tools in Agent Studio to generate artifacts.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Right Sidebar: Performance Analytics -->
+                    <div class="w-96 bg-slate-800 rounded-xl border border-slate-700 flex flex-col overflow-hidden">
+                        <div class="p-4 border-b border-slate-700 bg-slate-800/80 flex justify-between items-center">
+                            <h3 class="text-sm font-semibold text-white uppercase tracking-wider flex items-center gap-2"><i data-lucide="bar-chart-2" class="w-4 h-4 text-emerald-400"></i> Performance Analytics</h3>
+                        </div>
+                        <div id="performance-graphs-container" class="flex-1 overflow-y-auto p-5 flex flex-col justify-center">
+                            <div class="text-center text-slate-500 text-sm space-y-3">
+                                <i data-lucide="activity" class="w-8 h-8 mx-auto text-slate-600 opacity-50"></i>
+                                <p>No active benchmarks.</p>
+                                <p class="text-xs">Ask the Agent to <span class="text-emerald-400/80">"run a performance benchmark"</span> to render live graphs here.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- VIEW 3: Agent Studio -->
             <div id="view-studio" class="view-section hidden h-[calc(100vh-8rem)] flex flex-col bg-slate-800 rounded-xl border border-slate-700 shadow-xl overflow-hidden">
                 <div class="p-4 border-b border-slate-700 bg-slate-800/80 flex items-center gap-3">
-                    <div class="w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center text-blue-400">
-                        <i data-lucide="bot" class="w-5 h-5"></i>
+                    <div id="chat-agent-icon-bg" class="w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center text-blue-400 transition-colors">
+                        <i id="chat-agent-icon" data-lucide="bot" class="w-5 h-5"></i>
                     </div>
                     <div class="flex-1">
                         <h2 id="chat-agent-title" class="text-sm font-semibold text-white">GPOS Jira & Governance Agent</h2>
@@ -655,7 +746,7 @@
                         <div class="bg-slate-700 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] text-sm text-slate-200">
                             <p class="mb-2" id="user-greeting-chat">Hello! I'm connected to the GPOS Jira project.</p>
                             <p>Here are some things you can ask me:</p>
-                            <div class="flex flex-wrap gap-2 mt-3">
+                            <div class="flex flex-wrap gap-2 mt-3" id="chat-quick-actions">
                                 <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Generate sprint report">
                                     <i data-lucide="bar-chart-2" class="w-3 h-3 inline-block mr-1"></i>Generate sprint report
                                 </button>
@@ -905,7 +996,8 @@
     </div>
     <script src="/static/js/api_v2.js?v=6"></script>
     <script src="/static/js/dashboard_v2.js?v=3"></script>
-    <script src="/static/js/chat_v2.js?v=6"></script>
+    <script src="/static/js/chat_v2.js?v=7"></script>
+    <script src="/static/js/device_hud.js?v=6"></script>
     <script>
         // Initialize plugins
         if (typeof mermaid !== 'undefined') {
@@ -956,6 +1048,8 @@
                     
                     const btnAction = agent.id === 'jira-agent' ? 
                         `onclick="window.currentAgentId = '${agent.id}'; switchView('studio')"` : 
+                        agent.id === 'device-agent' ? 
+                        `onclick="window.currentAgentId = '${agent.id}'; switchView('device-hud')"` : 
                         `onclick="alert('${agent.name} is currently ${agent.status.toLowerCase()} and will be available in future releases.');"`;
                     
                     const card = document.createElement('div');
@@ -1009,8 +1103,72 @@
             }
 
             // Load chat history if switching to studio
-            if (viewId === 'studio' && typeof chat !== 'undefined') {
-                chat.loadHistory(window.currentAgentId || 'jira-agent');
+            if (viewId === 'studio') {
+                if (typeof chat !== 'undefined') {
+                    chat.loadHistory(window.currentAgentId || 'jira-agent');
+                }
+                const titleEl = document.getElementById('chat-agent-title');
+                const descEl = document.getElementById('chat-agent-desc');
+                const iconBgEl = document.getElementById('chat-agent-icon-bg');
+                const greetingEl = document.getElementById('user-greeting-chat');
+                const quickActionsEl = document.getElementById('chat-quick-actions');
+                
+                const firstName = (localStorage.getItem('auth_username') || 'User').split('.')[0];
+                
+                if (window.currentAgentId === 'device-agent') {
+                    if(titleEl) titleEl.textContent = "GPOS Device Agent Studio";
+                    if(descEl) descEl.textContent = "Ask about GDB backtraces, kernel logs, or run Perf benchmarks.";
+                    if(iconBgEl) {
+                        iconBgEl.className = "w-8 h-8 rounded bg-emerald-500/20 flex items-center justify-center text-emerald-400 transition-colors";
+                        iconBgEl.innerHTML = '<i data-lucide="cpu" class="w-5 h-5"></i>';
+                        if(typeof lucide !== 'undefined') lucide.createIcons();
+                    }
+                    if(greetingEl) {
+                        greetingEl.innerHTML = `Hello ${firstName}! I'm connected to your <b>Device HUD</b>.`;
+                    }
+                    if(quickActionsEl) {
+                        quickActionsEl.innerHTML = `
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Run CPU benchmark">
+                                <i data-lucide="activity" class="w-3 h-3 inline-block mr-1"></i>Run CPU benchmark
+                            </button>
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Analyze kernel log">
+                                <i data-lucide="file-text" class="w-3 h-3 inline-block mr-1"></i>Analyze kernel log
+                            </button>
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Deploy app to target">
+                                <i data-lucide="upload-cloud" class="w-3 h-3 inline-block mr-1"></i>Deploy app to target
+                            </button>
+                        `;
+                        if(typeof lucide !== 'undefined') lucide.createIcons();
+                    }
+                } else {
+                    if(titleEl) titleEl.textContent = "GPOS Jira & Governance Agent";
+                    if(descEl) descEl.textContent = "Ask about sprint health, blockages, or auto-grooming";
+                    if(iconBgEl) {
+                        iconBgEl.className = "w-8 h-8 rounded bg-blue-500/20 flex items-center justify-center text-blue-400 transition-colors";
+                        iconBgEl.innerHTML = '<i data-lucide="bot" class="w-5 h-5"></i>';
+                        if(typeof lucide !== 'undefined') lucide.createIcons();
+                    }
+                    if(greetingEl) {
+                        greetingEl.innerHTML = `Hello ${firstName}! I'm connected to the <span class="project-name-display">${localStorage.getItem("jira_project_key") || "SIGPOSDEV"}</span> project.`;
+                    }
+                    if(quickActionsEl) {
+                        quickActionsEl.innerHTML = `
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Generate sprint report">
+                                <i data-lucide="bar-chart-2" class="w-3 h-3 inline-block mr-1"></i>Generate sprint report
+                            </button>
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Show burndown status">
+                                <i data-lucide="trending-down" class="w-3 h-3 inline-block mr-1"></i>Show burndown status
+                            </button>
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Audit unassigned tickets">
+                                <i data-lucide="shield-alert" class="w-3 h-3 inline-block mr-1"></i>Audit unassigned tickets
+                            </button>
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Weekly Status">
+                                <i data-lucide="calendar" class="w-3 h-3 inline-block mr-1"></i>Weekly Status
+                            </button>
+                        `;
+                        if(typeof lucide !== 'undefined') lucide.createIcons();
+                    }
+                }
             }
 
             // Update sidebar active states
@@ -1403,6 +1561,9 @@
             }
             if (typeof chat !== 'undefined' && typeof chat.init === 'function') {
                 chat.init();
+            }
+            if (window.deviceHud) {
+                window.deviceHud.init();
             }
             
             // Fetch User Profile

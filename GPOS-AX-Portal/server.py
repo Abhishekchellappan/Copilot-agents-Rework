@@ -272,7 +272,7 @@ def get_current_user(request: Request) -> str:
 
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
-    if request.url.path.startswith("/api/") and request.url.path not in ["/api/login", "/api/auth/verify"]:
+    if request.url.path.startswith("/api/") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info"]:
         if request.method != "OPTIONS":  # Skip auth check for CORS preflight
             try:
                 get_current_user(request)
@@ -686,6 +686,16 @@ def get_agents():
     # Dynamic list of agents in the catalog
     agents = [
         {
+            "id": "device-agent",
+            "name": "GPOS Device Agent (HUD)",
+            "description": "Dynamic Developer HUD for remote board management, GDB backtraces, and Linux profiling.",
+            "status": "Active",
+            "theme": "emerald",
+            "icon": "cpu",
+            "tags": ["HW", "SYS", "OPS"],
+            "categories": ["HW", "DevOps"]
+        },
+        {
             "id": "jira-agent",
             "name": "GPOS Jira & Governance",
             "description": "Real-time sprint health, burndown tracking, AX label compliance, and auto-grooming.",
@@ -735,16 +745,6 @@ def get_agents():
             "tags": ["SW", "DEV", "CI/CD"],
             "categories": ["SW", "DevOps"]
         },
-        {
-            "id": "hw-agent",
-            "name": "GPOS Hardware Device",
-            "description": "Remote deployment (SCP/bind-mount), GDB remote debugging, core dump capture.",
-            "status": "Planned",
-            "theme": "cyan",
-            "icon": "monitor-smartphone",
-            "tags": ["HW", "Embedded"],
-            "categories": ["HW"]
-        }
     ]
     return agents
 
@@ -1274,6 +1274,52 @@ def get_sprint_burndown(request: Request, project_key: str = "SIGPOSDEV", sprint
         logger.error(f"Error calculating real burndown: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch burndown: {str(e)}")
 
+
+@app.get("/api/device/info")
+def get_device_info(ip: str):
+    try:
+        import subprocess
+        # Get all info in one shot. Use top -d 1 -n 2 to bypass the SSH startup CPU spike and get true resting CPU
+        cmd = f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2 root@{ip} 'uname -n; echo \"---\"; cat /etc/os-release; echo \"---\"; cat /proc/uptime; echo \"---\"; top -d 1 -n 2 -b | grep \"Cpu(s)\" | tail -n 1'"
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=7)
+        
+        if res.returncode != 0:
+            return {"target": "Unknown Device", "os": "Error", "uptime": "--", "cpu": 0}
+            
+        parts = res.stdout.split('---')
+        
+        board_name = parts[0].strip() if len(parts) > 0 and parts[0].strip() else "Unknown Device"
+        
+        os_name = "webOS"
+        if len(parts) > 1:
+            for line in parts[1].split('\n'):
+                if line.startswith('PRETTY_NAME='):
+                    os_name = line.split('=')[1].strip('"').strip("'")
+                    break
+
+        uptime_str = "--"
+        if len(parts) > 2 and parts[2].strip():
+            try:
+                seconds = float(parts[2].strip().split()[0])
+                hours = int(seconds // 3600)
+                minutes = int((seconds % 3600) // 60)
+                uptime_str = f"{hours}h {minutes}m"
+            except:
+                pass
+                
+        cpu_val = 0
+        if len(parts) > 3 and parts[3].strip():
+            try:
+                import re
+                match = re.search(r'(\d+\.\d+)\s*us,\s*(\d+\.\d+)\s*sy', parts[3])
+                if match:
+                    cpu_val = int(float(match.group(1)) + float(match.group(2)))
+            except:
+                pass
+                
+        return {"target": board_name, "os": os_name, "uptime": uptime_str, "cpu": cpu_val}
+    except Exception as e:
+        return {"target": "Unknown Device", "os": "Error", "uptime": "--", "cpu": 0}
 
 @app.get("/api/search")
 def search_issues(request: Request, jql: str = "project = SIGPOSDEV ORDER BY updated DESC", max_results: int = 50):
