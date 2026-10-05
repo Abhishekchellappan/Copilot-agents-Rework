@@ -684,6 +684,56 @@ When checking bugs or triage, check Jira first.
 When investigating a crash, connect to the board and run 'run_gdb_backtrace' or 'auto_triage_service'.
 If the user asks to run a swarm test, use 'swarm_execute'.
 
+CRITICAL LOG ANALYSIS RULE:
+When a user asks you to analyze an attached crash log (like a .7z or .zip file attached to a Jira ticket), you MUST perform the following sequence:
+1. Call `jira_list_attachments` with the issue key to find the internal attachment ID and exact filename.
+2. Call `jira_download_attachment` to download the file securely.
+3. Call `extract_archive` to unzip it.
+4. Do NOT try to read the whole file! Log files are too big. Call `search_log_contents` to find keywords like 'crash', 'SIGSEGV', 'Exception', or 'Call Trace:'.
+5. Call `read_log_snippet` using the line numbers you found to read the 50-100 lines surrounding the crash.
+6. When summarizing the crash reason for the user, you MUST use a stunning Forensic Crash Analysis UI widget.
+Use this exact HTML structure wrapped exactly in <agent-html> tags, filling in the real crash data:
+<agent-html>
+<div class="bg-slate-900 border border-red-500/30 rounded-lg p-5 shadow-lg shadow-red-500/10 font-sans mb-4">
+  <div class="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700">
+    <div class="p-2 bg-red-500/20 rounded-md">
+      <i data-lucide="alert-triangle" class="w-6 h-6 text-red-400"></i>
+    </div>
+    <div>
+      <h2 class="text-lg font-bold text-slate-100 m-0">Forensic Crash Analysis</h2>
+      <div class="text-xs text-slate-400 font-mono mt-1">Target Process: <span class="text-slate-200">{{process_name}}</span> (PID: {{pid}})</div>
+    </div>
+  </div>
+  
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    <div class="bg-slate-800 p-3 rounded-md border border-slate-700">
+      <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Faulting Module</div>
+      <div class="text-sm text-red-300 font-mono font-bold">{{faulting_module}}</div>
+    </div>
+    <div class="bg-slate-800 p-3 rounded-md border border-slate-700">
+      <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Memory Address</div>
+      <div class="text-sm text-amber-300 font-mono font-bold">{{memory_address}}</div>
+    </div>
+  </div>
+  
+  <div class="bg-slate-800 rounded-md p-4 border border-slate-700 mb-4">
+    <h3 class="text-sm font-bold text-slate-300 flex items-center gap-2 mb-3"><i data-lucide="search" class="w-4 h-4 text-blue-400"></i> Key Findings</h3>
+    <ul class="text-sm text-slate-400 space-y-2 list-disc pl-4 marker:text-slate-600">
+      <li>{{finding_1}}</li>
+      <li>{{finding_2}}</li>
+      <li>{{finding_3}}</li>
+    </ul>
+  </div>
+  
+  <div class="bg-blue-900/20 rounded-md p-3 border border-blue-500/30 flex items-start gap-3">
+    <i data-lucide="info" class="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0"></i>
+    <div class="text-sm text-blue-200">
+      <strong>Next Steps:</strong> {{next_steps_recommendation}}
+    </div>
+  </div>
+</div>
+</agent-html>
+
 Format Jira output as a <jira-widget> HTML block.
 Format Device output as a <gdb-widget> or <swarm-widget> HTML block.
 """
@@ -839,6 +889,56 @@ Whenever you call `jira_search`, your JQL MUST explicitly include: `project = {t
 DO NOT use project 'SIGPOSDEV' under any circumstances unless '{target_project}' is explicitly 'SIGPOSDEV'.
 When tools accept a project_key argument (e.g. jira_generate_sprint_report, jira_get_sprint_burndown, jira_create_issue), ALWAYS pass project_key="{target_project}".
 TIP: If the user asks for "my" tickets (e.g., "my stories", "my bugs"), you MUST use `project = {target_project} AND assignee = currentUser()` in your JQL search.
+
+CRITICAL LOG ANALYSIS RULE:
+When a user asks you to analyze an attached crash log (like a .7z or .zip file attached to a bug ticket), you MUST perform the following sequence:
+1. Call `jira_list_attachments` with the issue key to find the internal attachment ID and exact filename.
+2. Call `jira_download_attachment` to download the file securely.
+3. Call `extract_archive` to unzip it.
+4. Do NOT try to read the whole file! Log files are too big. Call `search_log_contents` to find keywords like 'crash', 'SIGSEGV', 'Exception', or 'Call Trace:'.
+5. Call `read_log_snippet` using the line numbers you found to read the 50-100 lines surrounding the crash.
+6. When summarizing the crash reason for the user, you MUST use a stunning Forensic Crash Analysis UI widget.
+Use this exact HTML structure wrapped exactly in <agent-html> tags, filling in the real crash data:
+<agent-html>
+<div class="bg-slate-900 border border-red-500/30 rounded-lg p-5 shadow-lg shadow-red-500/10 font-sans mb-4">
+  <div class="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700">
+    <div class="p-2 bg-red-500/20 rounded-md">
+      <i data-lucide="alert-triangle" class="w-6 h-6 text-red-400"></i>
+    </div>
+    <div>
+      <h2 class="text-lg font-bold text-slate-100 m-0">Forensic Crash Analysis</h2>
+      <div class="text-xs text-slate-400 font-mono mt-1">Target Process: <span class="text-slate-200">{{process_name}}</span> (PID: {{pid}})</div>
+    </div>
+  </div>
+  
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    <div class="bg-slate-800 p-3 rounded-md border border-slate-700">
+      <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Faulting Module</div>
+      <div class="text-sm text-red-300 font-mono font-bold">{{faulting_module}}</div>
+    </div>
+    <div class="bg-slate-800 p-3 rounded-md border border-slate-700">
+      <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Memory Address</div>
+      <div class="text-sm text-amber-300 font-mono font-bold">{{memory_address}}</div>
+    </div>
+  </div>
+  
+  <div class="bg-slate-800 rounded-md p-4 border border-slate-700 mb-4">
+    <h3 class="text-sm font-bold text-slate-300 flex items-center gap-2 mb-3"><i data-lucide="search" class="w-4 h-4 text-blue-400"></i> Key Findings</h3>
+    <ul class="text-sm text-slate-400 space-y-2 list-disc pl-4 marker:text-slate-600">
+      <li>{{finding_1}}</li>
+      <li>{{finding_2}}</li>
+      <li>{{finding_3}}</li>
+    </ul>
+  </div>
+  
+  <div class="bg-blue-900/20 rounded-md p-3 border border-blue-500/30 flex items-start gap-3">
+    <i data-lucide="info" class="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0"></i>
+    <div class="text-sm text-blue-200">
+      <strong>Next Steps:</strong> {{next_steps_recommendation}}
+    </div>
+  </div>
+</div>
+</agent-html>
 
 CRITICAL FORMATTING RULES:
 1. **Jira Tickets Array**:
@@ -2034,6 +2134,8 @@ async def watchdog_stream(request: Request, ip: str):
             process.kill()
             
     return StreamingResponse(log_generator(), media_type="text/event-stream")
+
+
 
 
 

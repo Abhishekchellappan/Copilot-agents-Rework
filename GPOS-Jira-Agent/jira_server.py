@@ -1269,17 +1269,226 @@ def jira_manage_sprint(sprint_id: str, issue_keys: str, action: str = "add", ctx
     except Exception as e:
         return f"Error managing sprint: {e}"
 
+# -----------------------------------------------------------------------------
+# JIRA ATTACHMENT AND LOG ANALYSIS TOOLS
+# -----------------------------------------------------------------------------
+import tempfile
+import zipfile
+import tarfile
+import shutil
+
+try:
+    import py7zr
+except ImportError:
+    py7zr = None
+
+# Secure temporary workspace for log analysis
+AGENT_WORKSPACE = "/tmp/agent_workspace"
+if not os.path.exists(AGENT_WORKSPACE):
+    os.makedirs(AGENT_WORKSPACE, exist_ok=True)
+
+@mcp.tool()
+def jira_list_attachments(issue_key: str, ctx: Context = None) -> str:
+    """
+    List all attachments on a Jira issue. Returns attachment ID, filename, and size.
+    Use this to find the ID of the file you want to download.
+    """
+    try:
+        headers = _headers(ctx)
+        key = issue_key.strip().upper()
+        url = f"{JIRA_BASE_URL}/rest/api/2/issue/{key}?fields=attachment"
+        
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return f"Failed to get attachments (HTTP {resp.status_code}): {resp.text}"
+            
+        data = resp.json()
+        attachments = data.get("fields", {}).get("attachment", [])
+        
+        if not attachments:
+            return f"No attachments found on issue {key}."
+            
+        result = [f"Found {len(attachments)} attachments:"]
+        for att in attachments:
+            result.append(f"- ID: {att['id']} | Name: {att['filename']} | Size: {att.get('size', 0)} bytes")
+        return "\n".join(result)
+    except Exception as e:
+        return f"Error listing attachments: {e}"
+
+@mcp.tool()
+def jira_download_attachment(attachment_id: str, filename: str, ctx: Context = None) -> str:
+    """
+    Download a specific Jira attachment by its ID. 
+    The file will be saved securely to the agent's workspace.
+    
+    :param attachment_id: The ID of the attachment (from jira_list_attachments).
+    :param filename: The name of the file to save it as (e.g., 'crash.7z').
+    """
+    try:
+        headers = _headers(ctx)
+        # For downloads, Jira uses the secure attachment URL
+        url = f"{JIRA_BASE_URL}/secure/attachment/{attachment_id}/{filename}"
+        
+        resp = requests.get(url, headers=headers, stream=True, timeout=60)
+        if resp.status_code != 200:
+            return f"Failed to download attachment (HTTP {resp.status_code}): {resp.text[:200]}"
+            
+        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        target_dir = os.path.join(AGENT_WORKSPACE, attachment_id)
+        os.makedirs(target_dir, exist_ok=True)
+        file_path = os.path.join(target_dir, safe_filename)
+        
+        with open(file_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+                
+        return f"Successfully downloaded attachment to:\n{file_path}\nYou can now extract it."
+    except Exception as e:
+        return f"Error downloading attachment: {e}"
+
+@mcp.tool()
+def extract_archive(file_path: str, ctx: Context = None) -> str:
+    """
+    Extract a compressed archive (.7z, .zip, .tar.gz) into a folder.
+    
+    :param file_path: The absolute path to the downloaded archive.
+    """
+    try:
+        if not os.path.exists(file_path):
+            return f"Error: File not found at {file_path}"
+            
+        extract_dir = file_path + "_extracted"
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        if file_path.endswith(".7z"):
+            if not py7zr:
+                return "Error: py7zr library is not installed. Cannot extract .7z files."
+            with py7zr.SevenZipFile(file_path, mode='r') as z:
+                z.extractall(path=extract_dir)
+        elif file_path.endswith(".zip"):
+            with zipfile.ZipFile(file_path, 'r') as z:
+                z.extractall(extract_dir)
+        elif file_path.endswith((".tar.gz", ".tgz", ".tar")):
+            with tarfile.open(file_path, 'r:*') as tar:
+                tar.extractall(path=extract_dir)
+        else:
+            return "Error: Unsupported archive format. Supported: .7z, .zip, .tar.gz, .tar"
+            
+        # List extracted files
+        extracted_files = []
+        for root, dirs, files in os.walk(extract_dir):
+            for f in files:
+                extracted_files.append(os.path.join(root, f))
+                
+        if not extracted_files:
+            return f"Archive extracted successfully, but no files were found inside."
+            
+        res = [f"Successfully extracted {len(extracted_files)} files to {extract_dir}:"]
+        for f in extracted_files[:20]: # Limit output to 20 files
+            res.append(f)
+        if len(extracted_files) > 20:
+            res.append(f"... and {len(extracted_files) - 20} more files.")
+            
+        return "\n".join(res)
+    except Exception as e:
+        return f"Error extracting archive: {e}"
+
+@mcp.tool()
+def search_log_contents(directory_path: str, regex_pattern: str, ctx: Context = None) -> str:
+    """
+    Search (grep) through all text files in a directory for a specific regex pattern 
+    (like 'SIGSEGV', 'Exception', 'crash').
+    Returns the file paths and line numbers where the pattern was found.
+    DO NOT use this to read the whole file. Use this to find WHERE to read.
+    
+    :param directory_path: The directory containing extracted log files.
+    :param regex_pattern: The python regex pattern to search for (case-insensitive).
+    """
+    try:
+        if not os.path.exists(directory_path):
+            return f"Error: Directory not found at {directory_path}"
+            
+        import re
+        pattern = re.compile(regex_pattern, re.IGNORECASE)
+        results = []
+        
+        for root, dirs, files in os.walk(directory_path):
+            for f in files:
+                filepath = os.path.join(root, f)
+                # Skip clearly binary files
+                if f.endswith(('.so', '.bin', '.gz', '.7z', '.zip')):
+                    continue
+                    
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
+                        for i, line in enumerate(file):
+                            if pattern.search(line):
+                                results.append(f"[{filepath}] Line {i+1}: {line.strip()[:200]}")
+                                if len(results) >= 50:
+                                    break
+                except Exception:
+                    pass
+                if len(results) >= 50:
+                    break
+                    
+        if not results:
+            return f"No matches found for pattern '{regex_pattern}' in {directory_path}."
+            
+        if len(results) >= 50:
+            return "Found many matches. Showing first 50:\n" + "\n".join(results)
+            
+        return f"Found {len(results)} matches:\n" + "\n".join(results)
+    except Exception as e:
+        return f"Error searching logs: {e}"
+
+@mcp.tool()
+def read_log_snippet(file_path: str, start_line: int, end_line: int, ctx: Context = None) -> str:
+    """
+    Read a specific chunk of lines from a log file.
+    Use this after search_log_contents to read the context surrounding a crash.
+    Maximum lines allowed per call is 200.
+    
+    :param file_path: Absolute path to the file.
+    :param start_line: Starting line number (1-indexed).
+    :param end_line: Ending line number (1-indexed).
+    """
+    try:
+        if not os.path.exists(file_path):
+            return f"Error: File not found at {file_path}"
+            
+        if end_line - start_line > 200:
+            return "Error: You can only request a maximum of 200 lines at a time to prevent token limits."
+            
+        if start_line < 1: start_line = 1
+        
+        lines = []
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+            for i, line in enumerate(file):
+                line_num = i + 1
+                if line_num >= start_line and line_num <= end_line:
+                    lines.append(f"{line_num}: {line.rstrip()}")
+                if line_num > end_line:
+                    break
+                    
+        if not lines:
+            return f"No content found in range {start_line}-{end_line}."
+            
+        return f"--- {file_path} (Lines {start_line}-{end_line}) ---\n" + "\n".join(lines)
+    except Exception as e:
+        return f"Error reading file: {e}"
+
 if __name__ == "__main__":
     import uvicorn
 
     print(
-        f"Starting GPOS Jira Agent MCP Server → {JIRA_BASE_URL} "
+        f"Starting GPOS Jira Agent MCP Server +' {JIRA_BASE_URL} "
         f"(port 8000, SSE + Proxy)"
     )
     uvicorn.run(
         _HostBypass(app),
         host="0.0.0.0",
         port=8000,
+        log_level="info",
         proxy_headers=True,
         forwarded_allow_ips="*",
     )
