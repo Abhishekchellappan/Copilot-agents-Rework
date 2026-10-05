@@ -2228,6 +2228,36 @@ def patch_security_permissions(
     return f"✅ **Security Patching Complete for `{name}`**\n\n" + "\n".join(steps)
 
 @mcp.tool()
+def swarm_execute(target_ips: list[str], command: str, ctx: Context = None) -> str:
+    """
+    Execute a raw shell command across multiple target devices concurrently via SSH.
+    Use this for Swarm Testing or bulk orchestration.
+    
+    :param target_ips: A list of target IP addresses.
+    :param command: The shell command to execute on all targets.
+    """
+    import concurrent.futures
+    
+    if not target_ips:
+        return "❌ No target IPs specified."
+        
+    def _run_single(ip):
+        res = _run_ssh(_resolve_target_alias(ip), command)
+        return ip, res
+        
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(target_ips), 20)) as executor:
+        futures = {executor.submit(_run_single, ip): ip for ip in target_ips}
+        for future in concurrent.futures.as_completed(futures):
+            ip, res = future.result()
+            # Clean up the error output if it's a known disconnection (e.g. reboot)
+            if "Connection closed" in res or "TimeoutExpired" in res:
+                res = "[EXPECTED DISCONNECT] " + res
+            results.append(f"### Target: {ip}\n```\n{res.strip() if res.strip() else '<No output>'}\n```")
+            
+    return f"**Swarm Command Executed**:\n`{command}`\n\n" + "\n\n".join(results)
+
+@mcp.tool()
 def execute_device_command(target_ip: str, command: str, ctx: Context = None) -> str:
     """
     Execute a raw shell command directly on the target device via SSH in the background.

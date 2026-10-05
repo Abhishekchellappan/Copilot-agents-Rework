@@ -106,19 +106,34 @@ window.chat = {
 
   saveHistory() {
     if (!this.messagesContainer) return;
-    localStorage.setItem(`chat_html_${this.currentAgentId}`, this.messagesContainer.innerHTML);
-    localStorage.setItem(`chat_history_${this.currentAgentId}`, JSON.stringify(this.messageHistory));
+    localStorage.setItem(`chat_html_v2_${this.currentAgentId}`, this.messagesContainer.innerHTML);
+    localStorage.setItem(`chat_history_v2_${this.currentAgentId}`, JSON.stringify(this.messageHistory));
   },
 
   loadHistory(agentId) {
-    // If switching to the same agent and we already have messages, keep them (preserves state when switching to Dashboard and back)
     if (this.currentAgentId === agentId && this.messageHistory && this.messageHistory.length > 0) {
         return;
     }
     
     this.currentAgentId = agentId;
-    this.messageHistory = [];
-    this.clear();
+    this.updateHeader();
+    
+    const savedHtml = localStorage.getItem('chat_html_v2_' + agentId);
+    const savedHistory = localStorage.getItem('chat_history_v2_' + agentId);
+    
+    if (savedHtml && savedHistory) {
+        try {
+            this.messagesContainer.innerHTML = savedHtml;
+            this.messageHistory = JSON.parse(savedHistory);
+            if (window.lucide) window.lucide.createIcons();
+            this.scrollToBottom();
+        } catch (e) {
+            console.error("Failed to parse history", e);
+            this.clear();
+        }
+    } else {
+        this.clear();
+    }
   },
   
   createNewSession() {
@@ -188,21 +203,30 @@ window.chat = {
       }
   },
 
-  clear() {
-    this.messageHistory = [];
-    
-    // Update the header title based on current agent
+  updateHeader() {
     const agents = {
-        'jira-agent': { name: 'GPOS Jira & Governance Agent', desc: 'Ask about sprint health, blockages, or auto-grooming' },
-        'design-agent': { name: 'GPOS HLD Design Studio', desc: 'Generates High-Level Designs and architecture specs' },
-        'device-agent': { name: 'GPOS Device Agent Studio', desc: 'Ask about GDB backtraces, kernel logs, or run Perf benchmarks.' }
+        'supervisor-agent': { name: 'GPOS AI Supervisor', desc: 'Unified orchestrator combining Jira & Devices', icon: 'network', theme: 'indigo' },
+        'jira-agent': { name: 'GPOS Jira & Governance Agent', desc: 'Ask about sprint health, blockages, or auto-grooming', icon: 'bot', theme: 'blue' },
+        'design-agent': { name: 'GPOS HLD Design Studio', desc: 'Generates High-Level Designs and architecture specs', icon: 'pen-tool', theme: 'purple' },
+        'device-agent': { name: 'GPOS Device Agent Studio', desc: 'Ask about GDB backtraces, kernel logs, or run Perf benchmarks.', icon: 'cpu', theme: 'emerald' }
     };
-    
     const currentInfo = agents[this.currentAgentId] || agents['jira-agent'];
     const titleEl = document.getElementById('chat-agent-title');
     const descEl = document.getElementById('chat-agent-desc');
+    const iconBgEl = document.getElementById('chat-agent-icon-bg');
+    
     if (titleEl) titleEl.textContent = currentInfo.name;
     if (descEl) descEl.textContent = currentInfo.desc;
+    if (iconBgEl) {
+        iconBgEl.className = 'w-8 h-8 rounded bg-' + currentInfo.theme + '-500/20 flex items-center justify-center text-' + currentInfo.theme + '-400 transition-colors';
+        iconBgEl.innerHTML = '<i data-lucide="' + currentInfo.icon + '" class="w-5 h-5"></i>';
+        if (window.lucide) window.lucide.createIcons();
+    }
+  },
+
+  clear() {
+    this.messageHistory = [];
+    this.updateHeader();
 
     if (this.messagesContainer) {
       let greetingHTML = '';
@@ -215,6 +239,13 @@ window.chat = {
               <button onclick="document.getElementById('chat-input').value='Run CPU benchmark'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="activity" class="w-3 h-3"></i>Run CPU benchmark</button>
               <button onclick="document.getElementById('chat-input').value='Analyze kernel log'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="file-text" class="w-3 h-3"></i>Analyze kernel log</button>
               <button onclick="document.getElementById('chat-input').value='Deploy app to target'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors flex items-center gap-1"><i data-lucide="upload-cloud" class="w-3 h-3"></i>Deploy app to target</button>
+          `;
+      } else if (this.currentAgentId === 'supervisor-agent') {
+          greetingHTML = `<p class="mb-2">Hello ${firstName}! I am the <b>GPOS AI Supervisor</b>. I can orchestrate Jira and Device tasks simultaneously.</p>`;
+          buttonsHTML = `
+              <button onclick="document.getElementById('chat-input').value='Check active sprint bugs'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-indigo-500/50 text-indigo-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="bug" class="w-3 h-3"></i>Check active sprint bugs</button>
+              <button onclick="document.getElementById('chat-input').value='Run device triage on [Target Board IP: 10.221.66.42]'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-indigo-500/50 text-indigo-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="stethoscope" class="w-3 h-3"></i>Run device triage</button>
+              <button onclick="document.getElementById('chat-input').value='Execute swarm test across targets'; document.getElementById('chat-form').dispatchEvent(new Event('submit'));" class="px-3 py-1.5 rounded-full bg-slate-800 border border-indigo-500/50 text-indigo-400 text-xs hover:bg-slate-700 transition-colors flex items-center gap-1"><i data-lucide="server" class="w-3 h-3"></i>Execute swarm test</button>
           `;
       } else {
           greetingHTML = `<p class="mb-2">Hello! I'm connected to the <span class="font-bold text-blue-400 font-mono">${(localStorage.getItem('jira_project_key') || 'SIGPOSDEV')}</span> Jira project.</p>`;
@@ -231,8 +262,8 @@ window.chat = {
       this.messagesContainer.innerHTML = `
         <!-- Initial Greeting -->
         <div class="flex gap-4">
-            <div class="w-8 h-8 rounded-full ${this.currentAgentId === 'device-agent' ? 'bg-emerald-600' : 'bg-blue-600'} flex items-center justify-center flex-shrink-0">
-                <i data-lucide="${this.currentAgentId === 'device-agent' ? 'cpu' : 'bot'}" class="w-4 h-4 text-white"></i>
+            <div class="w-8 h-8 rounded-full ${this.currentAgentId === 'device-agent' ? 'bg-emerald-600' : this.currentAgentId === 'supervisor-agent' ? 'bg-indigo-600' : 'bg-blue-600'} flex items-center justify-center flex-shrink-0">
+                <i data-lucide="${this.currentAgentId === 'device-agent' ? 'cpu' : this.currentAgentId === 'supervisor-agent' ? 'git-merge' : 'bot'}" class="w-4 h-4 text-white"></i>
             </div>
             <div class="bg-slate-700 rounded-2xl rounded-tl-none px-4 py-3 max-w-[85%] text-sm text-slate-200">
                 ${greetingHTML}
@@ -412,15 +443,29 @@ window.chat = {
                 // Convert Jira keys to clickable links inside custom HTML tables
                 htmlContent = htmlContent.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, match => `<a href="http://jira.lge.com/issue/browse/${match}" target="_blank" class="text-blue-400 hover:underline">${match}</a>`);
                 rawText = rawText.replace(htmlMatch[0], '').trim();
-                if (rawText) this.addMessage(rawText, 'agent');
+                
+                let hasAvatar = false;
+                if (rawText) {
+                    this.addMessage(rawText, 'agent');
+                } else {
+                    hasAvatar = true;
+                }
                 
                 // Render the raw HTML safely
                 const div = document.createElement('div');
-                div.className = 'flex gap-4 max-w-4xl w-full my-2';
+                div.className = `flex gap-4 max-w-4xl w-full my-1 ${hasAvatar ? '' : 'ml-12'}`;
+                
+                let avatarHtml = '';
+                if (hasAvatar) {
+                    avatarHtml = `
+                      <div class="w-8 h-8 rounded-full ${this.currentAgentId === 'device-agent' ? 'bg-emerald-600/20 border border-emerald-500/50' : 'bg-blue-500/20 border border-blue-500/50'} flex items-center justify-center shrink-0 mt-1">
+                        <i data-lucide="${this.currentAgentId === 'device-agent' ? 'cpu' : 'bot'}" class="w-4 h-4 ${this.currentAgentId === 'device-agent' ? 'text-emerald-400' : 'text-blue-400'}"></i>
+                      </div>
+                    `;
+                }
+                
                 div.innerHTML = `
-                  <div class="w-8 h-8 rounded-full ${this.currentAgentId === 'device-agent' ? 'bg-emerald-600/20 border border-emerald-500/50' : 'bg-blue-500/20 border border-blue-500/50'} flex items-center justify-center shrink-0 mt-1">
-                    <i data-lucide="${this.currentAgentId === 'device-agent' ? 'cpu' : 'bot'}" class="w-4 h-4 ${this.currentAgentId === 'device-agent' ? 'text-emerald-400' : 'text-blue-400'}"></i>
-                  </div>
+                  ${avatarHtml}
                   <div class="flex-1 overflow-x-auto">
                     ${htmlContent}
                   </div>
@@ -895,6 +940,13 @@ window.chat = {
     });
   }
 };
+
+
+
+
+
+
+
 
 
 

@@ -37,6 +37,8 @@ spec:
         env:
         - name: MCP_SERVER_URL
           value: "http://gpos-muralidhar-jira-service:8000"
+        - name: DEVICE_MCP_SERVER_URL
+          value: "http://gpos-muralidhar-device-service:8000"
         - name: JIRA_BASE_URL
           value: "http://jira.lge.com/issue"
         - name: DB_PATH

@@ -36,6 +36,7 @@ app.add_middleware(
 
 # Configuration
 MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://10.221.31.25:31983').rstrip('/')
+DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://localhost:8000').rstrip('/')
 JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'http://jira.lge.com/issue').rstrip('/')
 
 # Constants
@@ -445,18 +446,26 @@ import json
 import subprocess
 
 async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
+    from mcp.client.sse import sse_client
+    from mcp.client.session import ClientSession
+    from contextlib import AsyncExitStack
+    import httpx
+    import json
+    import re
+    import traceback
+
     sys_prompt = """You are the GPOS Device Agent Studio.
 You help embedded Linux developers debug, profile, and deploy to their target webOS boards via SSH.
 
-You have access to the `run_ssh_command` tool to execute ANY shell command on the target board.
-If the user asks to run a CPU benchmark, you should use `sysbench cpu run`, `top -b -n 1`, or a similar tool.
-If the user asks to analyze kernel logs, run `dmesg | tail -n 50`.
+CRITICAL TOOL EXECUTION RULE:
+You MUST actually call the appropriate tool (e.g., `execute_device_command`, `launch_app`, `close_app`) to perform the action. 
+DO NOT just output HTML or text confirming the action without first executing the tool!
 
 WEBOS SERVICE API RULES:
-1. If the user asks to call an API/Service but doesn't provide the exact payload, DO NOT GUESS.
-2. First, find the exact service name by searching: `ls-monitor -l | grep -i <keyword>`
+1. webOS does NOT use standard Linux desktop utilities (like scrot, nmcli, etc.). For ANY system action requested by the user (e.g., taking screenshots, networking, media), you MUST dynamically discover the relevant webOS Luna service rather than falling back to standard Linux tools.
+2. First, find the exact service name by searching: `ls-monitor -l | grep -i <keyword>` (e.g. grep -i capture)
 3. Then, introspect the service to find its methods and required parameters: `ls-monitor -i <exact.service.name>`
-4. Only after introspecting, execute the call using: `run_ssh_command` with the appropriate luna-send syntax.
+4. Only after introspecting, execute the call using `execute_device_command` with the appropriate luna-send syntax.
 
 CRITICAL PRESENTATION RULES (THE WOW FACTOR):
 You MUST NEVER just output plain text for command results. You must present the data using beautiful UI widgets via `<agent-html>` tags.
@@ -507,257 +516,256 @@ Example:
   </div>
 </div>
 </agent-html>
+4. **GDB Core Dump Analysis**: When you run `run_gdb_backtrace`, present the stack trace nicely.
+Example:
+<agent-html>
+<div class="bg-slate-800 border border-red-500/30 rounded-lg p-4">
+  <h3 class="text-red-400 font-bold mb-2 flex items-center gap-2"><i data-lucide="skull" class="w-4 h-4"></i> Core Dump Analysis</h3>
+  <p class="text-sm text-slate-300 mb-2">A segmentation fault was detected. Here is the C++ stack trace:</p>
+  <div class="bg-slate-900 p-3 rounded border border-slate-700">
+    <pre class="text-red-400 text-xs font-mono overflow-x-auto">#0  0x0000ffffaa... in ?? ()
+#1  0x0000ffffaa... in AudioManager::play () at audio.cpp:142</pre>
+  </div>
+</div>
+</agent-html>
+
+4. **Swarm Execution (Multi-Device)**:
+<agent-html>
+<div class="bg-slate-800 border border-emerald-500/30 rounded-lg p-4">
+  <h3 class="text-emerald-400 font-bold mb-2 flex items-center gap-2"><i data-lucide="server" class="w-4 h-4"></i> Swarm Execution</h3>
+  <p class="text-sm text-slate-300 mb-2">Command successfully fanned out across multiple targets.</p>
+</div>
+</agent-html>
+
+CRITICAL CRASH ANALYSIS RULE:
+If `auto_triage_service` detects a "SEGFAULT (CRASH)", automatically chain a call to `run_gdb_backtrace`.
+
+CRITICAL SWARM TESTING RULE:
+If the user asks to run a command across multiple devices, or mentions "swarm testing", ALWAYS use the swarm_execute tool. Do NOT use a loop of execute_device_command calls!
+
+
 
 If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for your commands. Always make your UI futuristic and professional.
-CRITICAL RULE: If any `run_ssh_command` returns "Connection timed out" or "Missing IP", YOU MUST STOP IMMEDIATELY. DO NOT RETRY THE COMMAND. Inform the user of the failure.
 """
 
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "run_ssh_command",
-                "description": "Execute a shell command on the target board via SSH.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ip": {"type": "string", "description": "The IP address of the target board."},
-                        "command": {"type": "string", "description": "The shell command to execute."}
-                    },
-                    "required": ["ip", "command"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "launch_app",
-                "description": "Launch an application on the target board using its exact ID (e.g. com.webos.app.appliance.gallery)",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ip": {"type": "string", "description": "The IP address of the target board."},
-                        "app_id": {"type": "string", "description": "The exact application ID to launch."}
-                    },
-                    "required": ["ip", "app_id"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "close_app",
-                "description": "Cleanly terminate a running app via ApplicationManager.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ip": {"type": "string", "description": "The IP address of the target board."},
-                        "app_id": {"type": "string", "description": "The exact application ID to close."}
-                    },
-                    "required": ["ip", "app_id"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "copy_file_to_device",
-                "description": "Copy a file from a remote server to the target device via SCP.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ip": {"type": "string", "description": "The IP address of the target board."},
-                        "remote_server_ip": {"type": "string", "description": "The IP of the server holding the file."},
-                        "remote_user": {"type": "string", "description": "The user for the remote server (e.g., 'root')."},
-                        "remote_path": {"type": "string", "description": "The absolute path of the file on the remote server."},
-                        "dest_path": {"type": "string", "description": "The destination path on the target board."}
-                    },
-                    "required": ["ip", "remote_server_ip", "remote_user", "remote_path", "dest_path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "auto_triage_service",
-                "description": "Automatically diagnose why a service is failing (OOM, Segfault, SMACK, or ACG). Fetches dmesg, syslog, and service status, runs regex diagnostics, and returns an actionable report.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ip": {"type": "string", "description": "The IP address of the target board."},
-                        "service_name": {"type": "string", "description": "Name of the service (e.g. 'audiod', 'com.webos.service.audio')."}
-                    },
-                    "required": ["ip", "service_name"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "patch_security_permissions",
-                "description": "Automatically fix SMACK or ACG security blocks for a given service.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ip": {"type": "string", "description": "The IP address of the target board."},
-                        "service_name": {"type": "string", "description": "Name of the service (e.g. 'com.webos.service.audio')."},
-                        "fix_type": {"type": "string", "description": "'acg', 'smack', or 'both'"}
-                    },
-                    "required": ["ip", "service_name", "fix_type"]
-                }
-            }
-        }
-    ]
+    async with AsyncExitStack() as stack:
+        try:
 
-    messages = [{"role": "system", "content": sys_prompt}]
-    for h in req.history[-10:]:
-        if h.get("role") and h.get("content"):
-            messages.append({"role": h["role"], "content": h["content"]})
-    messages.append({"role": "user", "content": req.message})
+            # Connect Device
+            dev_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse", headers={}))
+            dev_session = await stack.enter_async_context(ClientSession(dev_streams[0], dev_streams[1]))
+            await dev_session.initialize()
 
-    async with httpx.AsyncClient() as client:
-        for _ in range(10):
-            payload = {
-                "model": req.llm_model,
-                "messages": messages,
-                "tools": tools,
-                "temperature": 0.1
-            }
-            resp = await client.post(llm_url, json=payload, headers=headers, timeout=60)
-            resp.raise_for_status()
-            result = resp.json()
-            msg = result['choices'][0]['message']
-            messages.append(msg)
+            tools = []
 
-            if not msg.get("tool_calls"):
-                return {"intent": "chat", "message": msg.get("content", "")}
+            dev_tools_resp = await dev_session.list_tools()
+            for t in dev_tools_resp.tools:
+                tools.append({"type": "function", "function": {"name": t.name, "description": t.description or "", "parameters": t.input_schema}})
 
-            def _run_ssh(target_ip, command):
-                import subprocess
-                ssh_args = [
-                    "ssh", "-tt",
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
-                    "-o", "ConnectTimeout=10",
-                    f"root@{target_ip}", command
-                ]
-                print(f"Executing SSH: {' '.join(ssh_args)}", flush=True)
-                try:
-                    result = subprocess.run(ssh_args, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
-                    out = result.stdout.replace("\r\n", "\n").replace("\r", "").strip()
-                    if result.returncode != 0 and result.stderr.strip():
-                        stderr_lines = [l for l in result.stderr.strip().splitlines() if "Warning: Permanently added" not in l]
-                        if stderr_lines: out += f"\n[STDERR] {chr(10).join(stderr_lines)}"
-                    return out if out else "(Command returned empty output)"
-                except subprocess.TimeoutExpired:
-                    return f"[TIMEOUT] SSH command timed out after 30s: {command}"
-                except Exception as e:
-                    return f"[ERROR] SSH execution failed: {str(e)}"
+            messages = [{"role": "system", "content": sys_prompt}]
+            for h in req.history[-10:]:
+                if h.get("role") and h.get("content"):
+                    messages.append({"role": h["role"], "content": h["content"]})
+            messages.append({"role": "user", "content": req.message})
 
-            for tool_call in msg["tool_calls"]:
-                func_name = tool_call["function"]["name"]
-                func_args = json.loads(tool_call["function"]["arguments"])
-                
-                if func_name == "run_ssh_command":
-                    ip = func_args.get("ip", "")
-                    cmd = func_args.get("command", "")
-                    if not ip or not cmd:
-                        res_text = "[ERROR] Missing IP or command. Please provide the target board IP address."
-                    else:
-                        res_text = _run_ssh(ip, cmd)
-                elif func_name == "launch_app":
-                    ip = func_args.get("ip", "")
-                    app_id = func_args.get("app_id", "")
-                    if not ip or not app_id:
-                        res_text = "[ERROR] Missing IP or app_id."
-                    else:
-                        res_text = _run_ssh(ip, f"luna-send -n 1 -f luna://com.webos.applicationManager/launch '{{\"id\":\"{app_id}\"}}'")
-                elif func_name == "close_app":
-                    ip = func_args.get("ip", "")
-                    app_id = func_args.get("app_id", "")
-                    if not ip or not app_id:
-                        res_text = "[ERROR] Missing IP or app_id."
-                    else:
-                        res1 = _run_ssh(ip, f"luna-send -n 1 -f luna://com.webos.applicationManager/closeByAppId '{{\"id\":\"{app_id}\"}}'")
-                        if "Service does not exist" in res1 or "UNKNOWN_SERVICE" in res1:
-                            res1 = _run_ssh(ip, f"luna-send -n 1 -f luna://com.webos.service.applicationmanager/closeByAppId '{{\"id\":\"{app_id}\"}}'")
-                        _run_ssh(ip, f"pkill -9 -f '{app_id}' 2>/dev/null || true")
-                        res_text = f"Close request sent. Response: {res1}"
-                elif func_name == "copy_file_to_device":
-                    ip = func_args.get("ip", "")
-                    remote_ip = func_args.get("remote_server_ip", "")
-                    remote_user = func_args.get("remote_user", "root")
-                    remote_path = func_args.get("remote_path", "")
-                    dest = func_args.get("dest_path", "/tmp")
-                    if not all([ip, remote_ip, remote_path, dest]):
-                        res_text = "[ERROR] Missing required arguments for copy_file_to_device."
-                    else:
-                        scp_cmd = f"scp -O -o StrictHostKeyChecking=no {remote_user}@{remote_ip}:{remote_path} {dest}"
-                        res_text = _run_ssh(ip, scp_cmd)
-                elif func_name == "auto_triage_service":
-                    ip = func_args.get("ip", "")
-                    name = func_args.get("service_name", "")
-                    if not ip or not name:
-                        res_text = "[ERROR] Missing IP or service_name."
-                    else:
-                        status = _run_ssh(ip, f"systemctl status {name} 2>&1 | head -n 15")
-                        if "[ERROR]" in status: status = _run_ssh(ip, f"pgrep -a {name} || echo 'Not running'")
-                        dmesg = _run_ssh(ip, f"dmesg | tail -n 200")
-                        syslog = _run_ssh(ip, f"grep -i '{name}' /var/log/messages* 2>/dev/null | tail -n 100")
-                        combined_logs = (dmesg + "\n" + syslog).lower()
-                        issues = []
-                        if "out of memory" in combined_logs or "oom-killer" in combined_logs:
-                            issues.append("🩸 **MEMORY LEAK (OOM)**: Detected 'out of memory' killer in logs.")
-                        if "segfault" in combined_logs or "signal 11" in combined_logs or "core dump" in combined_logs:
-                            issues.append("💥 **SEGFAULT (CRASH)**: Detected segmentation fault.")
-                        if "smack" in combined_logs and "denied" in combined_logs:
-                            issues.append("🛡️ **SMACK BLOCKED**: Detected SMACK security denial. Action: Run `patch_security_permissions` with fix_type='smack'.")
-                        if "ls-hubd" in combined_logs and "deny" in combined_logs or "permission denied" in combined_logs and "acg" in combined_logs:
-                            issues.append("🔑 **ACG BLOCKED**: Detected ACG permission denial. Action: Run `patch_security_permissions` with fix_type='acg'.")
-                        if not issues:
-                            issues.append("❓ **UNKNOWN CAUSE**: No standard crash signatures (OOM, Segfault, SMACK, ACG) detected.")
-                        report = f"🔍 **Auto-Triage Report for `{name}`**\n\n### 🚨 Detected Issues:\n"
-                        for issue in issues: report += f"- {issue}\n"
-                        report += "\n### 📊 Service Status:\n```\n" + status.strip() + "\n```\n"
-                        res_text = report
-                elif func_name == "patch_security_permissions":
-                    ip = func_args.get("ip", "")
-                    name = func_args.get("service_name", "")
-                    ftype = func_args.get("fix_type", "both").lower()
-                    if not ip or not name:
-                        res_text = "[ERROR] Missing IP or service_name."
-                    else:
-                        steps = []
-                        if ftype in ["smack", "both"]:
-                            rule = f"{name} * rwxa"
-                            _run_ssh(ip, f"echo '{rule}' >> /etc/smack/access.rules")
-                            _run_ssh(ip, "smackimport -c /etc/smack/access.rules 2>&1 || true")
-                            _run_ssh(ip, "smackimport < /etc/smack/access.rules 2>/dev/null || systemctl restart smackd 2>/dev/null || true")
-                            steps.append(f"🛡️ **SMACK Fix Applied**: Injected `{rule}` and reloaded SMACK.")
-                        if ftype in ["acg", "both"]:
-                            json_content = f'{{"{name}-*":["public","private"]}}'
-                            acg_cmd = (f"echo '{json_content}' > /tmp/{name}.app.json && "
-                                       f"cp /tmp/{name}.app.json /var/luna/client-permissions.d/ && "
-                                       f"chmod 644 /var/luna/client-permissions.d/{name}.app.json")
-                            _run_ssh(ip, acg_cmd)
-                            _run_ssh(ip, "systemctl reload palm-service || systemctl restart palm-service || true")
-                            steps.append(f"🔑 **ACG Fix Applied**: Injected client permissions for `{name}-*` and reloaded palm-service.")
-                        res_text = f"✅ **Security Patching Complete for `{name}`**\n\n" + "\n".join(steps)
-                else:
-                    res_text = f"Unknown tool: {func_name}"
+            async with httpx.AsyncClient() as client:
+                for _ in range(15):
+                    payload = {
+                        "model": req.llm_model,
+                        "messages": messages,
+                        "tools": tools,
+                        "temperature": 0.1
+                    }
+                    resp = await client.post(llm_url, json=payload, headers=headers, timeout=60)
+                    resp.raise_for_status()
+                    result = resp.json()
+                    msg = result['choices'][0]['message']
+                    messages.append(msg)
 
-                messages.append({
-                    "role": "tool",
-                    "name": func_name,
-                    "tool_call_id": tool_call["id"],
-                    "content": res_text
+                    if not msg.get("tool_calls"):
+                        return {"intent": "chat", "message": msg.get("content", "")}
+
+                    for tool_call in msg["tool_calls"]:
+                        func_name = tool_call["function"]["name"]
+                        func_args = json.loads(tool_call["function"]["arguments"])
+                        
+                        try:
+                            tool_result = await dev_session.call_tool(func_name, arguments=func_args)
+                            
+                            res_text = ""
+                            if isinstance(tool_result.content, list):
+                                parts = []
+                                for c in tool_result.content:
+                                    if hasattr(c, "text"):
+                                        parts.append(str(c.text))
+                                    elif isinstance(c, dict) and "text" in c:
+                                        parts.append(str(c["text"]))
+                                    else:
+                                        parts.append(str(c))
+                                res_text = "\n".join(parts)
+                            else:
+                                res_text = str(tool_result.content)
+                                
+                            if not res_text:
+                                res_text = "(Command returned empty output)"
+                        except Exception as e:
+                            res_text = f"[ERROR] Tool execution failed: {str(e)}"
+
+                        messages.append({
+                            "role": "tool",
+                            "name": func_name,
+                            "tool_call_id": tool_call["id"],
+                            "content": res_text
+                        })
+
+                return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
+
+        except Exception as e:
+            return {"intent": "chat", "message": f"?? Could not connect to MCP Servers.\n\nError: {str(e)}"}
+
+async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat: str):
+    from mcp.client.sse import sse_client
+    from mcp.client.session import ClientSession
+    from contextlib import AsyncExitStack
+    import httpx
+    import json
+    
+    async with AsyncExitStack() as stack:
+        try:
+            # Connect to Jira MCP
+            jira_streams = await stack.enter_async_context(sse_client(f"{MCP_SERVER_URL}/sse", headers={"X-Jira-PAT": pat}))
+            jira_session = await stack.enter_async_context(ClientSession(jira_streams[0], jira_streams[1]))
+            await jira_session.initialize()
+            
+            # Connect to Device MCP
+            device_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse"))
+            device_session = await stack.enter_async_context(ClientSession(device_streams[0], device_streams[1]))
+            await device_session.initialize()
+            
+            # Aggregate tools
+            jira_tools_resp = await jira_session.list_tools()
+            device_tools_resp = await device_session.list_tools()
+            
+            tools = []
+            tool_schemas = {}
+            tool_session_map = {}
+            
+            for t in jira_tools_resp.tools:
+                tool_schemas[t.name] = t.input_schema.get("properties", {}) if t.input_schema else {}
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "parameters": t.input_schema or {"type": "object", "properties": {}}
+                    }
                 })
+                tool_session_map[t.name] = jira_session
+                
+            for t in device_tools_resp.tools:
+                tool_schemas[t.name] = t.input_schema.get("properties", {}) if t.input_schema else {}
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "parameters": t.input_schema or {"type": "object", "properties": {}}
+                    }
+                })
+                tool_session_map[t.name] = device_session
 
-                # If SSH hit a fatal connection error, stop immediately — don't let the LLM retry
-                if any(err in res_text for err in ["[TIMEOUT]", "[ERROR]", "Connection timed out", "Connection refused", "No route to host"]):
-                    return {"intent": "chat", "message": f"⚠️ The target board could not be reached.\n\n```\n{res_text}\n```\n\nPlease verify the board IP and make sure it is online."}
+            # System Prompt
+            system_prompt = f"""You are the GPOS AI Supervisor.
+You have access to TWO domains of tools:
+1. JIRA TOOLS: For checking tickets, bugs, and governance in project {req.project_key or 'SIGPOSDEV'}.
+2. DEVICE TOOLS: For executing SSH commands, running GDB, pulling logs, and swarm testing on target boards.
 
-        return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
+When checking bugs or triage, check Jira first. 
+When investigating a crash, connect to the board and run 'run_gdb_backtrace' or 'auto_triage_service'.
+If the user asks to run a swarm test, use 'swarm_execute'.
+
+Format Jira output as a <jira-widget> HTML block.
+Format Device output as a <gdb-widget> or <swarm-widget> HTML block.
+"""
+            
+            messages = [{"role": "system", "content": system_prompt}]
+            
+            if req.history:
+                for h in req.history:
+                    role = 'assistant' if h.get('sender') == 'agent' else 'user'
+                    messages.append({"role": role, "content": h.get('text', '')})
+            
+            messages.append({"role": "user", "content": req.message})
+            
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                for _ in range(15):
+                    payload = {
+                        "model": "Chat-EXACODE-A",
+                        "messages": messages,
+                        "tools": tools,
+                        "temperature": 0.1
+                    }
+                    resp = await client.post(llm_url, headers=headers, json=payload)
+                    if resp.status_code != 200:
+                        return {"intent": "chat", "message": f"?? LLM Error: {resp.text}"}
+                    
+                    result = resp.json()
+                    choice = result['choices'][0]
+                    message = choice['message']
+                    messages.append(message)
+                    
+                    if not message.get("tool_calls"):
+                        return {"intent": "chat", "message": message.get("content", "")}
+                        
+                    for tool_call in message["tool_calls"]:
+                        func_name = tool_call["function"]["name"]
+                        func_args = json.loads(tool_call["function"]["arguments"])
+                        
+                        target_session = tool_session_map.get(func_name)
+                        if not target_session:
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": func_name,
+                                "content": f"Error: Tool {func_name} not found."
+                            })
+                            continue
+                            
+                        try:
+                            tool_result = await target_session.call_tool(func_name, arguments=func_args)
+                            res_text = ""
+                            if isinstance(tool_result.content, list):
+                                parts = []
+                                for c in tool_result.content:
+                                    if hasattr(c, "text"):
+                                        parts.append(str(c.text))
+                                    elif isinstance(c, dict) and "text" in c:
+                                        parts.append(str(c["text"]))
+                                    else:
+                                        parts.append(str(c))
+                                res_text = "\n".join(parts)
+                            else:
+                                res_text = str(tool_result.content)
+                            if not res_text:
+                                res_text = "(Command returned empty output)"
+                        except Exception as e:
+                            res_text = f"Tool execution failed: {str(e)}"
+                            
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "name": func_name,
+                            "content": res_text
+                        })
+                    
+                    with open('/tmp/llm_debug.txt', 'a') as f:
+                        f.write(json.dumps(messages) + "\n\n=======================\n")
+                        
+                return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
+                
+        except Exception as e:
+            return {"intent": "chat", "message": f"?? Supervisor Error: {str(e)}"}
+
 
 @app.post("/api/chat")
 async def llm_chat(req: ChatRequest, request: Request):
@@ -777,13 +785,14 @@ async def llm_chat(req: ChatRequest, request: Request):
         "HTTP-Referer": "http://gpos-ax-portal.lge.com"
     }
 
-    # Bypassing frontend caching: if the message contains the target IP tag, route to device agent
-    if req.agent_id == 'device-agent' or '[Target Board IP:' in req.message:
-        return await device_llm_chat(req, llm_url, headers)
-
     pat = get_jira_pat(request)
     if not pat:
         raise HTTPException(status_code=401, detail="Missing Jira PAT.")
+        
+    if req.agent_id == 'supervisor-agent':
+        return await supervisor_llm_chat(req, llm_url, headers, pat)
+    elif req.agent_id == 'device-agent' or '[Target Board IP:' in req.message:
+        return await device_llm_chat(req, llm_url, headers)
     
     # We will use the official mcp python SDK to connect to the MCP server
     from mcp.client.sse import sse_client
@@ -963,7 +972,19 @@ If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and th
                             tool_result = await session.call_tool(func_name, arguments=func_args)
                             
                             # Extract text from result
-                            res_text = "\n".join([c.text for c in tool_result.content if getattr(c, "type", "") == "text"])
+                            res_text = ""
+                            if isinstance(tool_result.content, list):
+                                parts = []
+                                for c in tool_result.content:
+                                    if hasattr(c, "text"):
+                                        parts.append(str(c.text))
+                                    elif isinstance(c, dict) and "text" in c:
+                                        parts.append(str(c["text"]))
+                                    else:
+                                        parts.append(str(c))
+                                res_text = "\n".join(parts)
+                            else:
+                                res_text = str(tool_result.content)
                             
                             # If instructions were fetched, dynamically adapt any references to SIGPOSDEV
                             if func_name == "get_agent_instructions" and target_project != "SIGPOSDEV":
@@ -1009,8 +1030,17 @@ def get_user_profile(request: Request):
 
 @app.get("/api/agents")
 def get_agents():
-    # Dynamic list of agents in the catalog
-    agents = [
+    return [
+        {
+            "id": "supervisor-agent",
+            "name": "GPOS AI Supervisor",
+            "description": "Unified orchestrator that seamlessly combines Jira Governance with Device Operations.",
+            "status": "Active",
+            "theme": "indigo",
+            "icon": "network",
+            "tags": ["AI", "ORCHESTRATION"],
+            "categories": ["AI"]
+        },
         {
             "id": "device-agent",
             "name": "GPOS Device Agent (HUD)",
@@ -1050,29 +1080,8 @@ def get_agents():
             "icon": "code-2",
             "tags": ["SW", "DEV", "Scaffold"],
             "categories": ["SW"]
-        },
-        {
-            "id": "gerrit-agent",
-            "name": "GPOS Gerrit Code Review",
-            "description": "Automated Gerrit patchset review, SonarQube rules, and code quality scoring.",
-            "status": "Planned",
-            "theme": "teal",
-            "icon": "git-pull-request",
-            "tags": ["SW", "DEV", "Quality"],
-            "categories": ["SW", "DevOps"]
-        },
-        {
-            "id": "build-agent",
-            "name": "GPOS Build Automation",
-            "description": "BitBake / Yocto build triggers, warning detection, log diagnosis.",
-            "status": "Planned",
-            "theme": "amber",
-            "icon": "cpu",
-            "tags": ["SW", "DEV", "CI/CD"],
-            "categories": ["SW", "DevOps"]
-        },
+        }
     ]
-    return agents
 
 @app.get("/api/mentions")
 def get_mentions(request: Request):
@@ -1979,6 +1988,52 @@ def quick_action(action: str, request: Request, project_key: str = "SIGPOSDEV"):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+@app.get("/api/watchdog/stream")
+async def watchdog_stream(request: Request, ip: str):
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    import subprocess
+    
+    async def log_generator():
+        # A simple simulated or actual watchdog. For a real webOS device, we ssh and tail -F /var/log/messages or journalctl.
+        # But for stability in testing without hanging the whole server if SSH blocks, we'll use an async subprocess.
+        cmd = f"ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@{ip} \"journalctl -f -n 0 | grep -i --line-buffered 'error\\|fatal\\|segfault\\|oom'\""
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
+        )
+        
+        try:
+            while True:
+                if await request.is_disconnected():
+                    process.kill()
+                    break
+                    
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                    
+                text = line.decode('utf-8', errors='replace').strip()
+                if text:
+                    yield f"data: {text}\n\n"
+        except asyncio.CancelledError:
+            process.kill()
+            
+    return StreamingResponse(log_generator(), media_type="text/event-stream")
 
 
 

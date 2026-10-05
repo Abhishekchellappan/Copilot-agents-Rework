@@ -404,6 +404,21 @@
             <button id="nav-device-hud" onclick="window.currentAgentId='device-agent'; switchView('device-hud')" class="w-full flex items-center px-3 py-2 text-sm font-medium rounded-lg text-emerald-400 hover:bg-slate-800 hover:text-emerald-300 transition-colors nav-item mt-2 border border-emerald-500/20 bg-emerald-500/5">
                 <i data-lucide="cpu" class="w-4 h-4 mr-3"></i> Device HUD
             </button>
+
+            <!-- Watchdog Toggle -->
+            <div class="px-3 py-3 mt-4 border-t border-slate-700/50">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <i data-lucide="shield-alert" class="w-4 h-4 text-rose-400 mr-2"></i>
+                        <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Watchdog</span>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" id="watchdog-toggle" class="sr-only peer" onchange="window.toggleWatchdog(this.checked)">
+                      <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
+                    </label>
+                </div>
+                <p class="text-[10px] text-slate-500 mt-1">Autonomous log monitoring</p>
+            </div>
             
             <div class="pt-4 pb-1">
                 <p class="px-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Global Views</p>
@@ -996,7 +1011,7 @@
     </div>
     <script src="/static/js/api_v2.js?v=15"></script>
     <script src="/static/js/dashboard_v2.js?v=15"></script>
-    <script src="/static/js/chat_v2.js?v=15"></script>
+    <script src="/static/js/chat_v2.js?v=20"></script>
     <script src="/static/js/device_hud.js?v=15"></script>
     <script>
         // Initialize plugins
@@ -1046,7 +1061,7 @@
                         `<span class="px-2 py-0.5 rounded text-[10px] font-medium bg-${agent.theme}-500/10 text-${agent.theme}-400 border border-${agent.theme}-500/20">${tag}</span>`
                     ).join('');
                     
-                    const btnAction = agent.id === 'jira-agent' ? 
+                    const btnAction = (agent.id === 'jira-agent' || agent.id === 'supervisor-agent') ? 
                         `onclick="window.currentAgentId = '${agent.id}'; switchView('studio')"` : 
                         agent.id === 'device-agent' ? 
                         `onclick="window.currentAgentId = '${agent.id}'; switchView('device-hud')"` : 
@@ -1115,7 +1130,26 @@
                 
                 const firstName = (localStorage.getItem('auth_username') || 'User').split('.')[0];
                 
-                if (window.currentAgentId === 'device-agent') {
+                if (window.currentAgentId === 'supervisor-agent') {
+                    if(titleEl) titleEl.textContent = "GPOS AI Supervisor";
+                    if(descEl) descEl.textContent = "Unified orchestrator that seamlessly combines Jira Governance with Device Operations.";
+                    if(iconBgEl) {
+                        iconBgEl.className = "w-8 h-8 rounded bg-indigo-500/20 flex items-center justify-center text-indigo-400 transition-colors";
+                        iconBgEl.innerHTML = '<i data-lucide="network" class="w-5 h-5"></i>';
+                        if(typeof lucide !== 'undefined') lucide.createIcons();
+                    }
+                    if(greetingEl) {
+                        greetingEl.innerHTML = `Hello ${firstName}! I'm your unified orchestrator for Jira & Devices.`;
+                    }
+                    if(quickActionsEl) {
+                        quickActionsEl.innerHTML = `
+                            <button class="quick-action-chip px-3 py-1.5 rounded-full bg-slate-800 border border-slate-600 text-xs hover:bg-slate-600 transition-colors" data-action="Find my latest high-priority bug and reproduce it on the board.">
+                                <i data-lucide="zap" class="w-3 h-3 inline-block mr-1"></i>Cross-domain Workflow
+                            </button>
+                        `;
+                        if(typeof lucide !== 'undefined') lucide.createIcons();
+                    }
+                } else if (window.currentAgentId === 'device-agent') {
                     if(titleEl) titleEl.textContent = "GPOS Device Agent Studio";
                     if(descEl) descEl.textContent = "Ask about GDB backtraces, kernel logs, or run Perf benchmarks.";
                     if(iconBgEl) {
@@ -1354,6 +1388,39 @@
             }
         };
 
+        // ===== Watchdog Logic =====
+        let watchdogSource = null;
+        window.toggleWatchdog = function(enabled) {
+            if(enabled) {
+                let ip = (window.deviceHud && window.deviceHud.currentIp && window.deviceHud.currentIp !== 'None') ? window.deviceHud.currentIp : '10.0.0.1';
+                watchdogSource = new EventSource('/api/watchdog/stream?ip=' + ip);
+                watchdogSource.onmessage = function(event) {
+                    // Send to chat
+                    if(typeof chat !== 'undefined' && chat.addMessage) {
+                        chat.addMessage(`🚨 **WATCHDOG ALERT** 🚨\n\nIdentified critical issue on target board:\n\`\`\`\n${event.data}\n\`\`\`\nShould I run GDB and Auto-Triage this issue?`, 'agent');
+                    }
+                    // Show a toast overlay
+                    let t = document.createElement('div');
+                    t.className = "fixed bottom-4 right-4 bg-rose-600 text-white p-4 rounded-lg shadow-2xl z-50 cursor-pointer text-sm border border-rose-400";
+                    t.style.animation = "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite";
+                    t.innerHTML = `<div class="font-bold mb-1 flex items-center"><i data-lucide="shield-alert" class="w-4 h-4 mr-2"></i>Autonomous Watchdog</div><div class="font-mono text-xs opacity-80">${event.data.substring(0, 50)}...</div>`;
+                    t.onclick = () => t.remove();
+                    document.body.appendChild(t);
+                    if(typeof lucide !== 'undefined') lucide.createIcons();
+                    setTimeout(()=>t.remove(), 10000);
+                };
+                watchdogSource.onerror = function() {
+                    console.log("Watchdog stream disconnected.");
+                    if(watchdogSource) watchdogSource.close();
+                }
+            } else {
+                if(watchdogSource) {
+                    watchdogSource.close();
+                    watchdogSource = null;
+                }
+            }
+        };
+
         // ===== Authentication Logic =====
         function handleLogin(event) {
             event.preventDefault();
@@ -1374,6 +1441,7 @@
             API.login(username, password).then(function(data) {
                 localStorage.setItem('auth_token', data.token);
                 localStorage.setItem('auth_username', data.username);
+                localStorage.setItem('auth_role', data.role || 'user');
                 window.location.reload();
             }).catch(function(err) {
                 errorEl.textContent = err.message || 'Authentication failed. Please try again.';
@@ -1396,6 +1464,13 @@
             if (mainContent) mainContent.classList.remove('hidden');
             if (mainContent) mainContent.classList.add('app-reveal');
             if (sidebar) sidebar.classList.add('app-reveal');
+            
+            // Admin logic
+            var role = localStorage.getItem('auth_role') || 'user';
+            var adminSection = document.getElementById('admin-nav-section');
+            if (adminSection && role === 'admin') adminSection.classList.remove('hidden');
+            var badge = document.getElementById('admin-active-badge');
+            if (badge && role === 'admin') badge.classList.remove('hidden');
             
             // Re-init icons
             if (typeof lucide !== 'undefined') lucide.createIcons();
@@ -1701,55 +1776,17 @@
         function startTelemetry(agentId) { _telAgent=agentId; if(_telInterval) clearInterval(_telInterval); API.recordTelemetry(_telAgent,_telSessId,0); _telInterval=setInterval(function(){if(_telAgent)API.recordTelemetry(_telAgent,_telSessId,60);},60000); }
         function stopTelemetry() { if(_telInterval){clearInterval(_telInterval);_telInterval=null;} _telAgent=null; }
 
-        // Override handleLogin to store role
-        function handleLogin(event) {
-            event.preventDefault();
-            var username = document.getElementById('login-username').value.trim();
-            var password = document.getElementById('login-password').value;
-            var errorEl = document.getElementById('login-error');
-            var btnText = document.getElementById('login-btn-text');
-            var btnArrow = document.getElementById('login-btn-arrow');
-            var spinner = document.getElementById('login-spinner');
-            var btn = document.getElementById('login-btn');
-            errorEl.classList.add('hidden');
-            btnText.textContent = 'Authenticating...';
-            btnArrow.classList.add('hidden');
-            spinner.classList.remove('hidden');
-            btn.disabled = true;
-            API.login(username, password).then(function(data) {
-                localStorage.setItem('auth_token', data.token);
-                localStorage.setItem('auth_username', data.username);
-                localStorage.setItem('auth_role', data.role || 'user');
-                window.location.reload();
-            }).catch(function(err) {
-                errorEl.textContent = err.message || 'Authentication failed.';
-                errorEl.classList.remove('hidden');
-                btnText.textContent = 'Authenticate';
-                btnArrow.classList.remove('hidden');
-                spinner.classList.add('hidden');
-                btn.disabled = false;
-            });
-        }
 
-        // Override showApp to reveal admin nav for admins
-        function showApp() {
-            var loginView = document.getElementById('view-login');
-            if (loginView) loginView.style.display = 'none';
-            var sidebar = document.querySelector('aside');
-            var mainContent = document.querySelector('main');
-            if (sidebar) { sidebar.classList.remove('hidden'); sidebar.classList.add('app-reveal'); }
-            if (mainContent) { mainContent.classList.remove('hidden'); mainContent.classList.add('app-reveal'); }
-            var role = localStorage.getItem('auth_role') || 'user';
-            var adminSection = document.getElementById('admin-nav-section');
-            if (adminSection && role === 'admin') { adminSection.classList.remove('hidden'); }
-            var badge = document.getElementById('admin-active-badge');
-            if (badge && role === 'admin') badge.classList.remove('hidden');
-            if (typeof lucide !== 'undefined') lucide.createIcons();
-        }
+
+
 
     </script>
 </body>
 </html>
+
+
+
+
 
 
 
