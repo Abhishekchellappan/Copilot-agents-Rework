@@ -37,6 +37,7 @@ class DeviceHUD {
                 const token = localStorage.getItem('auth_token');
                 const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
                 const response = await fetch(`/api/device/info?ip=${board.ip}`, { headers });
+                if (response.status === 401) { API.logout(); return; }
                 if (response.ok) {
                     const data = await response.json();
                     if (data.target === "Unknown Device" || data.os === "Error") {
@@ -149,6 +150,7 @@ class DeviceHUD {
                 const token = localStorage.getItem('auth_token');
                 const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
                 const response = await fetch(`/api/device/info?ip=${newIp}`, { headers });
+                if (response.status === 401) { API.logout(); return; }
                 
                 if (response.ok) {
                     const data = await response.json();
@@ -311,3 +313,4 @@ class DeviceHUD {
 }
 
 window.deviceHud = new DeviceHUD();
+

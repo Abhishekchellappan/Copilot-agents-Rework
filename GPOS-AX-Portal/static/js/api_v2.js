@@ -26,6 +26,11 @@ const API = {
     try {
       const response = await fetch(url, { ...options, headers, signal: abortSignal });
       if (!response.ok) {
+        if (response.status === 401) {
+          console.warn('Token expired or unauthorized. Redirecting to login...');
+          this.logout();
+          return;
+        }
         let errMsg = `API Error (${response.status}): ${response.statusText}`;
         try {
           const errJson = await response.json();
@@ -124,10 +129,13 @@ const API = {
   },
 
   logout() {
+    const wasLoggedIn = !!localStorage.getItem('auth_token');
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_username');
     localStorage.removeItem('auth_role');
-    window.location.reload();
+    if (wasLoggedIn) {
+        window.location.reload();
+    }
   },
 
   async recordTelemetry(agentId, sessionId, durationSeconds) {

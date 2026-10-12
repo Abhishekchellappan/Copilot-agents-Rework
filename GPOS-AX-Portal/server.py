@@ -1,3 +1,10 @@
+# --- MCP SSE CLIENT PATCH FOR LARGE SNAPSHOTS ---
+import httpx2._sse
+class MySSEParser(httpx2._sse._SSEParser):
+    def __init__(self, max_event_size=None):
+        super().__init__(max_event_size=50000000) # 50 MB
+httpx2._sse._SSEParser = MySSEParser
+# ------------------------------------------------
 import os
 import re
 import sqlite3
@@ -390,20 +397,34 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
         data = fetch_jira("api/2/search", {"jql": jql, "maxResults": 500, "fields": fields_str}, pat)
         issues = data.get("issues", [])
         if issues:
-            resolved_name = sprint_name
-            for k, v in field_names.items():
-                if v and "sprint" in v.lower():
-                    sinfo = issues[0].get("fields", {}).get(k)
-                    if isinstance(sinfo, list) and sinfo:
-                        if isinstance(sinfo[0], dict) and sinfo[0].get("name"):
-                            resolved_name = sinfo[0]["name"]
-                            break
-                        elif isinstance(sinfo[0], str):
-                            m = re.search(r'name=([^,\]]+)', sinfo[0])
-                            if m:
-                                resolved_name = m.group(1)
+            resolved_name = None
+            for issue in issues:
+                for k, v in field_names.items():
+                    if v and "sprint" in v.lower():
+                        sinfo = issue.get("fields", {}).get(k)
+                        if isinstance(sinfo, list) and sinfo:
+                            for item in reversed(sinfo):
+                                if isinstance(item, dict):
+                                    if item.get("state") == "active":
+                                        resolved_name = item.get("name")
+                                        break
+                                    elif not resolved_name and item.get("name"):
+                                        resolved_name = item.get("name")
+                                elif isinstance(item, str):
+                                    if "state=ACTIVE" in item:
+                                        m = re.search(r'name=([^,\]]+)', item)
+                                        if m:
+                                            resolved_name = m.group(1)
+                                            break
+                                    elif not resolved_name:
+                                        m = re.search(r'name=([^,\]]+)', item)
+                                        if m:
+                                            resolved_name = m.group(1)
+                            if resolved_name:
                                 break
-            return issues, resolved_name or "Active Sprint", field_names
+                if resolved_name:
+                    break
+            return issues, resolved_name or sprint_name or "Active Sprint", field_names
     except Exception as e:
         logger.warning(f"openSprints JQL failed: {e}")
 
@@ -454,6 +475,7 @@ async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
     import re
     import traceback
 
+
     sys_prompt = """You are the GPOS Device Agent Studio.
 You help embedded Linux developers debug, profile, and deploy to their target webOS boards via SSH.
 
@@ -462,13 +484,18 @@ You MUST actually call the appropriate tool (e.g., `execute_device_command`, `la
 DO NOT just output HTML or text confirming the action without first executing the tool!
 
 WEBOS SERVICE API RULES:
-1. webOS does NOT use standard Linux desktop utilities (like scrot, nmcli, etc.). For ANY system action requested by the user (e.g., taking screenshots, networking, media), you MUST dynamically discover the relevant webOS Luna service rather than falling back to standard Linux tools.
-2. First, find the exact service name by searching: `ls-monitor -l | grep -i <keyword>` (e.g. grep -i capture)
-3. Then, introspect the service to find its methods and required parameters: `ls-monitor -i <exact.service.name>`
-4. Only after introspecting, execute the call using `execute_device_command` with the appropriate luna-send syntax.
+1. webOS does NOT use standard Linux desktop utilities (like scrot, nmcli, etc.). For ANY system action (e.g., taking screenshots, networking, media), you MUST dynamically discover the relevant webOS Luna service.
+2. DISCOVERY STEPS - follow in order:
+   a. Find the service: `ls-monitor -l | grep -i <keyword>` (e.g. grep -i capture)
+   b. Introspect to get available METHODS and PARAMETERS: `ls-monitor -i <exact.service.name>`
+   c. Call the correct method using luna-send via `execute_device_command`
+3. CRITICAL - NO LOOPING RULE: If a luna-send call fails or returns `returnValue: false`, you MUST stop immediately. DO NOT retry with different methods endlessly. Instead: report what service you found, what methods are available (from ls-monitor -i), what you tried, and what error you got. Ask the user if they want to try a specific method.
 
 CRITICAL PRESENTATION RULES (THE WOW FACTOR):
 You MUST NEVER just output plain text for command results. You must present the data using beautiful UI widgets via `<agent-html>` tags.
+
+CRITICAL UI RENDERING RULE (SINGLE RESPONSE):
+Whenever you output an `<agent-html>` widget, the widget MUST be your ENTIRE response. DO NOT include any conversational text (like "Here is the status:" or "I've checked the device") before or after the widget. Outputting conversational text alongside a widget causes the chat UI to render two separate message bubbles, which breaks the user experience. ONLY output the raw `<agent-html>` block.
 1. **CPU Benchmark Results**: When you run a benchmark, output this JSON block so the frontend renders the graph:
 <device-benchmark>{"ipc": 1.25, "cacheMiss": 450, "pageFaults": 12, "totalCycles": 12500000}</device-benchmark>
 And follow it with this exact beautifully styled summary widget using `<agent-html>`:
@@ -537,6 +564,103 @@ Example:
 </div>
 </agent-html>
 
+
+5. **System Forensics Snapshot**: When a user asks to investigate a live crash, check memory/CPU state, or take a system forensics snapshot, you MUST call `generate_forensics_snapshot` and present the result in this stunning widget:
+<agent-html>
+<div class="bg-slate-900 border-2 border-red-500/40 rounded-lg p-5 shadow-lg shadow-red-500/20 font-sans mb-4">
+  <div class="flex justify-between items-start mb-4 pb-3 border-b border-slate-700">
+    <div class="flex items-center gap-3">
+      <div class="p-2 bg-red-500/20 rounded-md animate-pulse">
+        <i data-lucide="siren" class="w-6 h-6 text-red-400"></i>
+      </div>
+      <div>
+        <h2 class="text-lg font-bold text-slate-100 m-0 tracking-wider uppercase text-red-400">System Forensics Snapshot</h2>
+        <div class="text-xs text-slate-400 font-mono mt-1">Target: {{target_ip}} | Time: {{timestamp}}</div>
+      </div>
+    </div>
+    <div class="bg-slate-800 px-3 py-1 rounded text-xs border border-slate-600 text-slate-300 font-mono flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-emerald-400"></div> Connected
+    </div>
+  </div>
+  
+  <div class="grid grid-cols-2 gap-4 mb-4">
+    <div class="bg-slate-800 p-3 rounded-md border border-slate-700">
+      <div class="text-xs text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1"><i data-lucide="cpu" class="w-3 h-3"></i> Top Processes</div>
+      <div class="text-xs text-amber-300 font-mono whitespace-pre-wrap">{{top_processes_summary}}</div>
+    </div>
+    <div class="bg-slate-800 p-3 rounded-md border border-slate-700">
+      <div class="text-xs text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1"><i data-lucide="memory-stick" class="w-3 h-3"></i> Memory State</div>
+      <div class="text-xs text-blue-300 font-mono whitespace-pre-wrap">{{memory_summary}}</div>
+    </div>
+  </div>
+
+  <div class="bg-slate-800 rounded-md p-4 border border-slate-700 mb-4">
+    <h3 class="text-sm font-bold text-slate-300 flex items-center gap-2 mb-3"><i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i> Recent Kernel / Luna Activity</h3>
+    <div class="bg-black/50 p-2 rounded text-xs font-mono text-emerald-400/80 whitespace-pre-wrap">{{recent_logs}}</div>
+  </div>
+  
+  <div class="bg-red-900/20 rounded-md p-3 border border-red-500/30 flex items-start gap-3">
+    <i data-lucide="camera" class="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0"></i>
+    <div class="text-sm text-red-200">
+      <strong>Screenshot Status:</strong> {{screenshot_status}}
+    </div>
+  </div>
+</div>
+</agent-html>
+
+6. **Source-Code Blame (Red-Line)**: When you resolve a crash offset using debug symbols and source code, present it in this widget:
+<agent-html>
+<div class="bg-slate-900 border-l-4 border-l-red-500 rounded-r-lg p-5 shadow-lg font-sans mb-4">
+  <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+    <div>
+      <h2 class="text-lg font-bold text-slate-200 m-0 flex items-center gap-2">
+        <i data-lucide="file-code-2" class="w-5 h-5 text-slate-400"></i> {{file_name}}
+      </h2>
+      <div class="text-xs text-slate-500 font-mono mt-1">Commit: {{commit_hash}} | Symbol: {{symbol_name}}</div>
+    </div>
+  </div>
+  
+  <div class="bg-slate-950 rounded-md border border-slate-800 font-mono text-sm overflow-hidden">
+    <div class="bg-slate-900 px-4 py-2 border-b border-slate-800 text-xs text-slate-500 flex justify-between">
+      <span>C++ Source</span><span>Line {{crash_line_number}}</span>
+    </div>
+    <div class="p-4 overflow-x-auto">
+      <div class="text-slate-400">{{code_above}}</div>
+      <div class="bg-red-950/50 -mx-4 px-4 py-1 border-y border-red-900/50 text-red-400 relative">
+        <div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500"></div>
+        {{crashed_line_code}}
+      </div>
+      <div class="text-slate-400">{{code_below}}</div>
+    </div>
+  </div>
+</div>
+</agent-html>
+
+
+7. **Interactive Performance Call Tree**: When you run 
+un_perf_profile or are asked to generate a call stack execution tree for performance bottlenecks, you MUST use Mermaid.js embedded inside this Flame Graph widget:
+<agent-html>
+<div class="bg-slate-900 border-t-4 border-t-amber-500 rounded-b-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4">
+  <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
+    <div>
+      <h2 class="text-lg font-bold text-slate-200 m-0 flex items-center gap-2">
+        <i data-lucide="flame" class="w-5 h-5 text-amber-500"></i> Performance Call Tree
+      </h2>
+      <div class="text-xs text-slate-500 font-mono mt-1">Target: {{target_ip}} | Process: {{process_name}} (PID: {{pid}})</div>
+    </div>
+  </div>
+  
+  <div class="mt-4 bg-amber-900/20 p-3 rounded text-xs text-amber-200/80 border border-amber-500/20 flex gap-2">
+    <i data-lucide="zap" class="w-4 h-4 flex-shrink-0 text-amber-400"></i>
+    <div><strong>Insight:</strong> {{bottleneck_insight}}</div>
+  </div>
+</div>
+</agent-html>
+
+```mermaid
+{{mermaid_code}}
+```
+
 CRITICAL CRASH ANALYSIS RULE:
 If `auto_triage_service` detects a "SEGFAULT (CRASH)", automatically chain a call to `run_gdb_backtrace`.
 
@@ -548,8 +672,9 @@ If the user asks to run a command across multiple devices, or mentions "swarm te
 If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for your commands. Always make your UI futuristic and professional.
 """
 
-    async with AsyncExitStack() as stack:
-        try:
+    try:
+        async with AsyncExitStack() as stack:
+
 
             # Connect Device
             dev_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse", headers={}))
@@ -587,7 +712,17 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
 
                     for tool_call in msg["tool_calls"]:
                         func_name = tool_call["function"]["name"]
-                        func_args = json.loads(tool_call["function"]["arguments"])
+                        try:
+                            func_args = json.loads(tool_call["function"]["arguments"])
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Invalid JSON from LLM for tool {func_name}: {e}")
+                            messages.append({
+                                "role": "tool",
+                                "name": func_name,
+                                "tool_call_id": tool_call["id"],
+                                "content": f"Error: You provided invalid JSON arguments. Please correct your syntax and try again."
+                            })
+                            continue
                         
                         try:
                             tool_result = await dev_session.call_tool(func_name, arguments=func_args)
@@ -605,6 +740,35 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 res_text = "\n".join(parts)
                             else:
                                 res_text = str(tool_result.content)
+
+                            if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
+                                import uuid
+                                import os
+                                svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
+                                static_dir = os.path.join(os.path.dirname(__file__), "static")
+                                if not os.path.exists(static_dir):
+                                    os.makedirs(static_dir)
+                                svg_path = os.path.join(static_dir, svg_filename)
+                                with open(svg_path, "w", encoding="utf-8") as f:
+                                    f.write(res_text)
+                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                                
+                            elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
+                                import uuid
+                                import os
+                                import base64
+                                b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
+                                img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
+                                static_dir = os.path.join(os.path.dirname(__file__), "static")
+                                if not os.path.exists(static_dir):
+                                    os.makedirs(static_dir)
+                                img_path = os.path.join(static_dir, img_filename)
+                                try:
+                                    with open(img_path, "wb") as f:
+                                        f.write(base64.b64decode(b64_data))
+                                    res_text = f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='camera' class='text-blue-500'></i> Live Device Snapshot</h2>\n  <div class='rounded overflow-hidden border border-slate-700 bg-black flex justify-center'>\n    <img src='/static/{img_filename}' alt='Device Screenshot' class='max-w-full h-auto object-contain' style='max-height: 400px;' />\n  </div>\n</div>\n</agent-html>"
+                                except Exception as e:
+                                    res_text = f"Screenshot captured but failed to decode base64 on portal side: {e}"
                                 
                             if not res_text:
                                 res_text = "(Command returned empty output)"
@@ -620,8 +784,8 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
 
                 return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
 
-        except Exception as e:
-            return {"intent": "chat", "message": f"?? Could not connect to MCP Servers.\n\nError: {str(e)}"}
+    except Exception as e:
+        return {"intent": "chat", "message": f"?? Could not connect to MCP Servers.\n\nError: {str(e)}"}
 
 async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat: str):
     from mcp.client.sse import sse_client
@@ -735,7 +899,7 @@ Use this exact HTML structure wrapped exactly in <agent-html> tags, filling in t
 </agent-html>
 
 Format Jira output as a <jira-widget> HTML block.
-Format Device output as a <gdb-widget> or <swarm-widget> HTML block.
+Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash snapshots, use the `<forensics-snapshot-widget>`. For source-code correlation, use the `<source-blame-widget>`.
 """
             
             messages = [{"role": "system", "content": system_prompt}]
@@ -796,6 +960,18 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block.
                                 res_text = "\n".join(parts)
                             else:
                                 res_text = str(tool_result.content)
+
+                            if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
+                                import uuid
+                                import os
+                                svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
+                                static_dir = os.path.join(os.path.dirname(__file__), "static")
+                                if not os.path.exists(static_dir):
+                                    os.makedirs(static_dir)
+                                svg_path = os.path.join(static_dir, svg_filename)
+                                with open(svg_path, "w", encoding="utf-8") as f:
+                                    f.write(res_text)
+                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
                             if not res_text:
                                 res_text = "(Command returned empty output)"
                         except Exception as e:
@@ -826,7 +1002,7 @@ async def llm_chat(req: ChatRequest, request: Request):
     if not llm_url.endswith('chat/completions'):
         if llm_url.endswith('v1'): llm_url += '/chat/completions'
         else: llm_url += '/v1/chat/completions'
-
+    
     headers = {
         "Authorization": f"Bearer {req.llm_key}",
         "Content-Type": "application/json",
@@ -834,11 +1010,10 @@ async def llm_chat(req: ChatRequest, request: Request):
         "X-Model": "Chat-EXACODE-A",
         "HTTP-Referer": "http://gpos-ax-portal.lge.com"
     }
-
+    
     pat = get_jira_pat(request)
-    if not pat:
-        raise HTTPException(status_code=401, detail="Missing Jira PAT.")
-        
+    if not pat and req.agent_id != 'device-agent':
+        raise HTTPException(status_code=403, detail="Missing Jira PAT.")
     if req.agent_id == 'supervisor-agent':
         return await supervisor_llm_chat(req, llm_url, headers, pat)
     elif req.agent_id == 'device-agent' or '[Target Board IP:' in req.message:
@@ -880,28 +1055,28 @@ async def llm_chat(req: ChatRequest, request: Request):
                 })
                 
             sys_prompt = f"""You are the Antigravity Generative UI Assistant for Jira Project '{target_project}'.
-You have access to a suite of MCP tools (Jira, Code Search, etc.).
-
-CRITICAL JIRA PROJECT DIRECTIVE:
-You are strictly working with Jira project: '{target_project}'.
-ALL queries, JQL searches, sprint reports, and ticket operations MUST target project '{target_project}'.
-Whenever you call `jira_search`, your JQL MUST explicitly include: `project = {target_project}`.
-DO NOT use project 'SIGPOSDEV' under any circumstances unless '{target_project}' is explicitly 'SIGPOSDEV'.
-When tools accept a project_key argument (e.g. jira_generate_sprint_report, jira_get_sprint_burndown, jira_create_issue), ALWAYS pass project_key="{target_project}".
-TIP: If the user asks for "my" tickets (e.g., "my stories", "my bugs"), you MUST use `project = {target_project} AND assignee = currentUser()` in your JQL search.
-
-CRITICAL LOG ANALYSIS RULE:
-When a user asks you to analyze an attached crash log (like a .7z or .zip file attached to a bug ticket), you MUST perform the following sequence:
-1. Call `jira_list_attachments` with the issue key to find the internal attachment ID and exact filename.
-2. Call `jira_download_attachment` to download the file securely.
-3. Call `extract_archive` to unzip it.
-4. Do NOT try to read the whole file! Log files are too big. Call `search_log_contents` to find keywords like 'crash', 'SIGSEGV', 'Exception', or 'Call Trace:'.
-5. Call `read_log_snippet` using the line numbers you found to read the 50-100 lines surrounding the crash.
-6. When summarizing the crash reason for the user, you MUST use a stunning Forensic Crash Analysis UI widget.
-Use this exact HTML structure wrapped exactly in <agent-html> tags, filling in the real crash data:
-<agent-html>
-<div class="bg-slate-900 border border-red-500/30 rounded-lg p-5 shadow-lg shadow-red-500/10 font-sans mb-4">
-  <div class="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700">
+    You have access to a suite of MCP tools (Jira, Code Search, etc.).
+    
+    CRITICAL JIRA PROJECT DIRECTIVE:
+    You are strictly working with Jira project: '{target_project}'.
+    ALL queries, JQL searches, sprint reports, and ticket operations MUST target project '{target_project}'.
+    Whenever you call `jira_search`, your JQL MUST explicitly include: `project = {target_project}`.
+    DO NOT use project 'SIGPOSDEV' under any circumstances unless '{target_project}' is explicitly 'SIGPOSDEV'.
+    When tools accept a project_key argument (e.g. jira_generate_sprint_report, jira_get_sprint_burndown, jira_create_issue), ALWAYS pass project_key="{target_project}".
+    TIP: If the user asks for "my" tickets (e.g., "my stories", "my bugs"), you MUST use `project = {target_project} AND assignee = currentUser()` in your JQL search.
+    
+    CRITICAL LOG ANALYSIS RULE:
+    When a user asks you to analyze an attached crash log (like a .7z or .zip file attached to a bug ticket), you MUST perform the following sequence:
+    1. Call `jira_list_attachments` with the issue key to find the internal attachment ID and exact filename.
+    2. Call `jira_download_attachment` to download the file securely.
+    3. Call `extract_archive` to unzip it.
+    4. Do NOT try to read the whole file! Log files are too big. Call `search_log_contents` to find keywords like 'crash', 'SIGSEGV', 'Exception', or 'Call Trace:'.
+    5. Call `read_log_snippet` using the line numbers you found to read the 50-100 lines surrounding the crash.
+    6. When summarizing the crash reason for the user, you MUST use a stunning Forensic Crash Analysis UI widget.
+    Use this exact HTML structure wrapped exactly in <agent-html> tags, filling in the real crash data:
+    <agent-html>
+    <div class="bg-slate-900 border border-red-500/30 rounded-lg p-5 shadow-lg shadow-red-500/10 font-sans mb-4">
+      <div class="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700">
     <div class="p-2 bg-red-500/20 rounded-md">
       <i data-lucide="alert-triangle" class="w-6 h-6 text-red-400"></i>
     </div>
@@ -909,9 +1084,9 @@ Use this exact HTML structure wrapped exactly in <agent-html> tags, filling in t
       <h2 class="text-lg font-bold text-slate-100 m-0">Forensic Crash Analysis</h2>
       <div class="text-xs text-slate-400 font-mono mt-1">Target Process: <span class="text-slate-200">{{process_name}}</span> (PID: {{pid}})</div>
     </div>
-  </div>
-  
-  <div class="grid grid-cols-2 gap-4 mb-4">
+      </div>
+      
+      <div class="grid grid-cols-2 gap-4 mb-4">
     <div class="bg-slate-800 p-3 rounded-md border border-slate-700">
       <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Faulting Module</div>
       <div class="text-sm text-red-300 font-mono font-bold">{{faulting_module}}</div>
@@ -920,37 +1095,37 @@ Use this exact HTML structure wrapped exactly in <agent-html> tags, filling in t
       <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Memory Address</div>
       <div class="text-sm text-amber-300 font-mono font-bold">{{memory_address}}</div>
     </div>
-  </div>
-  
-  <div class="bg-slate-800 rounded-md p-4 border border-slate-700 mb-4">
+      </div>
+      
+      <div class="bg-slate-800 rounded-md p-4 border border-slate-700 mb-4">
     <h3 class="text-sm font-bold text-slate-300 flex items-center gap-2 mb-3"><i data-lucide="search" class="w-4 h-4 text-blue-400"></i> Key Findings</h3>
     <ul class="text-sm text-slate-400 space-y-2 list-disc pl-4 marker:text-slate-600">
       <li>{{finding_1}}</li>
       <li>{{finding_2}}</li>
       <li>{{finding_3}}</li>
     </ul>
-  </div>
-  
-  <div class="bg-blue-900/20 rounded-md p-3 border border-blue-500/30 flex items-start gap-3">
+      </div>
+      
+      <div class="bg-blue-900/20 rounded-md p-3 border border-blue-500/30 flex items-start gap-3">
     <i data-lucide="info" class="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0"></i>
     <div class="text-sm text-blue-200">
       <strong>Next Steps:</strong> {{next_steps_recommendation}}
     </div>
-  </div>
-</div>
-</agent-html>
-
-CRITICAL FORMATTING RULES:
-1. **Jira Tickets Array**:
-You MUST NEVER output plain-text lists of tickets or custom markdown tables of tickets. 
-Whenever you need to display a list of tickets, you MUST output a raw HTML `<table>` wrapped EXACTLY in `<agent-html>` tags.
-Use this exact HTML structure:
-<agent-html>
-<table class="w-full text-sm text-left text-slate-300">
-  <thead class="text-xs text-slate-400 bg-slate-800 uppercase">
+      </div>
+    </div>
+    </agent-html>
+    
+    CRITICAL FORMATTING RULES:
+    1. **Jira Tickets Array**:
+    You MUST NEVER output plain-text lists of tickets or custom markdown tables of tickets. 
+    Whenever you need to display a list of tickets, you MUST output a raw HTML `<table>` wrapped EXACTLY in `<agent-html>` tags.
+    Use this exact HTML structure:
+    <agent-html>
+    <table class="w-full text-sm text-left text-slate-300">
+      <thead class="text-xs text-slate-400 bg-slate-800 uppercase">
     <tr><th>Key</th><th>Type</th><th>Status</th><th>Priority</th><th>Summary</th><th>Assignee</th></tr>
-  </thead>
-  <tbody>
+      </thead>
+      <tbody>
     <tr class="bg-slate-900 border-b border-slate-700">
       <td class="px-3 py-2 font-mono text-blue-400">{target_project}-1</td>
       <td class="px-3 py-2">Story</td>
@@ -959,25 +1134,25 @@ Use this exact HTML structure:
       <td class="px-3 py-2">Fix bug</td>
       <td class="px-3 py-2">abhishek15.c</td>
     </tr>
-  </tbody>
-</table>
-</agent-html>
-
-2. **General Tables**: When presenting other tabular data (like developer stats), you MUST use STRICT GitHub Flavored Markdown (GFM) tables with the `|` character. NEVER align columns with spaces.
-
-3. **Sprint Health / Report**:
-The `jira_generate_sprint_report` tool returns a pre-formatted Markdown string with a Mermaid pie chart and tables. Return this directly to the user as it is already formatted.
-
-4. **Sprint Burndown Chart**:
-The `jira_get_sprint_burndown` tool returns a pre-formatted Markdown string with a Mermaid burndown chart. Return it directly to the user.
-
-5. **Sprint Audit / Governance**:
-Whenever you audit tickets (e.g. for missing labels or assignees), you MUST output a raw HTML `<table>` summarizing the problematic tickets.
-Use this exact HTML structure:
-<agent-html>
-<div class="bg-slate-800 border border-amber-500/30 rounded-lg p-4 mb-4">
-  <h3 class="text-amber-400 font-bold mb-2">&#9888; Governance Audit Findings</h3>
-  <table class="w-full text-sm text-left text-slate-300">
+      </tbody>
+    </table>
+    </agent-html>
+    
+    2. **General Tables**: When presenting other tabular data (like developer stats), you MUST use STRICT GitHub Flavored Markdown (GFM) tables with the `|` character. NEVER align columns with spaces.
+    
+    3. **Sprint Health / Report**:
+    The `jira_generate_sprint_report` tool returns a pre-formatted Markdown string with a Mermaid pie chart and tables. Return this directly to the user as it is already formatted.
+    
+    4. **Sprint Burndown Chart**:
+    The `jira_get_sprint_burndown` tool returns a pre-formatted Markdown string with a Mermaid burndown chart. Return it directly to the user.
+    
+    5. **Sprint Audit / Governance**:
+    Whenever you audit tickets (e.g. for missing labels or assignees), you MUST output a raw HTML `<table>` summarizing the problematic tickets.
+    Use this exact HTML structure:
+    <agent-html>
+    <div class="bg-slate-800 border border-amber-500/30 rounded-lg p-4 mb-4">
+      <h3 class="text-amber-400 font-bold mb-2">&#9888; Governance Audit Findings</h3>
+      <table class="w-full text-sm text-left text-slate-300">
     <thead class="text-xs text-slate-400 bg-slate-900 uppercase">
       <tr><th>Key</th><th>Summary</th><th>Missing Element</th></tr>
     </thead>
@@ -988,19 +1163,19 @@ Use this exact HTML structure:
         <td class="px-3 py-2 text-red-400">No Assignee</td>
       </tr>
     </tbody>
-  </table>
-</div>
-</agent-html>
-
-6. **Other Highly Customized UI**: 
-Act as a frontend developer. Output raw HTML styled with Tailwind CSS wrapped exactly in `<agent-html>` tags.
-
-7. **Error Handling**:
-If a tool execution returns an error message, an HTTP failure code (e.g., HTTP 403, 400), or indicates that an action failed, you MUST explicitly tell the user that the action failed and provide the reason. DO NOT hallucinate that the action succeeded if the tool returned an error.
-  
-8. **Confirmation Workflows**:
-If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and the user confirms, YOU MUST ACTUALLY EXECUTE THE TOOL. Do NOT just output a success message without calling the tool.
-"""
+      </table>
+    </div>
+    </agent-html>
+    
+    6. **Other Highly Customized UI**: 
+    Act as a frontend developer. Output raw HTML styled with Tailwind CSS wrapped exactly in `<agent-html>` tags.
+    
+    7. **Error Handling**:
+    If a tool execution returns an error message, an HTTP failure code (e.g., HTTP 403, 400), or indicates that an action failed, you MUST explicitly tell the user that the action failed and provide the reason. DO NOT hallucinate that the action succeeded if the tool returned an error.
+      
+    8. **Confirmation Workflows**:
+    If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and the user confirms, YOU MUST ACTUALLY EXECUTE THE TOOL. Do NOT just output a success message without calling the tool.
+    """
             messages = [{"role": "system", "content": sys_prompt}]
             for h in req.history[-10:]: # Limit to last 10 messages for context window
                 if h.get("role") and h.get("content"):
@@ -1058,7 +1233,7 @@ If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and th
                                 val = func_args.get("project")
                                 if not val or val.upper() == "SIGPOSDEV" or target_project != "SIGPOSDEV":
                                     func_args["project"] = target_project
-
+    
                             # 3. Handle JQL queries: replace SIGPOSDEV with target_project or inject project filter
                             if "jql" in func_args and isinstance(func_args["jql"], str):
                                 jql_str = func_args["jql"]
@@ -1085,6 +1260,18 @@ If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and th
                                 res_text = "\n".join(parts)
                             else:
                                 res_text = str(tool_result.content)
+    
+                            if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
+                                import uuid
+                                import os
+                                svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
+                                static_dir = os.path.join(os.path.dirname(__file__), "static")
+                                if not os.path.exists(static_dir):
+                                    os.makedirs(static_dir)
+                                svg_path = os.path.join(static_dir, svg_filename)
+                                with open(svg_path, "w", encoding="utf-8") as f:
+                                    f.write(res_text)
+                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
                             
                             # If instructions were fetched, dynamically adapt any references to SIGPOSDEV
                             if func_name == "get_agent_instructions" and target_project != "SIGPOSDEV":
@@ -1113,12 +1300,11 @@ If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and th
         except Exception as e:
             logger.error(f"MCP/LLM Loop Error: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to execute autonomous agent loop: {str(e)}")
-
 @app.get("/api/user")
 def get_user_profile(request: Request):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(status_code=401, detail="Missing Jira PAT.")
+        raise HTTPException(status_code=403, detail="Missing Jira PAT.")
     
     try:
         data = fetch_jira("api/2/myself", {}, pat)
@@ -1188,8 +1374,7 @@ def get_mentions(request: Request):
     pat = get_jira_pat(request)
     if not pat:
         raise HTTPException(
-            status_code=401, 
-            detail="Missing Jira PAT. Please click Settings in the top-right corner to enter your Personal Access Token."
+            status_code=403, detail="Missing Jira PAT. Please click Settings in the top-right corner to enter your Personal Access Token."
         )
 
     jql = "text ~ currentUser() AND updated >= startOfDay() ORDER BY updated DESC"
@@ -1233,8 +1418,7 @@ def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_n
     pat = get_jira_pat(request)
     if not pat:
         raise HTTPException(
-            status_code=401, 
-            detail="Missing Jira PAT. Please click Settings in the top-right corner to enter your Personal Access Token."
+            status_code=403, detail="Missing Jira PAT. Please click Settings in the top-right corner to enter your Personal Access Token."
         )
 
     try:
@@ -1592,8 +1776,7 @@ def get_sprint_burndown(request: Request, project_key: str = "SIGPOSDEV", sprint
     pat = get_jira_pat(request)
     if not pat:
         raise HTTPException(
-            status_code=401, 
-            detail="Missing Jira PAT. Please set your Personal Access Token in Settings."
+            status_code=403, detail="Missing Jira PAT. Please set your Personal Access Token in Settings."
         )
     
     try:
@@ -1760,7 +1943,7 @@ def get_device_info(ip: str):
 def search_issues(request: Request, jql: str = "project = SIGPOSDEV ORDER BY updated DESC", max_results: int = 50):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(status_code=401, detail="Missing Jira PAT. Please set your Personal Access Token.")
+        raise HTTPException(status_code=403, detail="Missing Jira PAT. Please set your Personal Access Token.")
         
     try:
         fields = "summary,status,assignee,priority,customfield_10002,labels"
@@ -1800,7 +1983,7 @@ def search_issues(request: Request, jql: str = "project = SIGPOSDEV ORDER BY upd
 def get_issue(request: Request, issue_key: str):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(status_code=401, detail="Missing Jira PAT.")
+        raise HTTPException(status_code=403, detail="Missing Jira PAT.")
         
     try:
         return fetch_jira(f"api/2/issue/{issue_key}", {}, pat)
@@ -1818,7 +2001,7 @@ def agent_action(request: Request, action_req: AgentAction):
     project_key = action_req.project_key or "SIGPOSDEV"
     
     if not pat:
-        raise HTTPException(status_code=401, detail="Missing Jira PAT. Please set token in Settings.")
+        raise HTTPException(status_code=403, detail="Missing Jira PAT. Please set token in Settings.")
         
     if action == "sprint_audit":
         try:
@@ -1884,7 +2067,7 @@ def read_root():
 async def weekly_status(req: ChatRequest, request: Request):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(status_code=401, detail='Missing Jira PAT. Please set token in Settings.')
+        raise HTTPException(status_code=403, detail='Missing Jira PAT. Please set token in Settings.')
         
     try:
         # 1. Fetch user profile to get account ID/name
@@ -2054,7 +2237,7 @@ Format using Markdown bullet points. DO NOT output any XML or HTML tags. DO NOT 
 def quick_action(action: str, request: Request, project_key: str = "SIGPOSDEV"):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(status_code=401, detail='Missing Jira PAT.')
+        raise HTTPException(status_code=403, detail='Missing Jira PAT.')
         
     if action == 'sprint_audit':
         jql = f'project = {project_key} AND sprint in openSprints() AND assignee is EMPTY'
@@ -2134,6 +2317,23 @@ async def watchdog_stream(request: Request, ip: str):
             process.kill()
             
     return StreamingResponse(log_generator(), media_type="text/event-stream")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

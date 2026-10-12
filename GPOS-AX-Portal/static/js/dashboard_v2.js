@@ -25,8 +25,12 @@ const dashboard = {
       this.renderStatusChart(report);
       this.renderDeveloperTable(report);
       this.renderAtRiskPanel(report);
-      this.renderMentions(mentionsRaw);
-      document.getElementById('sprint-indicator').textContent = report.sprint_name + ' Active';
+      const sName = report.sprint_name || 'Active Sprint';
+      const sprintEl = document.getElementById('sprint-indicator');
+      if (sprintEl) {
+        sprintEl.textContent = sName;
+        sprintEl.title = "Active Sprint: " + sName;
+      }
       document.getElementById('connection-status').classList.remove('bg-red-500');
       document.getElementById('connection-status').classList.add('bg-green-500');
     } catch (error) {

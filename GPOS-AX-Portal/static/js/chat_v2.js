@@ -333,6 +333,7 @@ window.chat = {
                     body: JSON.stringify({ message: text, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, project_key: localStorage.getItem('jira_project_key') || 'SIGPOSDEV' }),
                     signal: this.abortController.signal
                 });
+                if (resp.status === 401) { API.logout(); return; }
                 if (!resp.ok) {
                     const errTxt = await resp.text();
                     throw new Error("Weekly Status API Failed: " + errTxt);
@@ -343,6 +344,7 @@ window.chat = {
                       headers: API.getHeaders(),
                       signal: this.abortController.signal
                   });
+                  if (resp.status === 401) { API.logout(); return; }
                   if (!resp.ok) throw new Error("Burndown API Failed: " + resp.statusText);
                   const data = await resp.json();
                   this.removeLoading(loadingId);
@@ -354,6 +356,7 @@ window.chat = {
                     headers: API.getHeaders(),
                     signal: this.abortController.signal
                 });
+                if (resp.status === 401) { API.logout(); return; }
                 if (!resp.ok) throw new Error("Quick Action API Failed: " + resp.statusText);
                 const data = await resp.json();
                 
@@ -497,7 +500,12 @@ window.chat = {
         } else if (typeof error === 'object') {
             try { msg = JSON.stringify(error); } catch(e) {}
         }
-        this.addMessage(`?? **Agent Error**: ${msg}\n\n*Please make sure your Jira PAT is entered in ?? Settings and that the Jira server is reachable.*`, 'agent', true);
+        
+        let errorNote = (this.currentAgentId === 'jira-agent' || this.currentAgentId === 'supervisor-agent') ? 
+          `\n\n*Please make sure your Jira PAT is entered in ?? Settings and that the Jira server is reachable.*` :
+          `\n\n*Please ensure the target device agent is online and reachable.*`;
+          
+        this.addMessage(`?? **Agent Error**: ${msg}${errorNote}`, 'agent', true);
       } finally {
         this.abortController = null;
         const submitBtn = document.getElementById('chat-submit-btn');
