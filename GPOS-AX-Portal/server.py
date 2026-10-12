@@ -1054,7 +1054,7 @@ async def llm_chat(req: ChatRequest, request: Request):
                     }
                 })
                 
-            sys_prompt = f"""You are the Antigravity Generative UI Assistant for Jira Project '{target_project}'.
+            sys_prompt = f"""You are the GPOS Jira & Governance Agent for Jira Project '{target_project}'.
     You have access to a suite of MCP tools (Jira, Code Search, etc.).
     
     CRITICAL JIRA PROJECT DIRECTIVE:
