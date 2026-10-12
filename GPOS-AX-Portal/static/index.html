@@ -370,7 +370,7 @@
                         </button>
                     </form>
 
-                    <p class="text-center text-xs text-slate-500 mt-6">Trouble logging in? <span class="text-blue-400 hover:text-blue-300 cursor-pointer">Contact IT Support</span></p>
+                    <p class="text-center text-xs text-slate-400 mt-6">New here? <button type="button" onclick="toggleHelpModal()" class="text-blue-400 hover:text-blue-300 font-medium inline-flex items-center gap-1 align-middle"><i data-lucide="help-circle" class="w-3.5 h-3.5 inline-block"></i> Platform Guide &amp; Support</button></p>
                 </div>
             </div>
         </div>
@@ -1776,12 +1776,167 @@
         function startTelemetry(agentId) { _telAgent=agentId; if(_telInterval) clearInterval(_telInterval); API.recordTelemetry(_telAgent,_telSessId,0); _telInterval=setInterval(function(){if(_telAgent)API.recordTelemetry(_telAgent,_telSessId,60);},60000); }
         function stopTelemetry() { if(_telInterval){clearInterval(_telInterval);_telInterval=null;} _telAgent=null; }
 
+        function toggleHelpModal() {
+            var modal = document.getElementById('help-modal');
+            if (!modal) return;
+            var isHidden = modal.classList.contains('hidden');
+            if (isHidden) {
+                modal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+                // Re-render lucide icons inside the modal
+                if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+            } else {
+                modal.classList.add('hidden');
+                document.body.style.overflow = '';
+            }
+        }
+        // Close help modal on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                var modal = document.getElementById('help-modal');
+                if (modal && !modal.classList.contains('hidden')) { toggleHelpModal(); }
+            }
+        });
+
+
 
 
 
 
     </script>
+    <!-- ===== HELP / PLATFORM GUIDE MODAL ===== -->
+    <div id="help-modal" class="fixed inset-0 z-[9999] hidden flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="help-modal-title">
+        <!-- Backdrop -->
+        <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="toggleHelpModal()"></div>
+        <!-- Panel -->
+        <div class="relative bg-[#0f1929] border border-slate-700 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700 bg-gradient-to-r from-blue-900/40 to-purple-900/40 flex-shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-lg bg-blue-600/20 border border-blue-500/40 flex items-center justify-center">
+                        <i data-lucide="rocket" class="w-5 h-5 text-blue-400"></i>
+                    </div>
+                    <div>
+                        <h2 id="help-modal-title" class="text-white font-semibold text-base">GPOS AX Platform Guide</h2>
+                        <p class="text-slate-400 text-xs">Everything you need to get started</p>
+                    </div>
+                </div>
+                <button onclick="toggleHelpModal()" class="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-slate-700">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <!-- Scrollable body -->
+            <div class="overflow-y-auto flex-1 px-6 py-5 space-y-5 text-sm">
+
+                <!-- 1. First-time login & approval -->
+                <div class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="shield-check" class="w-4 h-4 text-amber-400 flex-shrink-0"></i>
+                        <h3 class="text-amber-300 font-semibold">1st-Time Login &amp; Admin Approval</h3>
+                    </div>
+                    <ul class="text-slate-300 space-y-1 list-disc list-inside text-xs leading-relaxed">
+                        <li>Your first sign-in registers your account with <strong>Pending</strong> status.</li>
+                        <li>An admin must approve your account from the <strong>Admin Control Center</strong> before you can use the portal.</li>
+                        <li>Once approved, log in again normally — no extra steps needed.</li>
+                        <li>Contact designated admin (<code class="bg-slate-700/60 px-1 rounded text-amber-300">abhishek15.c / varun.baba</code>) if approval takes too long.</li>
+                    </ul>
+                </div>
+
+                <!-- 2. Project Key -->
+                <div class="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="folder-key" class="w-4 h-4 text-blue-400 flex-shrink-0"></i>
+                        <h3 class="text-blue-300 font-semibold">Jira Project Key</h3>
+                    </div>
+                    <ul class="text-slate-300 space-y-1 list-disc list-inside text-xs leading-relaxed">
+                        <li>Default project key is <code class="bg-slate-700/60 px-1 rounded text-green-300 font-mono">SIGPOSDEV</code>.</li>
+                        <li>You can change it anytime using the <strong>project selector in the top navigation bar</strong>.</li>
+                        <li>All agents (Jira Governance, Device Studio, AI Supervisor) automatically adapt to the new key immediately.</li>
+                    </ul>
+                </div>
+
+                <!-- 3. EXACODE config -->
+                <div class="rounded-xl border border-green-500/30 bg-green-500/5 p-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="cpu" class="w-4 h-4 text-green-400 flex-shrink-0"></i>
+                        <h3 class="text-green-300 font-semibold">EXACODE LLM Configuration</h3>
+                    </div>
+                    <p class="text-slate-400 text-xs mb-3">Copy these into the <strong>LLM Settings</strong> panel after login:</p>
+                    <div class="space-y-2">
+                        <div class="bg-slate-800/70 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                            <span class="text-slate-400 text-xs w-28 flex-shrink-0">API Endpoint</span>
+                            <code class="text-green-300 text-xs font-mono break-all select-all">https://api.exacode.lge.com/v1/chat/completions</code>
+                        </div>
+                        <div class="bg-slate-800/70 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                            <span class="text-slate-400 text-xs w-28 flex-shrink-0">Model Name</span>
+                            <code class="text-green-300 text-xs font-mono select-all">Chat-EXACODE-A</code>
+                        </div>
+                        <div class="bg-slate-800/70 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                            <span class="text-slate-400 text-xs w-28 flex-shrink-0">API Key</span>
+                            <span class="text-slate-300 text-xs">Your personal <strong>EXACODE SWE (API) Key</strong> — <em>not</em> your AD or Jira password</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Credentials checklist -->
+                <div class="rounded-xl border border-purple-500/30 bg-purple-500/5 p-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="key-round" class="w-4 h-4 text-purple-400 flex-shrink-0"></i>
+                        <h3 class="text-purple-300 font-semibold">Credentials Checklist</h3>
+                    </div>
+                    <ul class="text-slate-300 space-y-1.5 text-xs leading-relaxed">
+                        <li class="flex items-start gap-2"><i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-green-400 flex-shrink-0 mt-0.5"></i><span><strong>AD Username &amp; Password</strong> — your LG corporate domain credentials (for portal login)</span></li>
+                        <li class="flex items-start gap-2"><i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-green-400 flex-shrink-0 mt-0.5"></i><span><strong>Jira PAT (Personal Access Token)</strong> — generated from <code class="bg-slate-700/60 px-1 rounded">jira.lge.com</code> → Profile → Personal Access Tokens</span></li>
+                        <li class="flex items-start gap-2"><i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-green-400 flex-shrink-0 mt-0.5"></i><span><strong>EXACODE SWE API Key</strong> — from your EXACODE portal account (not your AD password)</span></li>
+                    </ul>
+                </div>
+
+                <!-- 5. What GPOS AX Solves -->
+                <div class="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="sparkles" class="w-4 h-4 text-cyan-400 flex-shrink-0"></i>
+                        <h3 class="text-cyan-300 font-semibold">What GPOS AX Solves</h3>
+                    </div>
+                    <div class="space-y-3 text-xs text-slate-300">
+                        <div>
+                            <p class="text-white font-medium mb-0.5">🗂️ Jira Governance Agent</p>
+                            <p class="text-slate-400">Automates sprint reporting, ticket triage, status updates, and project health summaries. Eliminates manual Jira dashboard navigation.</p>
+                        </div>
+                        <div>
+                            <p class="text-white font-medium mb-0.5">🖥️ Device Studio Agent</p>
+                            <p class="text-slate-400">Connects to LG TV / device MCP servers to run shell commands, fetch logs, capture screenshots, and control devices — all through natural language.</p>
+                        </div>
+                        <div>
+                            <p class="text-white font-medium mb-0.5">🤖 AI Supervisor</p>
+                            <p class="text-slate-400">Orchestrates multi-agent workflows, cross-references device telemetry with Jira tickets, and provides executive-level summaries and root-cause analysis.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. EXACODE Limitations -->
+                <div class="rounded-xl border border-red-500/30 bg-red-500/5 p-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="triangle-alert" class="w-4 h-4 text-red-400 flex-shrink-0"></i>
+                        <h3 class="text-red-300 font-semibold">EXACODE — Known Limitations</h3>
+                    </div>
+                    <ul class="text-slate-300 space-y-1 list-disc list-inside text-xs leading-relaxed">
+                        <li><strong>VPN / Intranet required</strong> — EXACODE is only reachable on the LG corporate network. It will not work from home without VPN.</li>
+                        <li><strong>Context window limits</strong> — Very long conversations or large code dumps may be truncated. Keep prompts focused.</li>
+                        <li><strong>Peak-hour rate limits</strong> — Heavy usage during business hours may cause slow responses or temporary throttling. Retry after a few seconds.</li>
+                        <li><strong>Alternative providers</strong> — If EXACODE is unavailable, you may configure <em>Azure OpenAI</em> or <em>GitHub Models</em> in LLM Settings, provided your cluster has internet access or a corporate proxy.</li>
+                    </ul>
+                </div>
+
+            </div>
+            <!-- Footer -->
+            <div class="flex-shrink-0 px-6 py-3 border-t border-slate-700 bg-[#0b1120]/60 flex justify-end">
+                <button onclick="toggleHelpModal()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors">Got it, close</button>
+            </div>
+        </div>
+    </div>
+    <!-- ===== END HELP MODAL ===== -->
 </body>
+
 </html>
 
 
