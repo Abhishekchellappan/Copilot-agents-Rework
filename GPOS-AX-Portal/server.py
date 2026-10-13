@@ -43,7 +43,7 @@ app.add_middleware(
 
 # Configuration
 MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://10.221.31.25:31983').rstrip('/')
-DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://localhost:8000').rstrip('/')
+DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://gpos-muralidhar-device-service:8000').rstrip('/')
 JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'http://jira.lge.com/issue').rstrip('/')
 
 # Constants
