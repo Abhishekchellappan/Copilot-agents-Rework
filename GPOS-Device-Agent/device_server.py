@@ -2728,7 +2728,7 @@ def generate_interactive_flamegraph(
         return f"ERROR: Failed to read final SVG: {e}"
 
 @mcp.tool()
-def take_screenshot(target_ip: str, destination_path: str = "/tmp/snapshot.png") -> str:
+def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshot.png") -> str:
     """
     Take a screenshot of the target device's current window and return it as a Base64 string.
     Uses robust method resolution for webOS surface managers and 8-bit clean binary streaming.
