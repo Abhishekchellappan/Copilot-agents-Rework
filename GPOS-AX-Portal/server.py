@@ -729,7 +729,16 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
             for h in req.history[-10:]:
                 if h.get("role") and h.get("content"):
                     messages.append({"role": h["role"], "content": h["content"]})
-            messages.append({"role": "user", "content": req.message})
+            if hasattr(req, 'images') and req.images:
+                content_list = [{"type": "text", "text": req.message}]
+                for img_data in req.images:
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {"url": img_data}
+                    })
+                messages.append({"role": "user", "content": content_list})
+            else:
+                messages.append({"role": "user", "content": req.message})
 
             async with httpx.AsyncClient() as client:
                 for _ in range(15):
@@ -988,7 +997,16 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                     role = 'assistant' if h.get('sender') == 'agent' else 'user'
                     messages.append({"role": role, "content": h.get('text', '')})
             
-            messages.append({"role": "user", "content": req.message})
+            if hasattr(req, 'images') and req.images:
+                content_list = [{"type": "text", "text": req.message}]
+                for img_data in req.images:
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {"url": img_data}
+                    })
+                messages.append({"role": "user", "content": content_list})
+            else:
+                messages.append({"role": "user", "content": req.message})
             
             async with httpx.AsyncClient(timeout=120.0) as client:
                 for _ in range(15):
