@@ -493,6 +493,7 @@ When the user asks to run shell commands on the target board (such as `grep`, `l
   Use a resilient shell command:
   `find /usr/palm/applications -maxdepth 2 -iname "*settings*" 2>/dev/null || ls -la /usr/palm/applications | grep -i settings || grep -ri "settings" /usr/palm/applications/ 2>/dev/null | head -n 30`
 - When the user asks to "Run CPU benchmark", ALWAYS call `run_perf_benchmark(target_ip=...)`. It automatically runs the embedded performance profiler and gathers metrics!
+- When the user asks to take a screenshot, capture screen, or snapshot of the current window, ALWAYS call `take_screenshot(target_ip=...)`. It captures the screen directly from the webOS surface compositor!
 
 WEBOS SERVICE API RULES:
 1. webOS does NOT use standard Linux desktop utilities (like scrot, nmcli, etc.). For ANY system action (e.g., taking screenshots, networking, media), you MUST dynamically discover the relevant webOS Luna service.
@@ -799,16 +800,39 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
                                 import uuid
                                 import base64
+                                import re
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
+                                b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
                                 img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
                                     os.makedirs(static_dir)
                                 img_path = os.path.join(static_dir, img_filename)
                                 try:
-                                    with open(img_path, "wb") as f:
-                                        f.write(base64.b64decode(b64_data))
-                                    res_text = f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='camera' class='text-blue-500'></i> Live Device Snapshot</h2>\n  <div class='rounded overflow-hidden border border-slate-700 bg-black flex justify-center'>\n    <img src='/static/{img_filename}' alt='Device Screenshot' class='max-w-full h-auto object-contain' style='max-height: 400px;' />\n  </div>\n</div>\n</agent-html>"
+                                    raw_bytes = base64.b64decode(b64_clean)
+                                    if len(raw_bytes) > 64:
+                                        with open(img_path, "wb") as f:
+                                            f.write(raw_bytes)
+                                        try:
+                                            os.chmod(img_path, 0o644)
+                                        except Exception:
+                                            pass
+                                        res_text = (
+                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                            f"<agent-html>\n"
+                                            f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
+                                            f"  <div class='flex items-center justify-between mb-3'>\n"
+                                            f"    <h2 class='text-lg font-bold text-slate-200 flex items-center gap-2 m-0'><i data-lucide='camera' class='text-blue-500'></i> Live Device Snapshot</h2>\n"
+                                            f"    <a href='/static/{img_filename}' target='_blank' class='text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-mono'><i data-lucide='external-link' class='w-3 h-3'></i> View Full Size</a>\n"
+                                            f"  </div>\n"
+                                            f"  <div class='rounded overflow-hidden border border-slate-700 bg-black flex justify-center p-1'>\n"
+                                            f"    <img src='/static/{img_filename}' alt='Device Screenshot' class='max-w-full h-auto object-contain rounded' style='max-height: 480px;' />\n"
+                                            f"  </div>\n"
+                                            f"</div>\n"
+                                            f"</agent-html>"
+                                        )
+                                    else:
+                                        res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
                                 except Exception as e:
                                     res_text = f"Screenshot captured but failed to decode base64 on portal side: {e}"
                                 
@@ -1032,6 +1056,44 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                 with open(svg_path, "w", encoding="utf-8") as f:
                                     f.write(res_text)
                                 res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                            elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
+                                import uuid
+                                import base64
+                                import re
+                                b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
+                                b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
+                                img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
+                                static_dir = os.path.join(os.path.dirname(__file__), "static")
+                                if not os.path.exists(static_dir):
+                                    os.makedirs(static_dir)
+                                img_path = os.path.join(static_dir, img_filename)
+                                try:
+                                    raw_bytes = base64.b64decode(b64_clean)
+                                    if len(raw_bytes) > 64:
+                                        with open(img_path, "wb") as f:
+                                            f.write(raw_bytes)
+                                        try:
+                                            os.chmod(img_path, 0o644)
+                                        except Exception:
+                                            pass
+                                        res_text = (
+                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                            f"<agent-html>\n"
+                                            f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
+                                            f"  <div class='flex items-center justify-between mb-3'>\n"
+                                            f"    <h2 class='text-lg font-bold text-slate-200 flex items-center gap-2 m-0'><i data-lucide='camera' class='text-blue-500'></i> Live Device Snapshot</h2>\n"
+                                            f"    <a href='/static/{img_filename}' target='_blank' class='text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-mono'><i data-lucide='external-link' class='w-3 h-3'></i> View Full Size</a>\n"
+                                            f"  </div>\n"
+                                            f"  <div class='rounded overflow-hidden border border-slate-700 bg-black flex justify-center p-1'>\n"
+                                            f"    <img src='/static/{img_filename}' alt='Device Screenshot' class='max-w-full h-auto object-contain rounded' style='max-height: 480px;' />\n"
+                                            f"  </div>\n"
+                                            f"</div>\n"
+                                            f"</agent-html>"
+                                        )
+                                    else:
+                                        res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
+                                except Exception as e:
+                                    res_text = f"Screenshot captured but failed to decode base64 on portal side: {e}"
                             if not res_text:
                                 res_text = "(Command returned empty output)"
                         except Exception as e:
@@ -1345,6 +1407,44 @@ async def llm_chat(req: ChatRequest, request: Request):
                                 with open(svg_path, "w", encoding="utf-8") as f:
                                     f.write(res_text)
                                 res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                            elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
+                                import uuid
+                                import base64
+                                import re
+                                b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
+                                b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
+                                img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
+                                static_dir = os.path.join(os.path.dirname(__file__), "static")
+                                if not os.path.exists(static_dir):
+                                    os.makedirs(static_dir)
+                                img_path = os.path.join(static_dir, img_filename)
+                                try:
+                                    raw_bytes = base64.b64decode(b64_clean)
+                                    if len(raw_bytes) > 64:
+                                        with open(img_path, "wb") as f:
+                                            f.write(raw_bytes)
+                                        try:
+                                            os.chmod(img_path, 0o644)
+                                        except Exception:
+                                            pass
+                                        res_text = (
+                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                            f"<agent-html>\n"
+                                            f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
+                                            f"  <div class='flex items-center justify-between mb-3'>\n"
+                                            f"    <h2 class='text-lg font-bold text-slate-200 flex items-center gap-2 m-0'><i data-lucide='camera' class='text-blue-500'></i> Live Device Snapshot</h2>\n"
+                                            f"    <a href='/static/{img_filename}' target='_blank' class='text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-mono'><i data-lucide='external-link' class='w-3 h-3'></i> View Full Size</a>\n"
+                                            f"  </div>\n"
+                                            f"  <div class='rounded overflow-hidden border border-slate-700 bg-black flex justify-center p-1'>\n"
+                                            f"    <img src='/static/{img_filename}' alt='Device Screenshot' class='max-w-full h-auto object-contain rounded' style='max-height: 480px;' />\n"
+                                            f"  </div>\n"
+                                            f"</div>\n"
+                                            f"</agent-html>"
+                                        )
+                                    else:
+                                        res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
+                                except Exception as e:
+                                    res_text = f"Screenshot captured but failed to decode base64 on portal side: {e}"
                             
                             # If instructions were fetched, dynamically adapt any references to SIGPOSDEV
                             if func_name == "get_agent_instructions" and target_project != "SIGPOSDEV":
