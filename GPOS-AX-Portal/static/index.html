@@ -1438,6 +1438,12 @@
                     <input type="text" id="llm-model-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="e.g., Chat-EXACODE-A or gpt-4o">
                     <p class="mt-1 text-xs text-slate-500">Enables Natural Language to JQL in the Agent Studio. Works with Exacode, OpenAI, etc.</p>
                 </div>
+
+                <div class="pt-2 border-t border-slate-700">
+                    <label for="collab-pat-input" class="block text-sm font-medium text-slate-300 mb-1 mt-2">Collab PAT (Device Agent API Docs)</label>
+                    <input type="password" id="collab-pat-input" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="Paste your Collab (Confluence) PAT here...">
+                    <p class="mt-1 text-xs text-slate-500">Enables the Device Agent to look up webOS Luna API parameters from official Collab documentation.</p>
+                </div>
             </div>
             <div class="p-4 border-t border-slate-700 bg-slate-800/50 flex justify-end gap-3">
                 <button onclick="toggleSettings()" class="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors">Cancel</button>
@@ -1462,10 +1468,10 @@
             </div>
         </div>
     </div>
-    <script src="/static/js/api_v2.js?v=16"></script>
-    <script src="/static/js/dashboard_v2.js?v=16"></script>
-    <script src="/static/js/chat_v2.js?v=20"></script>
-    <script src="/static/js/device_hud.js?v=17"></script>
+    <script src="/static/js/api_v2.js?v=26"></script>
+    <script src="/static/js/dashboard_v2.js?v=26"></script>
+    <script src="/static/js/chat_v2.js?v=26"></script>
+    <script src="/static/js/device_hud.js?v=26"></script>
     <script>
         // Initialize plugins
         if (typeof mermaid !== 'undefined') {
@@ -1717,10 +1723,12 @@
                 const llmUrlInput = document.getElementById('llm-url-input');
                 const llmKeyInput = document.getElementById('llm-key-input');
                 const llmModelInput = document.getElementById('llm-model-input');
+                const collabPatInput = document.getElementById('collab-pat-input');
                 if (input) input.value = localStorage.getItem('jira_pat') || '';
                 if (llmUrlInput) llmUrlInput.value = localStorage.getItem('llm_api_url') || '';
                 if (llmKeyInput) llmKeyInput.value = localStorage.getItem('llm_api_key') || '';
                 if (llmModelInput) llmModelInput.value = localStorage.getItem('llm_api_model') || 'Chat-EXACODE-A';
+                if (collabPatInput) collabPatInput.value = localStorage.getItem('collab_pat') || '';
                 
                 modal.classList.remove('hidden');
             } else {
@@ -1824,6 +1832,7 @@
             const llmUrl = document.getElementById('llm-url-input').value.trim();
             const llmKey = document.getElementById('llm-key-input').value.trim();
             const llmModel = document.getElementById('llm-model-input').value.trim() || 'Chat-EXACODE-A';
+            const collabPat = document.getElementById('collab-pat-input').value.trim();
             
             if (window.api && typeof window.api.setPAT === 'function') {
                 window.api.setPAT(pat);
@@ -1834,6 +1843,7 @@
             localStorage.setItem('llm_api_url', llmUrl);
             localStorage.setItem('llm_api_key', llmKey);
             localStorage.setItem('llm_api_model', llmModel);
+            localStorage.setItem('collab_pat', collabPat);
             
             toggleSettings();
             

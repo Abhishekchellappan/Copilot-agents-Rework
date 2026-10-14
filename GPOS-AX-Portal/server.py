@@ -45,6 +45,7 @@ app.add_middleware(
 MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://10.221.31.25:31983').rstrip('/')
 DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://gpos-muralidhar-device-service:8000').rstrip('/')
 JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'http://jira.lge.com/issue').rstrip('/')
+COLLAB_BASE_URL = os.environ.get('COLLAB_BASE_URL', 'http://collab.lge.com/main/spaces/WEBOSDOCS/pages/1473985612/API+Docs').rstrip('/')
 
 # Constants
 DONE_STATUSES = {"done", "closed", "resolved", "verified", "complete", "released"}
@@ -461,6 +462,7 @@ class ChatRequest(BaseModel):
     project_key: str = "SIGPOSDEV"
     history: list = []
     agent_id: str = "jira-agent"
+    collab_pat: str = ""
 
 import httpx
 import json
@@ -470,6 +472,7 @@ async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
     from mcp.client.sse import sse_client
     from mcp.client.session import ClientSession
     from contextlib import AsyncExitStack
+    import os
     import httpx
     import json
     import re
@@ -483,6 +486,14 @@ CRITICAL TOOL EXECUTION RULE:
 You MUST actually call the appropriate tool (e.g., `execute_device_command`, `launch_app`, `close_app`) to perform the action. 
 DO NOT just output HTML or text confirming the action without first executing the tool!
 
+CRITICAL SHELL & FILESYSTEM EXECUTION RULE:
+When the user asks to run shell commands on the target board (such as `grep`, `ls`, `cat`, `find`, `ps`, `df`, checking files or packages in `/usr/palm/applications/`, etc.):
+- You MUST execute the command directly on the board using `execute_device_command`.
+- For finding or searching files/directories (e.g. searching for settings in `/usr/palm/applications`):
+  Use a resilient shell command:
+  `find /usr/palm/applications -maxdepth 2 -iname "*settings*" 2>/dev/null || ls -la /usr/palm/applications | grep -i settings || grep -ri "settings" /usr/palm/applications/ 2>/dev/null | head -n 30`
+- When the user asks to "Run CPU benchmark", ALWAYS call `run_perf_benchmark(target_ip=...)`. It automatically runs the embedded performance profiler and gathers metrics!
+
 WEBOS SERVICE API RULES:
 1. webOS does NOT use standard Linux desktop utilities (like scrot, nmcli, etc.). For ANY system action (e.g., taking screenshots, networking, media), you MUST dynamically discover the relevant webOS Luna service.
 2. DISCOVERY STEPS - follow in order:
@@ -490,6 +501,13 @@ WEBOS SERVICE API RULES:
    b. Introspect to get available METHODS and PARAMETERS: `ls-monitor -i <exact.service.name>`
    c. Call the correct method using luna-send via `execute_device_command`
 3. CRITICAL - NO LOOPING RULE: If a luna-send call fails or returns `returnValue: false`, you MUST stop immediately. DO NOT retry with different methods endlessly. Instead: report what service you found, what methods are available (from ls-monitor -i), what you tried, and what error you got. Ask the user if they want to try a specific method.
+
+API PARAMETER RESOLUTION RULE:
+When the user asks you to perform an action on the device (e.g. set a timer, rotate the screen, change volume, adjust display settings, control Wi-Fi, etc.) and you do NOT know the exact JSON parameter schema for the luna-send call, you MUST:
+1. FIRST call `query_collab_api_docs` with a relevant search query (e.g. query="timer", query="screen rotation", query="audio volume") to retrieve the official API documentation.
+2. Use the exact parameter JSON schema from the Collab docs to construct your luna-send command.
+3. Execute the command via `execute_device_command` or `call_luna_service`.
+This prevents you from guessing parameter names and wasting iterations on trial-and-error.
 
 CRITICAL PRESENTATION RULES (THE WOW FACTOR):
 You MUST NEVER just output plain text for command results. You must present the data using beautiful UI widgets via `<agent-html>` tags.
@@ -676,10 +694,29 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
         async with AsyncExitStack() as stack:
 
 
-            # Connect Device
-            dev_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse", headers={}))
-            dev_session = await stack.enter_async_context(ClientSession(dev_streams[0], dev_streams[1]))
-            await dev_session.initialize()
+            collab_pat = req.collab_pat or os.environ.get("COLLAB_PAT", "") or os.environ.get("DEFAULT_COLLAB_PAT", "")
+            sse_headers = {"X-Collab-URL": COLLAB_BASE_URL}
+            if collab_pat:
+                sse_headers["X-Collab-PAT"] = collab_pat
+
+            # Connect Device MCP with retry for container restart/warmup
+            dev_session = None
+            last_conn_err = None
+            for attempt in range(3):
+                try:
+                    dev_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse", headers=sse_headers))
+                    dev_session = await stack.enter_async_context(ClientSession(dev_streams[0], dev_streams[1]))
+                    await dev_session.initialize()
+                    break
+                except Exception as conn_err:
+                    last_conn_err = conn_err
+                    if attempt < 2:
+                        import asyncio
+                        logger.warning(f"Device MCP connection attempt {attempt+1} failed ({conn_err}). Retrying in 1.5s...")
+                        await asyncio.sleep(1.5)
+                    else:
+                        logger.error(f"Failed to connect to Device MCP after 3 attempts: {conn_err}")
+                        raise last_conn_err
 
             tools = []
 
@@ -725,6 +762,13 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                             continue
                         
                         try:
+                            # Auto-inject Collab credentials and target URL for API doc lookups
+                            if func_name == "query_collab_api_docs":
+                                if collab_pat and not func_args.get("collab_pat"):
+                                    func_args["collab_pat"] = collab_pat
+                                if not func_args.get("collab_url"):
+                                    func_args["collab_url"] = COLLAB_BASE_URL
+
                             tool_result = await dev_session.call_tool(func_name, arguments=func_args)
                             
                             res_text = ""
@@ -743,7 +787,6 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
 
                             if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
                                 import uuid
-                                import os
                                 svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
@@ -755,7 +798,6 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
                                 import uuid
-                                import os
                                 import base64
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
@@ -785,12 +827,20 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                 return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
 
     except Exception as e:
-        return {"intent": "chat", "message": f"?? Could not connect to MCP Servers.\n\nError: {str(e)}"}
+        err_msg = str(e)
+        if hasattr(e, "exceptions") and getattr(e, "exceptions"):
+            err_msg = "; ".join(str(sub_e) for sub_e in getattr(e, "exceptions"))
+        logger.error(f"Device LLM Chat Error: {err_msg}", exc_info=True)
+        return {
+            "intent": "chat", 
+            "message": f"⚠️ Could not connect to the Device MCP Server ({DEVICE_MCP_SERVER_URL}).\n\nThe device container may still be starting up or restarting. Please verify your connection or try again in a few moments.\n\nDetails: {err_msg}"
+        }
 
 async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat: str):
     from mcp.client.sse import sse_client
     from mcp.client.session import ClientSession
     from contextlib import AsyncExitStack
+    import os
     import httpx
     import json
     
@@ -802,7 +852,12 @@ async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat
             await jira_session.initialize()
             
             # Connect to Device MCP
-            device_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse"))
+            collab_pat = req.collab_pat or os.environ.get("COLLAB_PAT", "") or os.environ.get("DEFAULT_COLLAB_PAT", "")
+            sse_headers = {"X-Collab-URL": COLLAB_BASE_URL}
+            if collab_pat:
+                sse_headers["X-Collab-PAT"] = collab_pat
+
+            device_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse", headers=sse_headers))
             device_session = await stack.enter_async_context(ClientSession(device_streams[0], device_streams[1]))
             await device_session.initialize()
             
@@ -946,6 +1001,12 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                             continue
                             
                         try:
+                            if func_name == "query_collab_api_docs":
+                                if collab_pat and not func_args.get("collab_pat"):
+                                    func_args["collab_pat"] = collab_pat
+                                if not func_args.get("collab_url"):
+                                    func_args["collab_url"] = COLLAB_BASE_URL
+
                             tool_result = await target_session.call_tool(func_name, arguments=func_args)
                             res_text = ""
                             if isinstance(tool_result.content, list):
@@ -963,7 +1024,6 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
 
                             if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
                                 import uuid
-                                import os
                                 svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
@@ -1014,6 +1074,20 @@ async def llm_chat(req: ChatRequest, request: Request):
     pat = get_jira_pat(request)
     if not pat and req.agent_id != 'device-agent':
         raise HTTPException(status_code=403, detail="Missing Jira PAT.")
+    
+    # Resolve Collab PAT:
+    # 1. Body param (req.collab_pat - from Portal Settings)
+    # 2. X-Collab-PAT header from request
+    # 3. Pod Environment variables (COLLAB_PAT, DEFAULT_COLLAB_PAT)
+    effective_collab_pat = (
+        (req.collab_pat or "").strip() or 
+        request.headers.get("X-Collab-PAT", "").strip() or 
+        request.headers.get("x-collab-pat", "").strip() or 
+        os.environ.get("COLLAB_PAT", "").strip() or 
+        os.environ.get("DEFAULT_COLLAB_PAT", "").strip()
+    )
+    req.collab_pat = effective_collab_pat
+
     if req.agent_id == 'supervisor-agent':
         return await supervisor_llm_chat(req, llm_url, headers, pat)
     elif req.agent_id == 'device-agent' or '[Target Board IP:' in req.message:
@@ -1263,7 +1337,6 @@ async def llm_chat(req: ChatRequest, request: Request):
     
                             if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
                                 import uuid
-                                import os
                                 svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):

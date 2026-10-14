@@ -8,10 +8,12 @@ const API = {
 
   getHeaders() {
     const pat = localStorage.getItem('jira_pat') || '';
+    const collabPat = localStorage.getItem('collab_pat') || '';
     const token = localStorage.getItem('auth_token') || '';
     const headers = { 
       'Content-Type': 'application/json', 
-      'X-Jira-PAT': pat 
+      'X-Jira-PAT': pat,
+      'X-Collab-PAT': collabPat
     };
     if (token) {
       headers['Authorization'] = 'Bearer ' + token;
@@ -81,9 +83,10 @@ const API = {
       llmModel = 'Chat-EXACODE-A';
     }
     const projectKey = this.getProjectKey();
+    const collabPat = localStorage.getItem('collab_pat') || '';
     return this._fetch('/chat', {
       method: 'POST',
-      body: JSON.stringify({ message: message, images: images, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, project_key: projectKey, history: history, agent_id: agentId })
+      body: JSON.stringify({ message: message, images: images, llm_url: llmUrl, llm_key: llmKey, llm_model: llmModel, project_key: projectKey, history: history, agent_id: agentId, collab_pat: collabPat })
     }, abortSignal);
   },
   
