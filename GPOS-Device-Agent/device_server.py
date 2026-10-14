@@ -204,6 +204,63 @@ def _run_scp(local_path: str, target_ip: str, remote_path: str, user: str = None
         return f"[ERROR] SCP execution failed: {str(e)}"
 
 
+def _fetch_remote_binary(target_ip: str, remote_path: str, timeout: int = 25) -> bytes:
+    """Fetch binary file from target device without PTY (-tt) to guarantee 8-bit clean transfer."""
+    u = DEFAULT_TARGET_USER
+    
+    # 1. Primary: Raw binary stream over non-interactive SSH (NO -tt!)
+    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10"]
+    if os.path.isfile(SSH_KEY_PATH):
+        cmd.extend(["-i", SSH_KEY_PATH])
+    cmd.extend([f"{u}@{target_ip}", f"cat '{remote_path}'"])
+    
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        if proc.returncode == 0 and len(proc.stdout) > 64:
+            return proc.stdout
+    except Exception as e:
+        logger.warning(f"SSH binary cat failed for {remote_path}: {e}")
+
+    # 2. Secondary: Fallback to SCP legacy protocol (-O) to a temporary local file
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_local = tmp.name
+        scp_cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10"]
+        if os.path.isfile(SSH_KEY_PATH):
+            scp_cmd.extend(["-i", SSH_KEY_PATH])
+        scp_cmd.extend([f"{u}@{target_ip}:{remote_path}", tmp_local])
+        proc = subprocess.run(scp_cmd, capture_output=True, timeout=timeout)
+        if proc.returncode == 0 and os.path.exists(tmp_local) and os.path.getsize(tmp_local) > 64:
+            with open(tmp_local, "rb") as f:
+                data = f.read()
+            try:
+                os.remove(tmp_local)
+            except Exception:
+                pass
+            return data
+        if os.path.exists(tmp_local):
+            os.remove(tmp_local)
+    except Exception as e:
+        logger.warning(f"SCP fallback failed for {remote_path}: {e}")
+
+    # 3. Tertiary: Base64 over raw SSH (no -tt) decoded in Python
+    try:
+        b64_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10"]
+        if os.path.isfile(SSH_KEY_PATH):
+            b64_cmd.extend(["-i", SSH_KEY_PATH])
+        b64_cmd.extend([f"{u}@{target_ip}", f"base64 '{remote_path}' 2>/dev/null"])
+        proc = subprocess.run(b64_cmd, capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        if proc.returncode == 0 and len(proc.stdout) > 64:
+            import base64
+            cleaned_b64 = proc.stdout.replace(b"\r", b"").replace(b"\n", b"").strip()
+            return base64.b64decode(cleaned_b64)
+    except Exception as e:
+        logger.warning(f"SSH base64 transfer failed for {remote_path}: {e}")
+
+    return b""
+
+
 def _resolve_target(target_ip: str) -> str:
     """Resolve target IP — use provided value or fall back to env default."""
     ip = target_ip.strip() if target_ip else DEFAULT_TARGET_IP
@@ -2673,19 +2730,28 @@ def generate_interactive_flamegraph(
 @mcp.tool()
 def take_screenshot(target_ip: str, destination_path: str = "/tmp/snapshot.png") -> str:
     """
-    Take a screenshot of the target device's current window and save it to the specified path on the device.
-    Uses robust brute-force method resolution for webOS luna services.
+    Take a screenshot of the target device's current window and return it as a Base64 string.
+    Uses robust method resolution for webOS surface managers and 8-bit clean binary streaming.
     
     :param target_ip: IP address of the target device.
-    :param destination_path: Where to save the screenshot on the target device (e.g. /tmp/snapshot.png)
+    :param destination_path: Where to save the screenshot on the target device (default /tmp/snapshot.png)
     """
     ip = _resolve_target_alias(target_ip)
     if not ip:
         return "ERROR: No target IP specified."
 
-    payload1 = '{"path":"' + destination_path + '"}'
-    payload2 = '{}'
-    payload3 = '{"output":"' + destination_path + '"}'
+    # 1. Clean up old screenshot artifacts first
+    _run_ssh(ip, f"rm -f '{destination_path}' /tmp/capture*.png /tmp/snap*.png", timeout=5)
+
+    # 2. Candidate payloads — explicitly prioritize paths before empty object!
+    payloads = [
+        json.dumps({"output": destination_path, "format": "PNG"}),
+        json.dumps({"path": destination_path, "method": "PNG"}),
+        json.dumps({"output": destination_path}),
+        json.dumps({"path": destination_path}),
+        json.dumps({"format": "PNG", "quality": 100}),
+        "{}"
+    ]
     
     # App identities to try (some webOS builds require a valid ACG-permitted app identity)
     app_ids = [
@@ -2698,6 +2764,7 @@ def take_screenshot(target_ip: str, destination_path: str = "/tmp/snapshot.png")
     
     methods_to_try = [
         "luna://com.webos.surfacemanager/captureCompositorOutput",
+        "luna://com.webos.service.tv.display/takeScreenShot",
         "luna://com.webos.service.capture/executeScreenshot",
         "luna://com.webos.service.capture/takeScreenshot",
         "luna://com.webos.service.capture/captureScreen",
@@ -2707,33 +2774,57 @@ def take_screenshot(target_ip: str, destination_path: str = "/tmp/snapshot.png")
     
     log = []
     success = False
+    resolved_file_path = destination_path
     
-    # 1. Try to take the screenshot
+    # 3. Try to take the screenshot
     for method in methods_to_try:
-        if success: break
+        if success:
+            break
         for app_id in app_ids:
-            if success: break
+            if success:
+                break
             app_flag = f"-a {app_id}" if app_id else ""
-            for payload in [payload3, payload1, payload2]:
+            for payload in payloads:
                 cmd = f"luna-send -n 1 {app_flag} {method} '{payload}'"
                 res = _run_ssh(ip, cmd.replace("  ", " "), timeout=5)
                 if '"returnValue": true' in res or '"returnValue":true' in res:
                     success = True
+                    # Check if the service returned a specific path
+                    try:
+                        import re
+                        m = re.search(r'"(?:path|output|response|imageFile|file)"\s*:\s*"([^"]+)"', res)
+                        if m:
+                            resolved_file_path = m.group(1)
+                    except Exception:
+                        pass
                     break
                 log.append(f"{method} [{app_id}]: {res.strip()[:80]}")
                 
-    # 2. Extract the file as Base64 over SSH
-    if success:
-        # Give the compositor time to write the file asynchronously
-        _run_ssh(ip, "sleep 1.5", timeout=5)
-        # Use busybox-safe base64 (no -w 0 flag) and strip newlines
-        b64_res = _run_ssh(ip, f"base64 {destination_path} 2>/dev/null | tr -d '\n'", timeout=10)
-        
-        # Verify it looks like base64 (no spaces, reasonably long)
-        if b64_res and len(b64_res.strip()) > 1000 and " " not in b64_res.strip():
-            return f"SNAPSHOT_BASE64:{b64_res.strip()}"
-            
-    return "Failed to take screenshot. Target is likely headless, or the capture service is out of memory. Log:\n" + "\n".join(log[:5])
+    if not success:
+        return "Failed to take screenshot. Target is likely headless, or the capture service is out of memory. Log:\n" + "\n".join(log[:6])
+
+    # 4. Give the compositor time to write the file asynchronously
+    _run_ssh(ip, "sync; sleep 1.5", timeout=5)
+
+    # 5. Check if the file exists on the target and determine exact path
+    check_file = _run_ssh(ip, f"test -s '{resolved_file_path}' && echo FOUND || echo NOT_FOUND", timeout=5)
+    if "FOUND" not in check_file:
+        # Check if any recent png file was created in /tmp
+        find_res = _run_ssh(ip, "ls -t /tmp/*.png 2>/dev/null | head -n 1", timeout=5)
+        if find_res and find_res.strip() and not find_res.strip().startswith("[") and "NOT_FOUND" not in find_res:
+            resolved_file_path = find_res.strip()
+
+    # 6. Extract raw binary cleanly (NO -tt pseudo-terminal!)
+    raw_bytes = _fetch_remote_binary(ip, resolved_file_path, timeout=25)
+
+    if not raw_bytes or len(raw_bytes) < 64:
+        return f"Failed to retrieve screenshot file `{resolved_file_path}` from `{ip}` (file empty or unreadable)."
+
+    # 7. Convert pristine binary bytes to Base64 in Python
+    import base64
+    b64_clean = base64.b64encode(raw_bytes).decode("ascii")
+
+    return f"SNAPSHOT_BASE64:{b64_clean}"
 
 
 if __name__ == '__main__':
