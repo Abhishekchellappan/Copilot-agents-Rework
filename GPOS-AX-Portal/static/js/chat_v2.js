@@ -102,105 +102,263 @@ window.chat = {
 
 
   currentAgentId: 'jira-agent',
+  currentSessionId: null,
   messageHistory: [],
+  MAX_SESSIONS: 30,
+
+  getSessions(agentId = this.currentAgentId) {
+    try {
+      return JSON.parse(localStorage.getItem(`sessions_${agentId}`) || '[]');
+    } catch (e) {
+      console.error("Failed to parse sessions", e);
+      return [];
+    }
+  },
+
+  setSessions(sessions, agentId = this.currentAgentId) {
+    try {
+      // Enforce 30-session FIFO limit (auto-trims oldest sessions)
+      if (sessions.length > this.MAX_SESSIONS) {
+        sessions = sessions.slice(0, this.MAX_SESSIONS);
+      }
+      localStorage.setItem(`sessions_${agentId}`, JSON.stringify(sessions));
+    } catch (e) {
+      console.warn("Storage quota exceeded, pruning oldest sessions", e);
+      while (sessions.length > 5) {
+        sessions.pop();
+        try {
+          localStorage.setItem(`sessions_${agentId}`, JSON.stringify(sessions));
+          break;
+        } catch (e2) {}
+      }
+    }
+  },
 
   saveHistory() {
     if (!this.messagesContainer) return;
-    localStorage.setItem(`chat_html_v2_${this.currentAgentId}`, this.messagesContainer.innerHTML);
-    localStorage.setItem(`chat_history_v2_${this.currentAgentId}`, JSON.stringify(this.messageHistory));
+
+    // 1. Save active scratchpad for current agent
+    try {
+      localStorage.setItem(`chat_html_v2_${this.currentAgentId}`, this.messagesContainer.innerHTML);
+      localStorage.setItem(`chat_history_v2_${this.currentAgentId}`, JSON.stringify(this.messageHistory));
+      if (this.currentSessionId) {
+        localStorage.setItem(`active_session_id_${this.currentAgentId}`, this.currentSessionId);
+      } else {
+        localStorage.removeItem(`active_session_id_${this.currentAgentId}`);
+      }
+    } catch (e) {}
+
+    // 2. Persist to sessions history list in-place
+    if (this.messageHistory && this.messageHistory.length > 0) {
+      let sessions = this.getSessions();
+      
+      // Extract summary title from first user message
+      let summary = "New Chat";
+      const firstUserMsg = this.messageHistory.find(m => m.role === 'user' || m.sender === 'user');
+      if (firstUserMsg && firstUserMsg.content) {
+        const text = typeof firstUserMsg.content === 'string' ? firstUserMsg.content : (firstUserMsg.content[0]?.text || "New Chat");
+        summary = text.replace(/\[Target Board IP:.*?\]\s*/g, '').trim().substring(0, 50);
+        if (summary.length >= 50) summary += "...";
+      }
+
+      if (this.currentSessionId) {
+        // Update existing session in-place!
+        const existingIdx = sessions.findIndex(s => s.id === this.currentSessionId);
+        if (existingIdx !== -1) {
+          sessions[existingIdx].html = this.messagesContainer.innerHTML;
+          sessions[existingIdx].history = this.messageHistory;
+          sessions[existingIdx].lastUpdated = Date.now();
+          if (summary && summary !== "New Chat") {
+            sessions[existingIdx].summary = summary;
+          }
+          // Move currently active/updated session to the top
+          const updated = sessions.splice(existingIdx, 1)[0];
+          sessions.unshift(updated);
+        } else {
+          sessions.unshift({
+            id: this.currentSessionId,
+            date: new Date().toLocaleString(),
+            lastUpdated: Date.now(),
+            html: this.messagesContainer.innerHTML,
+            history: this.messageHistory,
+            summary: summary || "New Chat"
+          });
+        }
+      } else {
+        // Create new session entry
+        this.currentSessionId = Date.now().toString();
+        try {
+          localStorage.setItem(`active_session_id_${this.currentAgentId}`, this.currentSessionId);
+        } catch (e) {}
+        sessions.unshift({
+          id: this.currentSessionId,
+          date: new Date().toLocaleString(),
+          lastUpdated: Date.now(),
+          html: this.messagesContainer.innerHTML,
+          history: this.messageHistory,
+          summary: summary || "New Chat"
+        });
+      }
+
+      this.setSessions(sessions);
+    }
   },
 
   loadHistory(agentId) {
     if (this.currentAgentId === agentId && this.messageHistory && this.messageHistory.length > 0) {
-        return;
+      return;
+    }
+
+    // Auto-save existing session before switching agents
+    if (this.messageHistory && this.messageHistory.length > 0) {
+      this.saveHistory();
     }
     
     this.currentAgentId = agentId;
+    this.currentSessionId = localStorage.getItem(`active_session_id_${agentId}`) || null;
     this.updateHeader();
     
     const savedHtml = localStorage.getItem('chat_html_v2_' + agentId);
     const savedHistory = localStorage.getItem('chat_history_v2_' + agentId);
     
     if (savedHtml && savedHistory) {
-        try {
-            this.messagesContainer.innerHTML = savedHtml;
-            this.messageHistory = JSON.parse(savedHistory);
-            if (window.lucide) window.lucide.createIcons();
-            this.scrollToBottom();
-        } catch (e) {
-            console.error("Failed to parse history", e);
-            this.clear();
-        }
-    } else {
+      try {
+        this.messagesContainer.innerHTML = savedHtml;
+        this.messageHistory = JSON.parse(savedHistory);
+        if (window.lucide) window.lucide.createIcons();
+        this.scrollToBottom();
+      } catch (e) {
+        console.error("Failed to parse history", e);
         this.clear();
+      }
+    } else {
+      this.clear();
     }
   },
   
   createNewSession() {
-    if (this.messageHistory.length > 0) {
-        let sessions = JSON.parse(localStorage.getItem(`sessions_${this.currentAgentId}`) || '[]');
-        sessions.push({
-            id: Date.now().toString(),
-            date: new Date().toLocaleString(),
-            html: this.messagesContainer.innerHTML,
-            history: this.messageHistory,
-            summary: this.messageHistory[0]?.content?.substring(0, 50) + "..." || "New Chat"
-        });
-        localStorage.setItem(`sessions_${this.currentAgentId}`, JSON.stringify(sessions));
+    // If current conversation has messages, save it to history before resetting
+    if (this.messageHistory && this.messageHistory.length > 0) {
+      this.saveHistory();
     }
+    this.currentSessionId = null;
+    try {
+      localStorage.removeItem(`active_session_id_${this.currentAgentId}`);
+    } catch (e) {}
     this.clear();
     this.saveHistory();
   },
   
   showHistoryModal() {
-      const modal = document.getElementById('history-modal');
-      const list = document.getElementById('history-list');
-      if (!modal || !list) return;
-      
-      let sessions = JSON.parse(localStorage.getItem(`sessions_${this.currentAgentId}`) || '[]');
-      
-      if (sessions.length === 0) {
-          list.innerHTML = '<div class="text-slate-400 text-sm text-center py-4">No past sessions found for this agent.</div>';
-      } else {
-          list.innerHTML = sessions.sort((a,b) => b.id - a.id).map(s => `
-              <div class="p-3 bg-slate-900/50 border border-slate-700 rounded-lg hover:border-blue-500/50 cursor-pointer transition-colors" onclick="window.chat.loadSession('${s.id}')">
-                  <div class="text-sm text-slate-200 font-medium mb-1">${s.summary}</div>
-                  <div class="text-xs text-slate-500">${s.date} G ${s.history.length} messages</div>
+    const modal = document.getElementById('history-modal');
+    const list = document.getElementById('history-list');
+    if (!modal || !list) return;
+
+    // Save current active state before opening modal
+    if (this.messageHistory && this.messageHistory.length > 0) {
+      this.saveHistory();
+    }
+    
+    let sessions = this.getSessions();
+    
+    if (sessions.length === 0) {
+      list.innerHTML = `
+        <div class="text-slate-400 text-sm text-center py-8 flex flex-col items-center gap-2">
+          <i data-lucide="message-square-dashed" class="w-8 h-8 text-slate-500"></i>
+          <div>No saved sessions for this agent.</div>
+          <div class="text-xs text-slate-500">Send a message to automatically start a session.</div>
+        </div>
+      `;
+    } else {
+      list.innerHTML = `
+        <div class="flex justify-between items-center px-1 pb-2 mb-2 border-b border-slate-700 text-xs text-slate-400">
+          <span>Saved Sessions (${sessions.length} / ${this.MAX_SESSIONS})</span>
+          <button onclick="window.chat.clearAllHistory()" class="text-red-400 hover:text-red-300 hover:underline transition-colors flex items-center gap-1">
+            <i data-lucide="trash-2" class="w-3 h-3"></i> Clear All
+          </button>
+        </div>
+      ` + sessions.map(s => {
+        const isActive = s.id === this.currentSessionId;
+        const msgCount = (s.history && s.history.length) || 0;
+        return `
+          <div class="p-3 bg-slate-900/60 border ${isActive ? 'border-blue-500/80 bg-blue-950/20 ring-1 ring-blue-500/30' : 'border-slate-700 hover:border-slate-500'} rounded-lg cursor-pointer transition-all flex items-center justify-between group" onclick="window.chat.loadSession('${s.id}')">
+            <div class="flex-1 min-w-0 pr-3">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="text-sm text-slate-200 font-medium truncate">${s.summary || 'Chat Session'}</span>
+                ${isActive ? '<span class="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/40">Active</span>' : ''}
               </div>
-          `).join('');
-      }
-      
-      modal.classList.remove('hidden');
-      modal.classList.add('flex');
+              <div class="text-xs text-slate-500 flex items-center gap-2">
+                <span>${s.date}</span>
+                <span>•</span>
+                <span>${msgCount} message${msgCount === 1 ? '' : 's'}</span>
+              </div>
+            </div>
+            <button onclick="event.stopPropagation(); window.chat.deleteSession('${s.id}')" title="Delete conversation" class="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors opacity-0 group-hover:opacity-100">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+            </button>
+          </div>
+        `;
+      }).join('');
+    }
+    
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    if (typeof lucide !== 'undefined') lucide.createIcons();
   },
   
   loadSession(id) {
-      let sessions = JSON.parse(localStorage.getItem(`sessions_${this.currentAgentId}`) || '[]');
-      let s = sessions.find(x => x.id === id);
-      if (s) {
-          // Push current to history if not empty
-          this.createNewSession();
-          
-          this.messageHistory = s.history;
-          this.messagesContainer.innerHTML = s.html;
-          this.saveHistory();
-          
-          // Remove from sessions list since it's active now
-          sessions = sessions.filter(x => x.id !== id);
-          localStorage.setItem(`sessions_${this.currentAgentId}`, JSON.stringify(sessions));
-          
-          if (typeof lucide !== 'undefined') lucide.createIcons();
-          if (typeof mermaid !== 'undefined') {
-              try { mermaid.run({ nodes: this.messagesContainer.querySelectorAll('.mermaid') }); } catch (e) {}
-          }
-          this.scrollToBottom();
-          
-          const modal = document.getElementById('history-modal');
-          if (modal) {
-              modal.classList.add('hidden');
-              modal.classList.remove('flex');
-          }
+    let sessions = this.getSessions();
+    let s = sessions.find(x => x.id === id);
+    if (s) {
+      // 1. If currently active session has unsaved changes, save it
+      if (this.currentSessionId && this.currentSessionId !== id && this.messageHistory.length > 0) {
+        this.saveHistory();
+        sessions = this.getSessions();
+        s = sessions.find(x => x.id === id) || s;
       }
+      
+      // 2. Set current active session ID
+      this.currentSessionId = s.id;
+      this.messageHistory = s.history || [];
+      this.messagesContainer.innerHTML = s.html || '';
+      
+      // 3. Keep in sessions list and persist active scratchpad — DO NOT DELETE!
+      this.saveHistory();
+      
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+      if (typeof mermaid !== 'undefined') {
+        try { mermaid.run({ nodes: this.messagesContainer.querySelectorAll('.mermaid') }); } catch (e) {}
+      }
+      this.scrollToBottom();
+      
+      const modal = document.getElementById('history-modal');
+      if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+      }
+    }
+  },
+
+  deleteSession(id) {
+    let sessions = this.getSessions();
+    sessions = sessions.filter(x => x.id !== id);
+    this.setSessions(sessions);
+
+    // If the currently open chat was deleted, reset to fresh chat
+    if (this.currentSessionId === id) {
+      this.createNewSession();
+    }
+    
+    this.showHistoryModal();
+  },
+
+  clearAllHistory() {
+    if (!confirm("Are you sure you want to clear all saved chat sessions for this agent?")) {
+      return;
+    }
+    localStorage.removeItem(`sessions_${this.currentAgentId}`);
+    this.createNewSession();
+    this.showHistoryModal();
   },
 
   updateHeader() {
