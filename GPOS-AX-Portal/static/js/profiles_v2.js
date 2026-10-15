@@ -10,29 +10,6 @@
   const KEY_PROFILES = 'credential_profiles';
   const KEY_ACTIVE_ID = 'active_credential_profile_id';
 
-  const PRESETS = {
-    exacode: {
-      name: 'EXACODE (LG Internal)',
-      llmUrl: 'https://api.exacode.lge.com/v1/chat/completions',
-      llmModel: 'Chat-EXACODE-A'
-    },
-    openai: {
-      name: 'OpenAI (Official)',
-      llmUrl: 'https://api.openai.com/v1/chat/completions',
-      llmModel: 'gpt-4o'
-    },
-    azure: {
-      name: 'Azure OpenAI',
-      llmUrl: 'https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/chat/completions?api-version=2024-02-15-preview',
-      llmModel: 'gpt-4o'
-    },
-    ollama: {
-      name: 'Local Ollama / vLLM',
-      llmUrl: 'http://localhost:11434/v1/chat/completions',
-      llmModel: 'qwen2.5-coder:14b'
-    }
-  };
-
   const ProfilesManager = {
     selectedModalProfileId: null,
 
@@ -52,15 +29,15 @@
         const legacyPat = localStorage.getItem('jira_pat') || '';
         const legacyLlmUrl = localStorage.getItem('llm_api_url') || '';
         const legacyLlmKey = localStorage.getItem('llm_api_key') || '';
-        const legacyLlmModel = localStorage.getItem('llm_api_model') || 'Chat-EXACODE-A';
+        const legacyLlmModel = localStorage.getItem('llm_api_model') || '';
         const legacyCollabPat = localStorage.getItem('collab_pat') || '';
 
         const defaultProfile = {
           id: 'prof_' + Date.now(),
-          name: legacyLlmUrl ? 'Primary Profile' : 'EXACODE Default',
+          name: 'Default Profile',
           isDefault: true,
           jiraPat: legacyPat,
-          llmUrl: legacyLlmUrl || 'https://api.exacode.lge.com/v1/chat/completions',
+          llmUrl: legacyLlmUrl,
           llmKey: legacyLlmKey,
           llmModel: legacyLlmModel,
           collabPat: legacyCollabPat,
@@ -139,9 +116,9 @@
         name: baseData.name || `Profile ${profiles.length + 1}`,
         isDefault: profiles.length === 0,
         jiraPat: baseData.jiraPat || '',
-        llmUrl: baseData.llmUrl || 'https://api.exacode.lge.com/v1/chat/completions',
+        llmUrl: baseData.llmUrl || '',
         llmKey: baseData.llmKey || '',
-        llmModel: baseData.llmModel || 'Chat-EXACODE-A',
+        llmModel: baseData.llmModel || '',
         collabPat: baseData.collabPat || '',
         createdAt: Date.now(),
         updatedAt: Date.now()
@@ -260,15 +237,6 @@
       this.showToast(`Deleted profile "${target.name}"`);
     },
 
-    applyPreset(presetKey) {
-      const preset = PRESETS[presetKey];
-      if (!preset) return;
-      const urlInput = document.getElementById('profile-llm-url');
-      const modelInput = document.getElementById('profile-llm-model');
-      if (urlInput) urlInput.value = preset.llmUrl;
-      if (modelInput) modelInput.value = preset.llmModel;
-    },
-
     updateHeaderProfileBadge() {
       const active = this.getActive();
       const el = document.getElementById('header-profile-name');
@@ -277,7 +245,7 @@
       }
       const modelBadge = document.getElementById('header-profile-model');
       if (modelBadge && active) {
-        modelBadge.textContent = active.llmModel || 'Chat-EXACODE-A';
+        modelBadge.textContent = active.llmModel || 'No Model';
       }
     },
 
@@ -454,7 +422,7 @@
         jiraPat: patInput ? patInput.value.trim() : '',
         llmUrl: urlInput ? urlInput.value.trim() : '',
         llmKey: keyInput ? keyInput.value.trim() : '',
-        llmModel: (modelInput ? modelInput.value.trim() : '') || 'Chat-EXACODE-A',
+        llmModel: modelInput ? modelInput.value.trim() : '',
         collabPat: collabPatInput ? collabPatInput.value.trim() : '',
         isDefault: isDefaultCheckbox ? isDefaultCheckbox.checked : false
       };

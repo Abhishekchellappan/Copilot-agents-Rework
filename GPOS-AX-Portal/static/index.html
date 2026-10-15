@@ -1632,29 +1632,7 @@
                         <!-- Profile Name -->
                         <div>
                             <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Profile Name</label>
-                            <input type="text" id="profile-name-input" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., EXACODE Production, OpenAI GPT-4o">
-                        </div>
-
-                        <!-- Provider Presets -->
-                        <div class="p-3 bg-slate-900/40 rounded-xl border border-slate-700/60">
-                            <div class="text-xs font-medium text-slate-400 mb-2 flex items-center justify-between">
-                                <span>Quick Provider Presets:</span>
-                                <span class="text-[10px] text-slate-400">Click to autofill URL &amp; Model</span>
-                            </div>
-                            <div class="flex flex-wrap gap-2">
-                                <button type="button" onclick="window.profiles && window.profiles.applyPreset('exacode')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs text-blue-400 font-medium transition-colors">
-                                    EXACODE
-                                </button>
-                                <button type="button" onclick="window.profiles && window.profiles.applyPreset('openai')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs text-emerald-400 font-medium transition-colors">
-                                    OpenAI (Official)
-                                </button>
-                                <button type="button" onclick="window.profiles && window.profiles.applyPreset('azure')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs text-purple-400 font-medium transition-colors">
-                                    Azure OpenAI
-                                </button>
-                                <button type="button" onclick="window.profiles && window.profiles.applyPreset('ollama')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs text-amber-400 font-medium transition-colors">
-                                    Local Ollama / vLLM
-                                </button>
-                            </div>
+                            <input type="text" id="profile-name-input" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., Production LLM, Development">
                         </div>
 
                         <!-- LLM Settings Section -->
@@ -1665,7 +1643,7 @@
 
                             <div>
                                 <label class="block text-xs font-medium text-slate-300 mb-1">LLM API Endpoint</label>
-                                <input type="text" id="profile-llm-url" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 font-mono text-xs focus:ring-1 focus:ring-blue-500" placeholder="https://api.exacode.lge.com/v1/chat/completions">
+                                <input type="text" id="profile-llm-url" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 font-mono text-xs focus:ring-1 focus:ring-blue-500" placeholder="https://api.example.com/v1/chat/completions">
                             </div>
 
                             <div>
@@ -1680,7 +1658,7 @@
 
                             <div>
                                 <label class="block text-xs font-medium text-slate-300 mb-1">LLM Model Name</label>
-                                <input type="text" id="profile-llm-model" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 font-mono text-xs focus:ring-1 focus:ring-blue-500" placeholder="Chat-EXACODE-A or gpt-4o">
+                                <input type="text" id="profile-llm-model" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 font-mono text-xs focus:ring-1 focus:ring-blue-500" placeholder="e.g., gpt-4o, custom-model">
                             </div>
                         </div>
 
