@@ -187,6 +187,9 @@
     },
 
     activate(id, reloadPage = false) {
+      const menu = document.getElementById('header-profile-menu');
+      if (menu) menu.classList.add('hidden');
+
       const profile = this.get(id);
       if (!profile) return;
 
@@ -261,6 +264,16 @@
       }
     },
 
+    safeCreateIcons() {
+      try {
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons();
+        }
+      } catch (e) {
+        console.warn('Lucide icon warning:', e);
+      }
+    },
+
     renderHeaderDropdown() {
       const menu = document.getElementById('header-profile-menu');
       if (!menu) return;
@@ -270,7 +283,7 @@
       let html = `
         <div class="px-3 py-2 border-b border-slate-700/60 flex items-center justify-between">
           <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Credential Profiles</span>
-          <button onclick="window.profiles.openSettingsModal(); window.profiles.toggleHeaderDropdown();" class="text-[11px] text-blue-400 hover:text-blue-300 font-medium">Manage</button>
+          <button type="button" onclick="event.stopPropagation(); window.profiles.openSettingsModal();" class="text-[11px] text-blue-400 hover:text-blue-300 font-medium cursor-pointer">Manage</button>
         </div>
         <div class="py-1 max-h-60 overflow-y-auto">
       `;
@@ -278,13 +291,13 @@
       profiles.forEach(p => {
         const isActive = p.id === activeId;
         html += `
-          <div onclick="window.profiles.activate('${p.id}'); window.profiles.toggleHeaderDropdown();" class="px-3 py-2 hover:bg-slate-700/50 cursor-pointer flex items-center justify-between transition-colors ${isActive ? 'bg-blue-600/10 text-blue-400 font-medium' : 'text-slate-300'}">
+          <div onclick="event.stopPropagation(); window.profiles.activate('${p.id}');" class="px-3 py-2 hover:bg-slate-700/50 cursor-pointer flex items-center justify-between transition-colors ${isActive ? 'bg-blue-600/10 text-blue-400 font-medium' : 'text-slate-300'}">
             <div class="min-w-0 pr-2">
               <div class="flex items-center gap-1.5 truncate">
                 ${p.isDefault ? '<span title="Default Profile" class="text-amber-400">★</span>' : ''}
                 <span class="truncate text-xs">${this.escapeHtml(p.name)}</span>
               </div>
-              <div class="text-[10px] text-slate-500 truncate">${this.escapeHtml(p.llmModel || 'Default Model')}</div>
+              <div class="text-[10px] text-slate-500 truncate">${this.escapeHtml(p.llmModel || 'No Model Set')}</div>
             </div>
             ${isActive ? '<span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)] shrink-0"></span>' : ''}
           </div>
@@ -294,26 +307,33 @@
       html += `
         </div>
         <div class="p-2 border-t border-slate-700/60 bg-slate-800/40">
-          <button onclick="window.profiles.openSettingsModal(true); window.profiles.toggleHeaderDropdown();" class="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors">
+          <button type="button" onclick="event.stopPropagation(); window.profiles.openSettingsModal(true);" class="w-full py-1.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm">
             <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add New Profile
           </button>
         </div>
       `;
 
       menu.innerHTML = html;
-      if (window.lucide) lucide.createIcons();
+      this.safeCreateIcons();
     },
 
     openSettingsModal(createNew = false) {
+      const menu = document.getElementById('header-profile-menu');
+      if (menu) menu.classList.add('hidden');
+
       const modal = document.getElementById('settings-modal');
       if (!modal) return;
 
-      if (createNew) {
-        this.create();
-      } else {
-        const active = this.getActive();
-        this.selectedModalProfileId = active ? active.id : (this.getAll()[0]?.id || null);
-        this.renderModal();
+      try {
+        if (createNew) {
+          this.create();
+        } else {
+          const active = this.getActive();
+          this.selectedModalProfileId = active ? active.id : (this.getAll()[0]?.id || null);
+          this.renderModal();
+        }
+      } catch (e) {
+        console.error('Error preparing profiles modal:', e);
       }
 
       modal.classList.remove('hidden');
@@ -367,7 +387,7 @@
         this.populateEditor(selected, activeId);
       }
 
-      if (window.lucide) lucide.createIcons();
+      this.safeCreateIcons();
     },
 
     selectProfileInModal(id) {
@@ -442,7 +462,7 @@
       input.type = isPassword ? 'text' : 'password';
       if (btnEl) {
         btnEl.innerHTML = isPassword ? '<i data-lucide="eye-off" class="w-4 h-4"></i>' : '<i data-lucide="eye" class="w-4 h-4"></i>';
-        if (window.lucide) lucide.createIcons();
+        this.safeCreateIcons();
       }
     },
 
