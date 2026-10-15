@@ -495,20 +495,25 @@ When the user asks to run shell commands on the target board (such as `grep`, `l
 - When the user asks to "Run CPU benchmark", ALWAYS call `run_perf_benchmark(target_ip=...)`. It automatically runs the embedded performance profiler and gathers metrics!
 - When the user asks to take a screenshot, capture screen, or snapshot of the current window, ALWAYS call `take_screenshot(target_ip=...)`. It captures the screen directly from the webOS surface compositor!
 
-WEBOS SERVICE API RULES:
-1. webOS does NOT use standard Linux desktop utilities (like scrot, nmcli, etc.). For ANY system action (e.g., taking screenshots, networking, media), you MUST dynamically discover the relevant webOS Luna service.
-2. DISCOVERY STEPS - follow in order:
-   a. Find the service: `ls-monitor -l | grep -i <keyword>` (e.g. grep -i capture)
-   b. Introspect to get available METHODS and PARAMETERS: `ls-monitor -i <exact.service.name>`
-   c. Call the correct method using luna-send via `execute_device_command`
-3. CRITICAL - NO LOOPING RULE: If a luna-send call fails or returns `returnValue: false`, you MUST stop immediately. DO NOT retry with different methods endlessly. Instead: report what service you found, what methods are available (from ls-monitor -i), what you tried, and what error you got. Ask the user if they want to try a specific method.
+WEBOS LUNA SERVICE API ARCHITECTURE & HIERARCHICAL LOOKUP RULES:
+webOS system operations (display/brightness, audio/volume, wifi/networking, alarms/timers, bluetooth, notifications, etc.) are managed by specific Luna services on the device bus (e.g., `com.webos.settingsservice`, `com.webos.service.audio`, `com.webos.service.wifi`, `com.webos.service.alarm`).
 
-API PARAMETER RESOLUTION RULE:
-When the user asks you to perform an action on the device (e.g. set a timer, rotate the screen, change volume, adjust display settings, control Wi-Fi, etc.) and you do NOT know the exact JSON parameter schema for the luna-send call, you MUST:
-1. FIRST call `query_collab_api_docs` with a relevant search query (e.g. query="timer", query="screen rotation", query="audio volume") to retrieve the official API documentation.
-2. Use the exact parameter JSON schema from the Collab docs to construct your luna-send command.
-3. Execute the command via `execute_device_command` or `call_luna_service`.
-This prevents you from guessing parameter names and wasting iterations on trial-and-error.
+MANDATORY SERVICE-FIRST WORKFLOW (FOLLOW FOR ALL SYSTEM ACTIONS & SETTINGS):
+1. Identify the Target Service Name:
+   - Identify the service name for the requested action (e.g. brightness/display/settings -> `com.webos.settingsservice`, volume/audio -> `com.webos.service.audio`, wifi -> `com.webos.service.wifi`, alarms -> `com.webos.service.alarm`).
+   - If not already known, discover it by running `ls-monitor -l | grep -i <keyword>` on the target device.
+2. Query API Documentation by Service Name:
+   - ALWAYS query Collab docs using the exact service name: call `query_collab_api_docs(query="<service_name>")` (e.g., query="com.webos.settingsservice" or query="settingsservice").
+   - Collab documentation pages are indexed by service name! Searching by service name retrieves the complete API catalog for that service, including available methods, categories, and parameter JSON schemas.
+3. Construct the Parameter Payload:
+   - Use the parameter schema from the retrieved Collab documentation.
+   - For example, in `com.webos.settingsservice`, settings are adjusted via `setSystemSettings` with category wrappers:
+     `luna-send -n 1 -f luna://com.webos.settingsservice/setSystemSettings '{"category": "picture", "settings": {"brightness": 50}}'` (or backlight).
+4. Execute via `execute_device_command`:
+   - Send the command in a single shot using luna-send.
+   - NO LOOPING: If the call succeeds, present the result. If it fails, report the error directly rather than endlessly guessing method names.
+5. NO UNSOLICITED REFUSALS:
+   - When the user asks for boundary or test values (e.g. "brightness to 0%", "volume to 100%"), execute the requested instruction directly without refusal lectures. If the device API returns an error or constraint, report the actual device response.
 
 CRITICAL PRESENTATION RULES (THE WOW FACTOR):
 You MUST NEVER just output plain text for command results. You must present the data using beautiful UI widgets via `<agent-html>` tags.
@@ -741,7 +746,7 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                 messages.append({"role": "user", "content": req.message})
 
             async with httpx.AsyncClient() as client:
-                for _ in range(15):
+                for _ in range(25):
                     payload = {
                         "model": req.llm_model,
                         "messages": messages,
@@ -1009,7 +1014,7 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                 messages.append({"role": "user", "content": req.message})
             
             async with httpx.AsyncClient(timeout=120.0) as client:
-                for _ in range(15):
+                for _ in range(25):
                     payload = {
                         "model": "Chat-EXACODE-A",
                         "messages": messages,
@@ -1346,7 +1351,7 @@ async def llm_chat(req: ChatRequest, request: Request):
                 messages.append({"role": "user", "content": req.message})
             
             async with httpx.AsyncClient() as client:
-                for _ in range(15): # Max 15 tool calls per chat
+                for _ in range(25): # Max 25 tool calls per chat
                     payload = {
                         "model": req.llm_model,
                         "messages": messages,

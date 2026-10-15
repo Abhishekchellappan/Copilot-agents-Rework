@@ -365,53 +365,117 @@ def _fetch_collab_content(page_url: str, pat: str, query: str = "") -> str:
             else:
                 return re.sub(r"<[^>]+>", "", html_text)
 
+        def _extract_relevant_section(text: str, search_query: str, max_chars: int = 5000) -> str:
+            if len(text) <= max_chars:
+                return text
+            q_words = [w for w in re.split(r'\W+', search_query.lower()) if len(w) >= 3 and w not in ('the', 'and', 'for', 'api', 'service', 'webos', 'docs')]
+            best_pos = -1
+            for w in q_words:
+                pos = text.lower().find(w)
+                if pos != -1 and (best_pos == -1 or pos < best_pos):
+                    best_pos = pos
+            if best_pos == -1 or best_pos < 1200:
+                return text[:max_chars]
+            intro = text[:1000] + "\n\n... [Content skipped for brevity] ...\n\n"
+            start = max(0, best_pos - 400)
+            end = min(len(text), start + (max_chars - 1200))
+            return intro + text[start:end]
+
+        # Service Keyword Map for automatic property-to-service resolution
+        SERVICE_KEYWORD_MAP = {
+            "brightness": ["settingsservice", "com.webos.settingsservice", "display"],
+            "backlight": ["settingsservice", "com.webos.settingsservice", "display"],
+            "display": ["settingsservice", "com.webos.service.display", "display"],
+            "picture": ["settingsservice", "com.webos.settingsservice"],
+            "volume": ["audio", "com.webos.service.audio"],
+            "sound": ["audio", "com.webos.service.audio"],
+            "mute": ["audio", "com.webos.service.audio"],
+            "wifi": ["wifi", "connectionmanager", "com.webos.service.wifi"],
+            "wlan": ["wifi", "connectionmanager"],
+            "network": ["connectionmanager", "wifi"],
+            "bluetooth": ["bluetooth2", "com.webos.service.bluetooth2"],
+            "alarm": ["alarm", "com.webos.service.alarm"],
+            "timer": ["alarm", "com.webos.service.alarm"],
+            "clock": ["alarm", "com.webos.service.alarm"],
+            "power": ["power", "com.webos.service.power"],
+            "reboot": ["power", "com.webos.service.power"],
+            "time": ["settingsservice", "com.webos.settingsservice"],
+            "app": ["applicationManager", "applicationmanager"],
+            "launch": ["applicationManager", "applicationmanager"],
+        }
+
         # 3. If a search query is provided, use Confluence CQL to search all child/descendant pages
         if query and query.strip():
             q_clean = query.strip().replace('"', '\\"')
+            
+            # Build search queries: exact query, short service name, and mapped service candidates
+            cql_candidates = []
+            
+            # If query is already a full service name (e.g. com.webos.settingsservice)
+            short_name = ""
+            if "com.webos." in q_clean.lower():
+                short_name = q_clean.lower().replace("com.webos.service.", "").replace("com.webos.", "").strip()
+
             cql_parts = []
             if page_id:
                 cql_parts.append(f'ancestor = {page_id}')
             elif space:
                 cql_parts.append(f'space = "{space}"')
-            cql_parts.append(f'(title ~ "{q_clean}" OR text ~ "{q_clean}")')
-            cql = " AND ".join(cql_parts)
 
-            search_url = f"{api_base}/search?cql={urllib.parse.quote(cql)}&limit=5&expand=body.storage"
-            resp = req.get(search_url, headers=headers, timeout=30, verify=False)
+            # Primary CQL: search title and text
+            if short_name:
+                cql_candidates.append(" AND ".join(cql_parts + [f'(title ~ "{q_clean}" OR title ~ "{short_name}" OR text ~ "{short_name}")']))
+            else:
+                cql_candidates.append(" AND ".join(cql_parts + [f'(title ~ "{q_clean}" OR text ~ "{q_clean}")']))
 
-            if resp.status_code in (401, 403):
-                return f"[ERROR] Collab authentication failed (HTTP {resp.status_code}). Please verify your Collab PAT in Portal Settings (⚙️)."
+            # Secondary candidate from Service Keyword Map
+            for kw, s_list in SERVICE_KEYWORD_MAP.items():
+                if kw in q_clean.lower():
+                    for s in s_list:
+                        cql_candidates.append(" AND ".join(cql_parts + [f'title ~ "{s}"']))
+                    break
 
-            if resp.status_code == 200:
-                s_data = resp.json()
-                results = s_data.get("results", [])
-                
-                # If exact phrase returned no results, retry with primary keyword (ignoring stop words)
-                if not results and " " in query.strip():
-                    stop_words = {"service", "services", "api", "apis", "the", "for", "docs", "documentation", "webos"}
-                    keywords = [w for w in query.strip().split() if len(w) >= 3 and w.lower() not in stop_words]
-                    if keywords:
-                        primary_kw = keywords[0].replace('"', '\\"')
-                        cql_kw = []
-                        if page_id:
-                            cql_kw.append(f'ancestor = {page_id}')
-                        elif space:
-                            cql_kw.append(f'space = "{space}"')
-                        cql_kw.append(f'(title ~ "{primary_kw}" OR text ~ "{primary_kw}")')
-                        search_url_kw = f"{api_base}/search?cql={urllib.parse.quote(' AND '.join(cql_kw))}&limit=5&expand=body.storage"
-                        resp_kw = req.get(search_url_kw, headers=headers, timeout=20, verify=False)
-                        if resp_kw.status_code == 200:
-                            results = resp_kw.json().get("results", [])
+            # Execute search through candidates until we find matching pages
+            results = []
+            for cql_candidate in cql_candidates:
+                search_url = f"{api_base}/search?cql={urllib.parse.quote(cql_candidate)}&limit=5&expand=body.storage"
+                resp = req.get(search_url, headers=headers, timeout=25, verify=False)
+                if resp.status_code in (401, 403):
+                    return f"[ERROR] Collab authentication failed (HTTP {resp.status_code}). Please verify your Collab PAT in Portal Settings (⚙️)."
+                if resp.status_code == 200:
+                    s_data = resp.json()
+                    res_candidate = s_data.get("results", [])
+                    if res_candidate:
+                        results = res_candidate
+                        break
 
-                if results:
-                    docs = [f"## 🔍 Collab API Search Results for `{query}`:"]
-                    for idx, p in enumerate(results[:3]):
-                        p_title = p.get("title", "Untitled")
-                        p_id = p.get("id", "")
-                        p_body = p.get("body", {}).get("storage", {}).get("value", "")
-                        p_text = _html_to_markdown(p_body)
-                        docs.append(f"### 📄 Page: {p_title} (ID: {p_id})\n{p_text[:3000]}\n---")
-                    return "\n\n".join(docs)
+            # If still no results and multiple words, retry with primary keyword
+            if not results and " " in query.strip():
+                stop_words = {"service", "services", "api", "apis", "the", "for", "docs", "documentation", "webos", "reduce", "increase", "decrease", "set"}
+                keywords = [w for w in query.strip().split() if len(w) >= 3 and w.lower() not in stop_words]
+                if keywords:
+                    primary_kw = keywords[0].replace('"', '\\"')
+                    cql_kw = []
+                    if page_id:
+                        cql_kw.append(f'ancestor = {page_id}')
+                    elif space:
+                        cql_kw.append(f'space = "{space}"')
+                    cql_kw.append(f'(title ~ "{primary_kw}" OR text ~ "{primary_kw}")')
+                    search_url_kw = f"{api_base}/search?cql={urllib.parse.quote(' AND '.join(cql_kw))}&limit=5&expand=body.storage"
+                    resp_kw = req.get(search_url_kw, headers=headers, timeout=20, verify=False)
+                    if resp_kw.status_code == 200:
+                        results = resp_kw.json().get("results", [])
+
+            if results:
+                docs = [f"## 🔍 Collab API Search Results for `{query}`:"]
+                for idx, p in enumerate(results[:3]):
+                    p_title = p.get("title", "Untitled")
+                    p_id = p.get("id", "")
+                    p_body = p.get("body", {}).get("storage", {}).get("value", "")
+                    p_text = _html_to_markdown(p_body)
+                    targeted_section = _extract_relevant_section(p_text, query, max_chars=5000)
+                    docs.append(f"### 📄 Service Page: {p_title} (ID: {p_id})\n{targeted_section}\n---")
+                return "\n\n".join(docs)
 
             # If ancestor CQL returned nothing and we have space, try space-wide search
             if space:
@@ -428,7 +492,8 @@ def _fetch_collab_content(page_url: str, pat: str, query: str = "") -> str:
                             p_id = p.get("id", "")
                             p_body = p.get("body", {}).get("storage", {}).get("value", "")
                             p_text = _html_to_markdown(p_body)
-                            docs2.append(f"### 📄 Page: {p_title} (ID: {p_id})\n{p_text[:3000]}\n---")
+                            targeted_section = _extract_relevant_section(p_text, query, max_chars=5000)
+                            docs2.append(f"### 📄 Service Page: {p_title} (ID: {p_id})\n{targeted_section}\n---")
                         return "\n\n".join(docs2)
 
         # 4. If no query or search returned no matches, fetch the root page and list child pages
@@ -1556,7 +1621,7 @@ def query_collab_api_docs(query: str = "", collab_url: str = "", collab_pat: str
 
     output = f"📚 **Collab API Documentation** (Live from Wiki)\n"
     output += f"**Source**: `{collab_url}`\n\n"
-    output += content[:8000]  # Cap output to prevent overwhelming responses
+    output += content[:12000]  # Cap output to prevent overwhelming responses
 
     return output
 
