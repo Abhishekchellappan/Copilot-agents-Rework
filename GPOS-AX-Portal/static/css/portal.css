@@ -254,3 +254,40 @@ body.light-theme .agent-content th { background-color: #e2e8f0; color: #334155; 
 body.light-theme .agent-content td { border-color: #cbd5e1; background-color: #ffffff; }
 body.light-theme .agent-content tr:nth-child(even) td { background-color: #f8fafc; }
 body.light-theme .mermaid { background-color: #ffffff; border: 1px solid #cbd5e1; }
+
+/* Additional Light Theme overrides */
+body.light-theme .sidebar {
+  background: #ffffff;
+  border-right-color: #e2e8f0;
+}
+body.light-theme .sidebar-nav-item {
+  color: #475569;
+}
+body.light-theme .sidebar-nav-item:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+body.light-theme .sidebar-nav-item.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+body.light-theme .agent-card {
+  background: #ffffff;
+  border-color: #e2e8f0;
+}
+body.light-theme .filter-pill:not(.active) {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+body.light-theme .filter-pill:not(.active):hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+body.light-theme .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+body.light-theme .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

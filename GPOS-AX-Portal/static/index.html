@@ -11,39 +11,125 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/portal.css?v=3">
+    <link rel="stylesheet" href="/static/css/portal.css?v=4">
     <style>
         /* Base styles */
         body { font-family: 'Inter', sans-serif; }
         
         /* Light Theme Overrides */
         body.light-theme {
-            background-color: #f4f5f7 !important;
-            color: #1e293b !important;
+            background-color: #f8fafc !important;
+            color: #0f172a !important;
         }
-        body.light-theme .bg-slate-900 { background-color: #f4f5f7 !important; }
-        body.light-theme .bg-slate-900\/90 { background-color: rgba(244, 245, 247, 0.9) !important; }
-        body.light-theme .bg-slate-900\/50 { background-color: rgba(244, 245, 247, 0.5) !important; }
+        body.light-theme .bg-slate-950,
+        body.light-theme .bg-slate-950\/60,
+        body.light-theme .bg-slate-900 { background-color: #f1f5f9 !important; }
+        body.light-theme .bg-slate-900\/90 { background-color: rgba(241, 245, 249, 0.95) !important; }
+        body.light-theme .bg-slate-900\/80 { background-color: rgba(241, 245, 249, 0.9) !important; }
+        body.light-theme .bg-slate-900\/70 { background-color: rgba(241, 245, 249, 0.85) !important; }
+        body.light-theme .bg-slate-900\/60 { background-color: rgba(241, 245, 249, 0.75) !important; }
+        body.light-theme .bg-slate-900\/50 { background-color: rgba(241, 245, 249, 0.6) !important; }
+        body.light-theme .bg-slate-900\/40 { background-color: rgba(241, 245, 249, 0.5) !important; }
+
         body.light-theme .bg-slate-800 { background-color: #ffffff !important; }
-        body.light-theme .bg-slate-800\/80 { background-color: rgba(255, 255, 255, 0.8) !important; }
-        body.light-theme .bg-slate-800\/50 { background-color: rgba(255, 255, 255, 0.5) !important; }
+        body.light-theme .bg-slate-800\/90 { background-color: rgba(255, 255, 255, 0.95) !important; }
+        body.light-theme .bg-slate-800\/80 { background-color: rgba(255, 255, 255, 0.9) !important; }
+        body.light-theme .bg-slate-800\/70 { background-color: rgba(255, 255, 255, 0.85) !important; }
+        body.light-theme .bg-slate-800\/60 { 
+            background-color: #ffffff !important; 
+            border-color: #e2e8f0 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.04), 0 2px 4px -1px rgba(0, 0, 0, 0.02) !important;
+        }
+        body.light-theme .bg-slate-800\/50 { background-color: rgba(255, 255, 255, 0.7) !important; }
+        body.light-theme .bg-slate-800\/40 { background-color: rgba(255, 255, 255, 0.6) !important; }
+        body.light-theme .bg-slate-750 { background-color: #f8fafc !important; }
         body.light-theme .bg-slate-700 { background-color: #f1f5f9 !important; }
+        body.light-theme .bg-slate-700\/60 { background-color: rgba(241, 245, 249, 0.8) !important; }
+        body.light-theme .bg-slate-700\/20 { background-color: rgba(241, 245, 249, 0.5) !important; }
+        body.light-theme .bg-slate-600 { background-color: #e2e8f0 !important; }
         
+        /* Text Overrides for Light Theme */
         body.light-theme .text-white { color: #0f172a !important; }
-        body.light-theme .text-slate-100 { color: #1e293b !important; }
-        body.light-theme .text-slate-200 { color: #334155 !important; }
-        body.light-theme .text-slate-300 { color: #475569 !important; }
+        body.light-theme .text-slate-100 { color: #0f172a !important; }
+        body.light-theme .text-slate-200 { color: #1e293b !important; }
+        body.light-theme .text-slate-300 { color: #334155 !important; }
         body.light-theme .text-slate-400 { color: #64748b !important; }
+        body.light-theme .text-slate-500 { color: #64748b !important; }
+        body.light-theme .text-slate-600 { color: #475569 !important; }
         
+        /* Border Overrides for Light Theme */
         body.light-theme .border-slate-800 { border-color: #e2e8f0 !important; }
-        body.light-theme .border-slate-700 { border-color: #cbd5e1 !important; }
-        body.light-theme .border-slate-700\/50 { border-color: rgba(203, 213, 225, 0.5) !important; }
-        body.light-theme .border-slate-600 { border-color: #94a3b8 !important; }
+        body.light-theme .border-slate-800\/80 { border-color: rgba(226, 232, 240, 0.8) !important; }
+        body.light-theme .border-slate-700 { border-color: #e2e8f0 !important; }
+        body.light-theme .border-slate-700\/60 { border-color: #e2e8f0 !important; }
+        body.light-theme .border-slate-700\/50 { border-color: #e2e8f0 !important; }
+        body.light-theme .border-slate-700\/40 { border-color: #e2e8f0 !important; }
+        body.light-theme .border-slate-700\/30 { border-color: #e2e8f0 !important; }
+        body.light-theme .border-slate-600 { border-color: #cbd5e1 !important; }
         
-        body.light-theme aside { background-color: #ffffff !important; border-right-color: #e2e8f0 !important; }
-        body.light-theme .agent-card { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03) !important; }
+        /* Hover Overrides for Light Theme */
+        body.light-theme .hover\:bg-slate-800:hover { background-color: #f1f5f9 !important; color: #0f172a !important; }
+        body.light-theme .hover\:bg-slate-700:hover { background-color: #e2e8f0 !important; color: #0f172a !important; }
+        body.light-theme .hover\:bg-slate-700\/20:hover { background-color: rgba(241, 245, 249, 0.9) !important; }
+        body.light-theme .hover\:bg-slate-600:hover { background-color: #cbd5e1 !important; }
+        body.light-theme .hover\:text-white:hover { color: #0f172a !important; }
+
+        /* Sidebar in Light Theme */
+        body.light-theme aside { 
+            background-color: #ffffff !important; 
+            border-right-color: #e2e8f0 !important; 
+            box-shadow: 2px 0 8px rgba(0, 0, 0, 0.02);
+        }
+        body.light-theme .sidebar { 
+            background-color: #ffffff !important; 
+            border-right-color: #e2e8f0 !important; 
+        }
+        body.light-theme aside nav .nav-item {
+            color: #475569 !important;
+        }
+        body.light-theme aside nav .nav-item:hover {
+            background-color: #f1f5f9 !important;
+            color: #0f172a !important;
+        }
+        body.light-theme aside nav .nav-item.bg-slate-800 {
+            background-color: #2563eb !important;
+            color: #ffffff !important;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25) !important;
+        }
+        body.light-theme aside nav .nav-item.bg-slate-800 i,
+        body.light-theme aside nav .nav-item.bg-slate-800 span {
+            color: #ffffff !important;
+        }
+
+        /* Top header in light theme */
+        body.light-theme header {
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            border-bottom-color: #e2e8f0 !important;
+        }
+        body.light-theme #header-project-key {
+            background-color: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+        }
+
+        /* Filter button in light theme */
+        body.light-theme .bg-blue-600.filter-btn {
+            background-color: #2563eb !important;
+            border-color: #2563eb !important;
+            color: #ffffff !important;
+        }
+
+        /* Agent Cards in Light Theme */
+        body.light-theme .agent-card { 
+            background-color: #ffffff !important;
+            border-color: #e2e8f0 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03) !important; 
+        }
+        body.light-theme .agent-card:hover {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04) !important;
+            border-color: #cbd5e1 !important;
+        }
         
-        /* Agent Card tags text in light mode */
+        /* Accent tags text in light mode */
         body.light-theme .text-blue-400 { color: #2563eb !important; }
         body.light-theme .text-purple-400 { color: #9333ea !important; }
         body.light-theme .text-red-400 { color: #dc2626 !important; }
@@ -51,17 +137,69 @@
         body.light-theme .text-amber-400 { color: #d97706 !important; }
         body.light-theme .text-cyan-400 { color: #0891b2 !important; }
         body.light-theme .text-green-400 { color: #16a34a !important; }
-        
-        /* Red accents to match reference */
-        body.light-theme nav .bg-slate-800.text-white { 
-            background-color: #dc2626 !important; 
-            color: #ffffff !important;
-            box-shadow: 0 4px 10px rgba(220, 38, 38, 0.2);
+
+        /* Admin KPI Cards (Dark Default) */
+        .kpi-card-blue {
+            background: linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(15,23,42,0.95) 100%);
+            border-color: rgba(59,130,246,0.25);
         }
-        body.light-theme .bg-blue-600.filter-btn {
-            background-color: #dc2626 !important;
-            border-color: #dc2626 !important;
-            color: white !important;
+        .kpi-card-green {
+            background: linear-gradient(135deg, rgba(34,197,94,0.12) 0%, rgba(15,23,42,0.95) 100%);
+            border-color: rgba(34,197,94,0.25);
+        }
+        .kpi-card-purple {
+            background: linear-gradient(135deg, rgba(168,85,247,0.12) 0%, rgba(15,23,42,0.95) 100%);
+            border-color: rgba(168,85,247,0.25);
+        }
+        .kpi-card-amber {
+            background: linear-gradient(135deg, rgba(245,158,11,0.12) 0%, rgba(15,23,42,0.95) 100%);
+            border-color: rgba(245,158,11,0.25);
+        }
+        .kpi-glow-blue { background: radial-gradient(circle, rgba(59,130,246,0.12), transparent 70%); }
+        .kpi-glow-green { background: radial-gradient(circle, rgba(34,197,94,0.12), transparent 70%); }
+        .kpi-glow-purple { background: radial-gradient(circle, rgba(168,85,247,0.12), transparent 70%); }
+        .kpi-glow-amber { background: radial-gradient(circle, rgba(245,158,11,0.12), transparent 70%); }
+
+        /* Admin KPI Cards (Light Theme) */
+        body.light-theme .kpi-card-blue {
+            background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%) !important;
+            border-color: #bfdbfe !important;
+            box-shadow: 0 4px 12px -2px rgba(59, 130, 246, 0.08) !important;
+        }
+        body.light-theme .kpi-card-green {
+            background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%) !important;
+            border-color: #bbf7d0 !important;
+            box-shadow: 0 4px 12px -2px rgba(34, 197, 94, 0.08) !important;
+        }
+        body.light-theme .kpi-card-purple {
+            background: linear-gradient(135deg, #faf5ff 0%, #ffffff 100%) !important;
+            border-color: #e9d5ff !important;
+            box-shadow: 0 4px 12px -2px rgba(168, 85, 247, 0.08) !important;
+        }
+        body.light-theme .kpi-card-amber {
+            background: linear-gradient(135deg, #fffbeb 0%, #ffffff 100%) !important;
+            border-color: #fde68a !important;
+            box-shadow: 0 4px 12px -2px rgba(245, 158, 11, 0.08) !important;
+        }
+        body.light-theme .kpi-glow-blue { background: radial-gradient(circle, rgba(59,130,246,0.15), transparent 70%) !important; }
+        body.light-theme .kpi-glow-green { background: radial-gradient(circle, rgba(34,197,94,0.15), transparent 70%) !important; }
+        body.light-theme .kpi-glow-purple { background: radial-gradient(circle, rgba(168,85,247,0.15), transparent 70%) !important; }
+        body.light-theme .kpi-glow-amber { background: radial-gradient(circle, rgba(245,158,11,0.15), transparent 70%) !important; }
+
+        /* Guide tabs in light mode */
+        body.light-theme .guide-tab-btn:not(.bg-cyan-600) { 
+            background-color: #ffffff !important; 
+            border: 1px solid #cbd5e1 !important; 
+            color: #475569 !important; 
+        }
+        body.light-theme .guide-tab-btn:not(.bg-cyan-600):hover { 
+            background-color: #f1f5f9 !important; 
+            color: #0f172a !important; 
+        }
+
+        /* Device HUD dials in light mode */
+        body.light-theme svg circle[stroke="#1e293b"] { 
+            stroke: #e2e8f0 !important; 
         }
         /* ===== Login Page Animations ===== */
         .login-orb {
@@ -846,26 +984,26 @@
 
                 <!-- KPI Cards Row -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div class="rounded-2xl p-5 border relative overflow-hidden" style="background: linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(15,23,42,0.95) 100%); border-color: rgba(59,130,246,0.25);">
-                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full" style="background: radial-gradient(circle, rgba(59,130,246,0.12), transparent 70%); transform: translate(30%, -30%);"></div>
+                    <div class="rounded-2xl p-5 border relative overflow-hidden kpi-card-blue">
+                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full kpi-glow-blue" style="transform: translate(30%, -30%);"></div>
                         <div class="flex items-center gap-3 mb-3"><div class="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center"><i data-lucide="users" class="w-4 h-4 text-blue-400"></i></div><span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Users</span></div>
                         <div id="admin-kpi-total-users" class="text-3xl font-bold text-white">-</div>
                         <div class="text-xs text-blue-400 mt-1">Registered accounts</div>
                     </div>
-                    <div class="rounded-2xl p-5 border relative overflow-hidden" style="background: linear-gradient(135deg, rgba(34,197,94,0.12) 0%, rgba(15,23,42,0.95) 100%); border-color: rgba(34,197,94,0.25);">
-                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full" style="background: radial-gradient(circle, rgba(34,197,94,0.12), transparent 70%); transform: translate(30%, -30%);"></div>
+                    <div class="rounded-2xl p-5 border relative overflow-hidden kpi-card-green">
+                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full kpi-glow-green" style="transform: translate(30%, -30%);"></div>
                         <div class="flex items-center gap-3 mb-3"><div class="w-8 h-8 rounded-lg bg-green-500/20 flex items-center justify-center"><i data-lucide="activity" class="w-4 h-4 text-green-400"></i></div><span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Active Now</span></div>
                         <div id="admin-kpi-active-users" class="text-3xl font-bold text-white">-</div>
                         <div class="text-xs text-green-400 mt-1 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-green-400 inline-block animate-pulse"></span> Last 10 min</div>
                     </div>
-                    <div class="rounded-2xl p-5 border relative overflow-hidden" style="background: linear-gradient(135deg, rgba(168,85,247,0.12) 0%, rgba(15,23,42,0.95) 100%); border-color: rgba(168,85,247,0.25);">
-                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full" style="background: radial-gradient(circle, rgba(168,85,247,0.12), transparent 70%); transform: translate(30%, -30%);"></div>
+                    <div class="rounded-2xl p-5 border relative overflow-hidden kpi-card-purple">
+                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full kpi-glow-purple" style="transform: translate(30%, -30%);"></div>
                         <div class="flex items-center gap-3 mb-3"><div class="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center"><i data-lucide="clock" class="w-4 h-4 text-purple-400"></i></div><span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Sessions</span></div>
                         <div id="admin-kpi-sessions" class="text-3xl font-bold text-white">-</div>
                         <div class="text-xs text-purple-400 mt-1">All-time interactions</div>
                     </div>
-                    <div class="rounded-2xl p-5 border relative overflow-hidden" style="background: linear-gradient(135deg, rgba(245,158,11,0.12) 0%, rgba(15,23,42,0.95) 100%); border-color: rgba(245,158,11,0.25);">
-                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full" style="background: radial-gradient(circle, rgba(245,158,11,0.12), transparent 70%); transform: translate(30%, -30%);"></div>
+                    <div class="rounded-2xl p-5 border relative overflow-hidden kpi-card-amber">
+                        <div class="absolute top-0 right-0 w-24 h-24 rounded-full kpi-glow-amber" style="transform: translate(30%, -30%);"></div>
                         <div class="flex items-center gap-3 mb-3"><div class="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center"><i data-lucide="zap" class="w-4 h-4 text-amber-400"></i></div><span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Top Agent</span></div>
                         <div id="admin-kpi-top-agent" class="text-base font-bold text-white truncate">-</div>
                         <div id="admin-kpi-top-agent-hours" class="text-xs text-amber-400 mt-1">Most used agent</div>
@@ -1800,18 +1938,33 @@
         // Theme Toggle Logic
         function toggleTheme() {
             const body = document.body;
+            const html = document.documentElement;
             const isLight = body.classList.contains('light-theme');
             
             if (isLight) {
                 body.classList.remove('light-theme');
+                html.classList.remove('light');
+                html.classList.add('dark');
                 document.getElementById('theme-icon').setAttribute('data-lucide', 'moon');
                 localStorage.setItem('theme', 'dark');
             } else {
                 body.classList.add('light-theme');
+                html.classList.remove('dark');
+                html.classList.add('light');
                 document.getElementById('theme-icon').setAttribute('data-lucide', 'sun');
                 localStorage.setItem('theme', 'light');
             }
-            lucide.createIcons();
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+
+            // Re-render active view's charts to adapt to theme colors
+            const adminView = document.getElementById('view-admin');
+            if (adminView && !adminView.classList.contains('hidden') && typeof loadAdminStats === 'function') {
+                loadAdminStats();
+            }
+            const dashView = document.getElementById('view-dashboard');
+            if (dashView && !dashView.classList.contains('hidden') && typeof dashboard !== 'undefined' && dashboard.loadData) {
+                dashboard.loadData();
+            }
         }
         
         // Update Project Key from Header Dropdown
@@ -2120,8 +2273,12 @@
             // Restore Theme
             if (localStorage.getItem('theme') === 'light') {
                 document.body.classList.add('light-theme');
+                document.documentElement.classList.remove('dark');
+                document.documentElement.classList.add('light');
                 const icon = document.getElementById('theme-icon');
                 if (icon) icon.setAttribute('data-lucide', 'sun');
+            } else {
+                document.documentElement.classList.add('dark');
             }
 
             // Set default view
@@ -2207,14 +2364,22 @@
                     if (topHoursEl) topHoursEl.textContent = 'Use an agent first!';
                 }
                 var ucEl = document.getElementById('admin-users-count'); if (ucEl) ucEl.textContent = (data.total_users||0) + ' Users';
+                var isLight = document.body.classList.contains('light-theme');
+                var gridColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
+                var tickColor = isLight ? '#475569' : '#64748b';
+
                 var polarCtx = document.getElementById('admin-agent-polar-chart');
                 if (polarCtx) {
                     if (_adminPolarChart) _adminPolarChart.destroy();
                     var labels = (data.agent_usage||[]).map(function(a){return a.agent_id;});
                     var vals = (data.agent_usage||[]).map(function(a){return Math.round((a.total_seconds||0)/60);});
-                    var colors = ['rgba(59,130,246,0.75)','rgba(168,85,247,0.75)','rgba(34,197,94,0.75)','rgba(245,158,11,0.75)','rgba(239,68,68,0.75)','rgba(20,184,166,0.75)'];
+                    var colors = ['rgba(59,130,246,0.85)','rgba(168,85,247,0.85)','rgba(34,197,94,0.85)','rgba(245,158,11,0.85)','rgba(239,68,68,0.85)','rgba(20,184,166,0.85)'];
                     if (!labels.length) { labels=['No data']; vals=[1]; }
-                    _adminPolarChart = new Chart(polarCtx, {type:'polarArea',data:{labels:labels,datasets:[{data:vals,backgroundColor:colors.slice(0,labels.length),borderColor:'rgba(255,255,255,0.08)',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#94a3b8',font:{size:10},boxWidth:10,padding:8}}},scales:{r:{ticks:{display:false},grid:{color:'rgba(255,255,255,0.05)'}}}}});
+                    _adminPolarChart = new Chart(polarCtx, {
+                        type:'polarArea',
+                        data:{labels:labels,datasets:[{data:vals,backgroundColor:colors.slice(0,labels.length),borderColor:isLight ? '#ffffff' : 'rgba(255,255,255,0.08)',borderWidth:isLight ? 2 : 1}]},
+                        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:isLight ? '#334155' : '#94a3b8',font:{size:10},boxWidth:10,padding:8}}},scales:{r:{ticks:{display:false},grid:{color:gridColor}}}}
+                    });
                 }
                 var lineCtx = document.getElementById('admin-daily-line-chart');
                 if (lineCtx) {
@@ -2223,8 +2388,13 @@
                     var lv = (data.daily_activity||[]).map(function(d){return Math.round((d.total_seconds||0)/60);});
                     if (!ll.length) { ll=['No data']; lv=[0]; }
                     var grad = lineCtx.getContext('2d').createLinearGradient(0,0,0,200);
-                    grad.addColorStop(0,'rgba(59,130,246,0.4)'); grad.addColorStop(1,'rgba(59,130,246,0.0)');
-                    _adminLineChart = new Chart(lineCtx, {type:'line',data:{labels:ll,datasets:[{data:lv,fill:true,backgroundColor:grad,borderColor:'#3b82f6',borderWidth:2.5,tension:0.4,pointBackgroundColor:'#60a5fa',pointRadius:4,pointHoverRadius:7}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(255,255,255,0.04)'}},y:{ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(255,255,255,0.06)'},beginAtZero:true}}}});
+                    grad.addColorStop(0, isLight ? 'rgba(59,130,246,0.25)' : 'rgba(59,130,246,0.4)');
+                    grad.addColorStop(1, 'rgba(59,130,246,0.0)');
+                    _adminLineChart = new Chart(lineCtx, {
+                        type:'line',
+                        data:{labels:ll,datasets:[{data:lv,fill:true,backgroundColor:grad,borderColor:'#3b82f6',borderWidth:2.5,tension:0.4,pointBackgroundColor:'#3b82f6',pointRadius:4,pointHoverRadius:7}]},
+                        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tickColor,font:{size:10}},grid:{color:gridColor}},y:{ticks:{color:tickColor,font:{size:10}},grid:{color:gridColor},beginAtZero:true}}}
+                    });
                 }
                 var hourlyCtx = document.getElementById('admin-hourly-bar-chart');
                 if (hourlyCtx) {
@@ -2233,8 +2403,13 @@
                     var hmap = {}; (data.hourly_activity||[]).forEach(function(h){var d = new Date(); d.setUTCHours(parseInt(h.hour, 10)); d.setUTCMinutes(0); var lh = d.getHours(); var lhs = (lh < 10 ? '0' : '') + lh; hmap[lhs] = (hmap[lhs] || 0) + h.count;});
                     var hdata = hrs.map(function(h){return hmap[h]||0;});
                     var maxV = Math.max.apply(null,hdata)||1;
-                    var bcol = hdata.map(function(v){var r=v/maxV; return r>0.7?'rgba(59,130,246,0.85)':r>0.4?'rgba(99,102,241,0.65)':'rgba(51,65,85,0.5)';});
-                    _adminHourlyChart = new Chart(hourlyCtx, {type:'bar',data:{labels:hrs.map(function(h){return h+':00';}),datasets:[{data:hdata,backgroundColor:bcol,borderRadius:4,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#475569',font:{size:9},maxRotation:0},grid:{display:false}},y:{ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(255,255,255,0.04)'},beginAtZero:true}}}});
+                    var inactiveBar = isLight ? 'rgba(203, 213, 225, 0.7)' : 'rgba(51,65,85,0.5)';
+                    var bcol = hdata.map(function(v){var r=v/maxV; return r>0.7?'rgba(59,130,246,0.9)':r>0.4?'rgba(99,102,241,0.75)':inactiveBar;});
+                    _adminHourlyChart = new Chart(hourlyCtx, {
+                        type:'bar',
+                        data:{labels:hrs.map(function(h){return h+':00';}),datasets:[{data:hdata,backgroundColor:bcol,borderRadius:4,borderSkipped:false}]},
+                        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:tickColor,font:{size:9},maxRotation:0},grid:{display:false}},y:{ticks:{color:tickColor,font:{size:10}},grid:{color:gridColor},beginAtZero:true}}}
+                    });
                 }
                 var tbody = document.getElementById('admin-users-table-body');
                 if (tbody) {
