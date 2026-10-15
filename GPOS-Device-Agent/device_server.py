@@ -381,37 +381,11 @@ def _fetch_collab_content(page_url: str, pat: str, query: str = "") -> str:
             end = min(len(text), start + (max_chars - 1200))
             return intro + text[start:end]
 
-        # Service Keyword Map for automatic property-to-service resolution
-        SERVICE_KEYWORD_MAP = {
-            "brightness": ["settingsservice", "com.webos.settingsservice", "display"],
-            "backlight": ["settingsservice", "com.webos.settingsservice", "display"],
-            "display": ["settingsservice", "com.webos.service.display", "display"],
-            "picture": ["settingsservice", "com.webos.settingsservice"],
-            "volume": ["audio", "com.webos.service.audio"],
-            "sound": ["audio", "com.webos.service.audio"],
-            "mute": ["audio", "com.webos.service.audio"],
-            "wifi": ["wifi", "connectionmanager", "com.webos.service.wifi"],
-            "wlan": ["wifi", "connectionmanager"],
-            "network": ["connectionmanager", "wifi"],
-            "bluetooth": ["bluetooth2", "com.webos.service.bluetooth2"],
-            "alarm": ["alarm", "com.webos.service.alarm"],
-            "timer": ["alarm", "com.webos.service.alarm"],
-            "clock": ["alarm", "com.webos.service.alarm"],
-            "power": ["power", "com.webos.service.power"],
-            "reboot": ["power", "com.webos.service.power"],
-            "time": ["settingsservice", "com.webos.settingsservice"],
-            "app": ["applicationManager", "applicationmanager"],
-            "launch": ["applicationManager", "applicationmanager"],
-        }
-
-        # 3. If a search query is provided, use Confluence CQL to search all child/descendant pages
+        # 3. If a search query is provided, use Confluence CQL to search dynamically across all child/descendant pages
         if query and query.strip():
             q_clean = query.strip().replace('"', '\\"')
             
-            # Build search queries: exact query, short service name, and mapped service candidates
-            cql_candidates = []
-            
-            # If query is already a full service name (e.g. com.webos.settingsservice)
+            # Clean service name if query is a full URI or luna service (e.g. com.webos.settingsservice -> settingsservice)
             short_name = ""
             if "com.webos." in q_clean.lower():
                 short_name = q_clean.lower().replace("com.webos.service.", "").replace("com.webos.", "").strip()
@@ -422,32 +396,20 @@ def _fetch_collab_content(page_url: str, pat: str, query: str = "") -> str:
             elif space:
                 cql_parts.append(f'space = "{space}"')
 
-            # Primary CQL: search title and text
+            # Search title and full-text body dynamically using Confluence CQL
             if short_name:
-                cql_candidates.append(" AND ".join(cql_parts + [f'(title ~ "{q_clean}" OR title ~ "{short_name}" OR text ~ "{short_name}")']))
+                cql_query = " AND ".join(cql_parts + [f'(title ~ "{q_clean}" OR title ~ "{short_name}" OR text ~ "{q_clean}" OR text ~ "{short_name}")'])
             else:
-                cql_candidates.append(" AND ".join(cql_parts + [f'(title ~ "{q_clean}" OR text ~ "{q_clean}")']))
+                cql_query = " AND ".join(cql_parts + [f'(title ~ "{q_clean}" OR text ~ "{q_clean}")'])
 
-            # Secondary candidate from Service Keyword Map
-            for kw, s_list in SERVICE_KEYWORD_MAP.items():
-                if kw in q_clean.lower():
-                    for s in s_list:
-                        cql_candidates.append(" AND ".join(cql_parts + [f'title ~ "{s}"']))
-                    break
-
-            # Execute search through candidates until we find matching pages
+            search_url = f"{api_base}/search?cql={urllib.parse.quote(cql_query)}&limit=5&expand=body.storage"
+            resp = req.get(search_url, headers=headers, timeout=25, verify=False)
+            if resp.status_code in (401, 403):
+                return f"[ERROR] Collab authentication failed (HTTP {resp.status_code}). Please verify your Collab PAT in Portal Settings (⚙️)."
             results = []
-            for cql_candidate in cql_candidates:
-                search_url = f"{api_base}/search?cql={urllib.parse.quote(cql_candidate)}&limit=5&expand=body.storage"
-                resp = req.get(search_url, headers=headers, timeout=25, verify=False)
-                if resp.status_code in (401, 403):
-                    return f"[ERROR] Collab authentication failed (HTTP {resp.status_code}). Please verify your Collab PAT in Portal Settings (⚙️)."
-                if resp.status_code == 200:
-                    s_data = resp.json()
-                    res_candidate = s_data.get("results", [])
-                    if res_candidate:
-                        results = res_candidate
-                        break
+            if resp.status_code == 200:
+                s_data = resp.json()
+                results = s_data.get("results", [])
 
             # If still no results and multiple words, retry with primary keyword
             if not results and " " in query.strip():
