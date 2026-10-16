@@ -365,19 +365,24 @@ def _fetch_collab_content(page_url: str, pat: str, query: str = "") -> str:
             else:
                 return re.sub(r"<[^>]+>", "", html_text)
 
-        def _extract_relevant_section(text: str, search_query: str, max_chars: int = 5000) -> str:
+        def _extract_relevant_section(text: str, search_query: str, max_chars: int = 7000) -> str:
             if len(text) <= max_chars:
                 return text
             q_words = [w for w in re.split(r'\W+', search_query.lower()) if len(w) >= 3 and w not in ('the', 'and', 'for', 'api', 'service', 'webos', 'docs')]
             best_pos = -1
             for w in q_words:
-                pos = text.lower().find(w)
+                # Prioritize markdown headings, code blocks, or bold identifiers containing the word
+                m = re.search(r'(?i)(?:#+|\*\*|`)\s*.*?' + re.escape(w), text)
+                if m:
+                    pos = m.start()
+                else:
+                    pos = text.lower().find(w)
                 if pos != -1 and (best_pos == -1 or pos < best_pos):
                     best_pos = pos
             if best_pos == -1 or best_pos < 1200:
                 return text[:max_chars]
             intro = text[:1000] + "\n\n... [Content skipped for brevity] ...\n\n"
-            start = max(0, best_pos - 400)
+            start = max(0, best_pos - 300)
             end = min(len(text), start + (max_chars - 1200))
             return intro + text[start:end]
 
@@ -1668,7 +1673,7 @@ def query_collab_api_docs(query: str = "", collab_url: str = "", collab_pat: str
 
     output = f"📚 **Collab API Documentation** (Live from Wiki)\n"
     output += f"**Source**: `{collab_url}`\n\n"
-    output += content[:12000]  # Cap output to prevent overwhelming responses
+    output += content[:16000]  # Cap output to prevent overwhelming responses
 
     return output
 
@@ -2090,31 +2095,77 @@ def run_perf_profile(
 def introspect_device_apis(target_ip: str, service_name: str, ctx: Context = None) -> str:
     """
     Zero-setup on-board API and ACG security discovery directly from target device.
+    Queries the live Luna Bus daemon (ls-hubd) via `ls-monitor -i` and `ls-monitor -l`.
     
     :param target_ip: IP address of the target device.
-    :param service_name: Name of the service (e.g. 'com.webos.service.audio').
+    :param service_name: Service name (e.g. 'com.webos.service.camera2', 'camera2') or generic feature keyword (e.g. 'camera', 'audio').
     """
     ip = _resolve_target_alias(target_ip)
-    if not ip: return "❌ No target IP specified."
+    if not ip:
+        return "❌ No target IP specified."
+
+    clean_name = service_name.strip()
     
-    steps = [f"🔍 **Introspecting Service**: `{service_name}` on `{ip}`"]
-    
-    # 1. Binary Path
-    binary = _run_ssh(ip, f"grep Exec= /usr/share/luna-service2/services.d/{service_name}.service 2>/dev/null | cut -d'=' -f2 || echo 'Unknown'").strip()
-    steps.append(f"📦 **Binary Path**: `{binary}`")
-    
-    # 2. API Permissions & Groups
-    api_json = _run_ssh(ip, f"cat /usr/share/luna-service2/api-permissions.d/{service_name}*.api.json 2>/dev/null || echo '[]'")
-    # 3. Role / Bus Types
-    role_json = _run_ssh(ip, f"cat /usr/share/luna-service2/roles.d/{service_name}*.role.json 2>/dev/null || echo '{{}}'")
-    # 4. Live Methods
-    methods_json = _run_ssh(ip, f"luna-send -n 1 -f luna://{service_name}/com/palm/luna/private/listMethods '{{}}' 2>/dev/null || echo '{{}}'")
-    
-    output = "\n".join(steps) + "\n\n### 📖 Extracted Data\n"
-    output += f"**API Config**: ```json\n{api_json[-1000:]}\n```\n"
-    output += f"**Role Config**: ```json\n{role_json[-1000:]}\n```\n"
-    output += f"**Live Methods**: ```json\n{methods_json[-1000:]}\n```\n"
-    
+    # 1. Check for matching services registered on the bus via ls-monitor -l
+    list_cmd = f"ls-monitor -l 2>/dev/null | grep -i '{clean_name}'"
+    matching_services_raw = _run_ssh(ip, list_cmd)
+
+    matching_services = []
+    if matching_services_raw and "[ERROR]" not in matching_services_raw and "command not found" not in matching_services_raw:
+        for line in matching_services_raw.splitlines():
+            s = line.strip()
+            parts = s.split()
+            if parts:
+                svc = parts[0]
+                if svc not in matching_services and ("com." in svc or clean_name.lower() in svc.lower()):
+                    matching_services.append(svc)
+
+    # If the user passed a generic keyword and MULTIPLE services matched on the board
+    if len(matching_services) > 1 and clean_name not in matching_services:
+        output = f"⚠️ **Multiple Matching Services Found for `{clean_name}` on `{ip}`**:\n\n"
+        for s in matching_services:
+            output += f"- `{s}`\n"
+        output += f"\n👉 **Action Required**: Please ask the user which service they would like to use before proceeding."
+        return output
+
+    exact_service = matching_services[0] if matching_services else clean_name
+    if not exact_service.startswith("com.") and "service" not in exact_service:
+        for cand in [f"com.webos.service.{exact_service}", f"com.webos.{exact_service}"]:
+            check = _run_ssh(ip, f"ls-monitor -l 2>/dev/null | grep -E '(^|[[:space:]]){cand}([[:space:]]|$)'")
+            if check and "[ERROR]" not in check and len(check.strip()) > 0:
+                exact_service = cand
+                break
+
+    steps = [f"🔍 **Introspecting Service**: `{exact_service}` on `{ip}`"]
+
+    # 2. Binary Path
+    binary = _run_ssh(ip, f"grep Exec= /usr/share/luna-service2/services.d/{exact_service}.service 2>/dev/null | cut -d'=' -f2 || echo 'Unknown'").strip()
+    if binary and binary != "Unknown":
+        steps.append(f"📦 **Binary Path**: `{binary}`")
+
+    # 3. Query Live Methods directly from ls-hubd via ls-monitor -i
+    live_methods = _run_ssh(ip, f"ls-monitor -i '{exact_service}' 2>&1")
+    if not live_methods or "[ERROR]" in live_methods or "not found" in live_methods.lower() or "failed" in live_methods.lower():
+        live_methods = _run_ssh(ip, f"ls-control -i '{exact_service}' 2>&1")
+
+    # 4. API Permissions & Roles
+    api_json = _run_ssh(ip, f"cat /usr/share/luna-service2/api-permissions.d/{exact_service}*.api.json 2>/dev/null || echo ''").strip()
+    role_json = _run_ssh(ip, f"cat /usr/share/luna-service2/roles.d/{exact_service}*.role.json 2>/dev/null || echo ''").strip()
+
+    output = "\n".join(steps) + "\n\n"
+
+    if live_methods and "[ERROR]" not in live_methods and "command not found" not in live_methods:
+        output += f"### ⚡ Live Methods from Luna Bus (`ls-monitor -i`):\n```\n{live_methods}\n```\n\n"
+    else:
+        # Fallback to legacy listMethods only if ls-monitor was unavailable
+        legacy_methods = _run_ssh(ip, f"luna-send -n 1 -f luna://{exact_service}/com/palm/luna/private/listMethods '{{}}' 2>/dev/null || echo '{{}}'")
+        output += f"### ⚡ Methods (`listMethods`):\n```json\n{legacy_methods}\n```\n\n"
+
+    if api_json:
+        output += f"### 🔑 API Permissions:\n```json\n{api_json[:2000]}\n```\n\n"
+    if role_json:
+        output += f"### 🛡️ Role Config:\n```json\n{role_json[:2000]}\n```\n"
+
     return output
 
 
