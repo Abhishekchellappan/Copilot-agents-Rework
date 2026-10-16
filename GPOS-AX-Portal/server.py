@@ -494,6 +494,7 @@ When the user asks to run shell commands on the target board (such as `grep`, `l
   `find /usr/palm/applications -maxdepth 2 -iname "*settings*" 2>/dev/null || ls -la /usr/palm/applications | grep -i settings || grep -ri "settings" /usr/palm/applications/ 2>/dev/null | head -n 30`
 - When the user asks to "Run CPU benchmark", ALWAYS call `run_perf_benchmark(target_ip=...)`. It automatically runs the embedded performance profiler and gathers metrics!
 - When the user asks to take a screenshot, capture screen, or snapshot of the current window, ALWAYS call `take_screenshot(target_ip=...)`. It captures the screen directly from the webOS surface compositor!
+- When the user asks to "Run leaktracer" or check memory leaks with LeakTracer, ALWAYS call `run_leaktracer(target_ip=..., executable=..., duration_seconds=...)`. It automatically resolves binary paths and preloads the LeakTracer library dynamically!
 
 WEBOS LUNA SERVICE API ARCHITECTURE & DYNAMIC DOCUMENTATION LOOKUP:
 webOS system operations are managed dynamically by Luna services on the device bus (e.g., settings, audio, wifi, alarms, bluetooth, notifications, camera, display, etc.).

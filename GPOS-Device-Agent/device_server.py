@@ -1007,22 +1007,107 @@ def run_leaktracer(target_ip: str, executable: str, duration_seconds: int = 20, 
     Run a process with libleaktracer.so preloaded for lightweight dynamic memory tracking.
 
     :param target_ip: IP address of the target device.
-    :param executable: Full path to the executable on target (e.g. '/usr/bin/audiod').
+    :param executable: Path or name of executable on target (e.g. 'audiod', '/usr/sbin/audiod', 'webappmanager').
     :param duration_seconds: How long to let the process run (default 20s).
     """
     ip = _resolve_target(target_ip)
     if not ip:
         return "❌ No target IP specified."
 
-    duration_seconds = min(duration_seconds, 120)
-    cmd = (
-        f"LD_PRELOAD=/usr/lib/libleaktracer.so timeout {duration_seconds} {executable} 2>&1; "
-        f"cat /tmp/leaks.out 2>/dev/null || echo 'No leaktracer output found.'"
-    )
-    result = _run_ssh(ip, cmd, timeout=duration_seconds + 15)
+    duration_seconds = max(5, min(duration_seconds, 120))
+    clean_exec = executable.strip()
 
-    output = f"🔬 **LeakTracer** on `{ip}` — `{executable}` ({duration_seconds}s)\n\n"
-    output += f"```\n{result[-4000:]}\n```"
+    # 1. Resolve binary path dynamically on the target
+    find_bin_script = (
+        f'BIN="{clean_exec}"; '
+        f'if [ -x "$BIN" ]; then echo "$BIN"; exit 0; fi; '
+        f'BNAME=$(basename "$BIN"); '
+        f'WHICH=$(which "$BNAME" 2>/dev/null); '
+        f'if [ -n "$WHICH" ] && [ -x "$WHICH" ]; then echo "$WHICH"; exit 0; fi; '
+        f'for c in "/usr/sbin/$BNAME" "/usr/bin/$BNAME" "/sbin/$BNAME" "/bin/$BNAME" "/usr/palm/services/$BNAME"; do '
+        f'  if [ -x "$c" ]; then echo "$c"; exit 0; fi; '
+        f'done; '
+        f'FIND_RES=$(find /usr /sbin /bin -maxdepth 3 -name "$BNAME" -perm -111 2>/dev/null | head -1); '
+        f'if [ -n "$FIND_RES" ]; then echo "$FIND_RES"; exit 0; fi; '
+        f'echo "NOT_FOUND"'
+    )
+    resolved_bin = _run_ssh(ip, find_bin_script).strip()
+    if not resolved_bin or "NOT_FOUND" in resolved_bin or "[ERROR]" in resolved_bin:
+        return (
+            f"❌ Binary `{clean_exec}` not found or not executable on `{ip}`.\n"
+            f"Checked `/usr/sbin/`, `/usr/bin/`, `/sbin/`, `/bin/`, and `PATH`.\n"
+            f"Please verify the binary name (e.g. `audiod`, `webappmanager`, `sam`)."
+        )
+
+    # 2. Resolve libleaktracer library on target (handling versioned sonames like libleaktracer.so.3, CamelCase, lib64)
+    find_lib_script = (
+        'for p in '
+        '/usr/lib/libleaktracer.so* '
+        '/usr/lib64/libleaktracer.so* '
+        '/usr/lib/libLeakTracer.so* '
+        '/usr/lib64/libLeakTracer.so* '
+        '/lib/libleaktracer.so* '
+        '/tmp/libleaktracer.so* '
+        '/tmp/libleaktracer*.so; do '
+        '  if [ -f "$p" ]; then echo "$p"; exit 0; fi; '
+        'done; '
+        'echo "NOT_FOUND"'
+    )
+    lib_path = _run_ssh(ip, find_lib_script).strip()
+
+    # If library not pre-installed on target, attempt auto-provisioning from TOOL_VAULT
+    if not lib_path or "NOT_FOUND" in lib_path or "[ERROR]" in lib_path:
+        arch = _detect_target_arch(ip)
+        provision_res = _provision_tool_for_arch(ip, arch, "leaktracer")
+        # Re-check for provisioned library in /tmp
+        lib_path = _run_ssh(ip, find_lib_script).strip()
+        if not lib_path or "NOT_FOUND" in lib_path:
+            return (
+                f"❌ LeakTracer shared library not found on `{ip}` and could not be provisioned.\n\n"
+                f"Searched paths: `/usr/lib/libleaktracer.so*`, `/usr/lib64/`, `/tmp/`.\n"
+                f"Provisioning attempt ({arch}): {provision_res}"
+            )
+
+    # 3. Clean previous report and execute target binary under LD_PRELOAD
+    _run_ssh(ip, "rm -f /tmp/leaks.out")
+    exec_cmd = (
+        f'LD_PRELOAD="{lib_path}" timeout --preserve-status {duration_seconds} "{resolved_bin}" 2>&1; '
+        f'sleep 1'
+    )
+    console_output = _run_ssh(ip, exec_cmd, timeout=duration_seconds + 20)
+
+    # 4. Collect and inspect /tmp/leaks.out
+    check_leaks_cmd = (
+        'if [ -f /tmp/leaks.out ]; then '
+        '  cat /tmp/leaks.out; '
+        'else '
+        '  echo "NO_LEAKS_LOG"; '
+        'fi'
+    )
+    leaks_log = _run_ssh(ip, check_leaks_cmd, timeout=15).strip()
+
+    # 5. Format comprehensive result
+    output = (
+        f"🔬 **LeakTracer Memory Profiling Report**\n\n"
+        f"- **Target Device**: `{ip}`\n"
+        f"- **Resolved Binary**: `{resolved_bin}`\n"
+        f"- **Preloaded Library**: `{lib_path}`\n"
+        f"- **Run Duration**: `{duration_seconds}s`\n\n"
+    )
+
+    if not leaks_log or "NO_LEAKS_LOG" in leaks_log:
+        output += "✅ **No Memory Leaks Detected**\n"
+        output += f"The process `{os.path.basename(resolved_bin)}` executed for {duration_seconds}s and released all tracked allocations cleanly upon shutdown.\n"
+        if console_output and "[ERROR]" not in console_output:
+            clean_console = console_output.strip()
+            if clean_console:
+                output += f"\n**Process Console Output**:\n```\n{clean_console[-2000:]}\n```\n"
+    else:
+        output += "⚠️ **Memory Leaks Detected**:\n\n"
+        output += f"```\n{leaks_log[-4000:]}\n```\n"
+        if console_output and "[ERROR]" not in console_output and len(console_output.strip()) > 0:
+            output += f"\n**Process Output**:\n```\n{console_output[-1500:]}\n```\n"
+
     return output
 
 
