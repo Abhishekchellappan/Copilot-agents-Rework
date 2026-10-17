@@ -268,14 +268,19 @@ body.light-theme .sidebar-nav-item:hover {
   color: #0f172a;
 }
 body.light-theme .sidebar-nav-item.active {
-  background: #2563eb;
+  background: #3b82f6;
   color: #ffffff;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
 }
 body.light-theme .agent-card {
   background: #ffffff;
   border-color: #e2e8f0;
 }
+body.light-theme .agent-card .bg-indigo-600 { background-color: #6366f1 !important; }
+body.light-theme .agent-card .bg-emerald-600 { background-color: #10b981 !important; }
+body.light-theme .agent-card .bg-blue-600 { background-color: #3b82f6 !important; }
+body.light-theme .agent-card .bg-purple-600 { background-color: #a855f7 !important; }
+body.light-theme .agent-card .bg-red-600 { background-color: #ef4444 !important; }
 body.light-theme .filter-pill:not(.active) {
   background: #f1f5f9;
   color: #475569;
