@@ -1309,8 +1309,8 @@ async def llm_chat(req: ChatRequest, request: Request):
     import uuid
     import base64
     
-    async with AsyncExitStack() as stack:
-        try:
+    try:
+        async with AsyncExitStack() as stack:
             # Connect to MCP server with PAT in headers
             mcp_headers = {"X-Jira-PAT": pat}
             streams = await stack.enter_async_context(sse_client(f"{MCP_SERVER_URL}/sse", headers=mcp_headers))
@@ -1333,7 +1333,7 @@ async def llm_chat(req: ChatRequest, request: Request):
                     "function": {
                         "name": t.name,
                         "description": desc,
-                        "parameters": t.input_schema
+                        "parameters": t.input_schema or {"type": "object", "properties": {}}
                     }
                 })
                 
@@ -1343,9 +1343,9 @@ async def llm_chat(req: ChatRequest, request: Request):
     CRITICAL JIRA PROJECT DIRECTIVE:
     You are strictly working with Jira project: '{target_project}'.
     ALL queries, JQL searches, sprint reports, and ticket operations MUST target project '{target_project}'.
-    Whenever you call `jira_search`, your JQL MUST explicitly include: `project = {target_project}`.
+    Whenever you search for Jira issues (using search_jira_issues or jira_search), your JQL MUST explicitly include: `project = {target_project}`.
     DO NOT use project 'SIGPOSDEV' under any circumstances unless '{target_project}' is explicitly 'SIGPOSDEV'.
-    When tools accept a project_key argument (e.g. jira_generate_sprint_report, jira_get_sprint_burndown, jira_create_issue), ALWAYS pass project_key="{target_project}".
+    When tools accept a project_key argument (e.g. generate_sprint_report, get_sprint_burndown, create_jira_issue, jira_generate_sprint_report, jira_get_sprint_burndown, jira_create_issue), ALWAYS pass project_key="{target_project}".
     TIP: If the user asks for "my" tickets (e.g., "my stories", "my bugs"), you MUST use `project = {target_project} AND assignee = currentUser()` in your JQL search.
     
     CRITICAL LOG ANALYSIS RULE:
@@ -1638,9 +1638,18 @@ async def llm_chat(req: ChatRequest, request: Request):
                             
                 return {"intent": "chat", "message": "I reached the maximum number of tool calls and had to stop. I attempted 15 steps but couldn't finalize the answer."}
                 
-        except Exception as e:
-            logger.error(f"MCP/LLM Loop Error: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to execute autonomous agent loop: {str(e)}")
+    except Exception as e:
+        logger.error(f"MCP/LLM Loop Error: {e}", exc_info=True)
+        err_msg = str(e)
+        if hasattr(e, "exceptions") and e.exceptions:
+            err_msg = "; ".join([str(sub) for sub in e.exceptions])
+        return {"intent": "chat", "message": f"⚠️ Jira Agent Error: {err_msg}"}
+    except BaseException as e:
+        logger.error(f"MCP/LLM Loop Fatal Error: {e}", exc_info=True)
+        err_msg = str(e)
+        if hasattr(e, "exceptions") and e.exceptions:
+            err_msg = "; ".join([str(sub) for sub in e.exceptions])
+        return {"intent": "chat", "message": f"⚠️ Jira Agent Error: {err_msg}"}
 @app.get("/api/user")
 def get_user_profile(request: Request):
     pat = get_jira_pat(request)

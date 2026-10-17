@@ -365,6 +365,20 @@ def jira_search(
 
 
 @mcp.tool()
+def search_jira_issues(
+    jql: str, fields: str = "", max_results: int = 50, ctx: Context = None
+) -> str:
+    """
+    Search Jira issues using a JQL query. Alias for jira_search.
+
+    :param jql: JQL query string.
+    :param fields: Comma-separated field names to return.
+    :param max_results: Maximum number of issues to return.
+    """
+    return jira_search(jql=jql, fields=fields, max_results=max_results, ctx=ctx)
+
+
+@mcp.tool()
 def jira_get_issue(
     issue_key: str, expand: str = "", ctx: Context = None
 ) -> str:
@@ -388,6 +402,19 @@ def jira_get_issue(
         return json.dumps(data, indent=2, default=str)
     except Exception as e:
         return f"Error in jira_get_issue: {e}"
+
+
+@mcp.tool()
+def get_jira_issue(
+    issue_key: str, expand: str = "", ctx: Context = None
+) -> str:
+    """
+    Fetch full details of a Jira issue by its key. Alias for jira_get_issue.
+
+    :param issue_key: Issue key (e.g. 'PROJ-123').
+    :param expand: Optional comma-separated expansions.
+    """
+    return jira_get_issue(issue_key=issue_key, expand=expand, ctx=ctx)
 
 
 @mcp.tool()
