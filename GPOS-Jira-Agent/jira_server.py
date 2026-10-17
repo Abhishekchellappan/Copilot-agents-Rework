@@ -16,7 +16,6 @@ import re
 import json
 import glob
 import requests
-from typing import Any, Dict, List, Optional, Union
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
@@ -78,44 +77,6 @@ DEFAULT_PAT = os.environ.get("JIRA_PAT", "")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
-
-def _is_empty(v: Any) -> bool:
-    """Helper to detect empty strings/lists/dicts while preserving False and 0."""
-    if v is None:
-        return True
-    if isinstance(v, (str, list, dict, set)) and len(v) == 0:
-        return True
-    return False
-
-
-def _prune_issue_payload(obj: Any) -> Any:
-    """
-    Prune zero-information noise from Jira payload while strictly preserving
-    all functional business fields: watches, votes, operations, comments,
-    worklogs, attachments, subtasks, issuelinks, transitions, and populated custom fields.
-    Strips: null/empty fields, avatarUrls, iconUrl, schema, and internal REST self-links.
-    """
-    if isinstance(obj, dict):
-        pruned = {}
-        for k, v in obj.items():
-            if k in ("avatarUrls", "iconUrl", "self", "schema"):
-                continue
-            if _is_empty(v):
-                continue
-            res = _prune_issue_payload(v)
-            if not _is_empty(res):
-                pruned[k] = res
-        return pruned
-    elif isinstance(obj, list):
-        pruned_list = []
-        for item in obj:
-            res = _prune_issue_payload(item)
-            if not _is_empty(res):
-                pruned_list.append(res)
-        return pruned_list
-    else:
-        return obj
-
 
 def _headers(ctx: Context = None, request: Request = None) -> dict:
     """Extract Jira PAT from MCP request headers or environment variable."""
@@ -316,24 +277,6 @@ def get_agent_instructions() -> str:
 
 
 @mcp.tool()
-def get_skill(skill_name: str) -> str:
-    """
-    Fetch instructions for a specific workflow skill on-demand (e.g. 'audit-and-fix', 'epic-grooming', 'sprint-audit').
-    
-    :param skill_name: The name of the skill file (e.g. 'epic-grooming' or 'sprint-audit').
-    """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    skills_dir = os.path.join(base_dir, "skills")
-    clean_name = skill_name.strip().replace(".md", "")
-    target = os.path.join(skills_dir, f"{clean_name}.md")
-    if os.path.exists(target):
-        with open(target, "r", encoding="utf-8") as f:
-            return f"### [WORKFLOW SKILL: {clean_name}]\n{f.read().strip()}"
-    available = [os.path.basename(p).replace(".md", "") for p in glob.glob(os.path.join(skills_dir, "*.md"))]
-    return f"Skill '{clean_name}' not found. Available skills: {', '.join(available)}"
-
-
-@mcp.tool()
 def jira_search(
     jql: str, fields: str = "", max_results: int = 50, ctx: Context = None
 ) -> str:
@@ -369,15 +312,15 @@ def jira_search(
             so the total response stays well under Exacode's 4000-character tool result limit.
             """
             # These fields are complex and should be passed through as-is if they exist
-            passthrough_keys = {"comment", "worklog", "description", "watches", "votes"}
+            passthrough_keys = {"comment", "worklog", "description"}
 
             out = {}
             for k, v in raw_fields.items():
-                if _is_empty(v):
+                if v is None:
                     continue
-                # Always pass through heavy text fields and business objects unmodified (pruning internal URLs)
+                # Always pass through heavy text fields unmodified
                 if k in passthrough_keys:
-                    out[k] = _prune_issue_payload(v) if isinstance(v, (dict, list)) else v
+                    out[k] = v
                     continue
                 # Scalar values — keep as-is
                 if isinstance(v, (str, int, float, bool)):
@@ -423,16 +366,13 @@ def jira_search(
 
 @mcp.tool()
 def jira_get_issue(
-    issue_key: str, expand: str = "", fields: str = "", ctx: Context = None
+    issue_key: str, expand: str = "", ctx: Context = None
 ) -> str:
     """
     Fetch full details of a Jira issue by its key.
-    Preserves all business fields including watches, votes, operations, comments,
-    worklogs, attachments, subtasks, transitions, and populated custom fields.
 
     :param issue_key: Issue key (e.g. 'PROJ-123').
     :param expand: Optional comma-separated expansions (e.g. 'changelog,renderedFields').
-    :param fields: Optional comma-separated fields to return (e.g. 'summary,description,status,watches,votes'). Blank returns all populated fields.
     """
     try:
         headers = _headers(ctx)
@@ -441,14 +381,11 @@ def jira_get_issue(
         params = {}
         if expand:
             params["expand"] = expand
-        if fields:
-            params["fields"] = fields
         resp = requests.get(url, headers=headers, params=params, timeout=15)
         if resp.status_code != 200:
             return f"Failed to fetch '{key}' (HTTP {resp.status_code}): {resp.text}"
         data = resp.json()
-        pruned_data = _prune_issue_payload(data)
-        return json.dumps(pruned_data, separators=(",", ":"), default=str)
+        return json.dumps(data, indent=2, default=str)
     except Exception as e:
         return f"Error in jira_get_issue: {e}"
 
