@@ -255,6 +255,117 @@
             stroke: #e2e8f0 !important; 
         }
 
+        /* Device HUD Board Registry in Light Theme */
+        body.light-theme #new-target-ip {
+            background-color: #ffffff !important;
+            border-color: #cbd5e1 !important;
+            color: #0f172a !important;
+        }
+        body.light-theme #new-target-ip::placeholder {
+            color: #94a3b8 !important;
+        }
+        body.light-theme #btn-add-board {
+            background-color: #10b981 !important;
+            border-color: #10b981 !important;
+            color: #ffffff !important;
+        }
+        body.light-theme #btn-add-board:hover {
+            background-color: #059669 !important;
+        }
+
+        /* Inactive Board Cards in Light Theme */
+        body.light-theme .board-item:not(.board-item-active) {
+            background-color: #ffffff !important;
+            background-image: none !important;
+            border-color: #e2e8f0 !important;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+        }
+        body.light-theme .board-item:not(.board-item-active):hover {
+            background-color: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06) !important;
+        }
+        body.light-theme .board-item:not(.board-item-active) .board-name {
+            color: #1e293b !important;
+        }
+        body.light-theme .board-item:not(.board-item-active) .board-ip {
+            color: #64748b !important;
+        }
+        body.light-theme .board-item:not(.board-item-active) i {
+            color: #64748b !important;
+        }
+
+        /* Active Online Board Card (Light Theme) */
+        body.light-theme .board-item-active.board-item-online,
+        body.light-theme .active-board-glow {
+            background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%) !important;
+            background-image: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%) !important;
+            border-color: #10b981 !important;
+            box-shadow: 0 4px 14px rgba(16, 185, 129, 0.18) !important;
+            animation: activeBoardPulseGlowLight 2.5s infinite ease-in-out !important;
+        }
+        body.light-theme .board-item-active.board-item-online .board-name,
+        body.light-theme .active-board-glow .board-name,
+        body.light-theme .board-item-active.board-item-online .board-name span,
+        body.light-theme .active-board-glow .board-name span {
+            color: #064e3b !important;
+        }
+        body.light-theme .board-item-active.board-item-online .board-ip,
+        body.light-theme .active-board-glow .board-ip {
+            color: #047857 !important;
+        }
+        body.light-theme .board-item-active.board-item-online .board-accent-bar,
+        body.light-theme .active-board-glow .board-accent-bar {
+            background-color: #10b981 !important;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.5) !important;
+        }
+        body.light-theme .board-item-active.board-item-online .board-badge,
+        body.light-theme .active-board-glow .board-badge {
+            background-color: #d1fae5 !important;
+            color: #065f46 !important;
+            border-color: #6ee7b7 !important;
+        }
+
+        /* Active Offline Board Card (Light Theme - Fixes dark black box issue) */
+        body.light-theme .board-item-active.board-item-offline,
+        body.light-theme .active-board-offline-glow {
+            background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%) !important;
+            background-image: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%) !important;
+            border-color: #ef4444 !important;
+            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.18) !important;
+            animation: activeBoardOfflinePulseGlowLight 2.5s infinite ease-in-out !important;
+        }
+        body.light-theme .board-item-active.board-item-offline .board-name,
+        body.light-theme .active-board-offline-glow .board-name,
+        body.light-theme .board-item-active.board-item-offline .board-name span,
+        body.light-theme .active-board-offline-glow .board-name span {
+            color: #7f1d1d !important;
+        }
+        body.light-theme .board-item-active.board-item-offline .board-ip,
+        body.light-theme .active-board-offline-glow .board-ip {
+            color: #b91c1c !important;
+        }
+        body.light-theme .board-item-active.board-item-offline .board-accent-bar,
+        body.light-theme .active-board-offline-glow .board-accent-bar {
+            background-color: #ef4444 !important;
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.5) !important;
+        }
+        body.light-theme .board-item-active.board-item-offline .board-badge,
+        body.light-theme .active-board-offline-glow .board-badge {
+            background-color: #fee2e2 !important;
+            color: #991b1b !important;
+            border-color: #fca5a5 !important;
+        }
+
+        /* Buttons on active boards */
+        body.light-theme .board-item button {
+            color: #64748b !important;
+        }
+        body.light-theme .board-item button:hover {
+            color: #ef4444 !important;
+            background-color: rgba(239, 68, 68, 0.1) !important;
+        }
+
         /* Multi-Profile Settings Modal & Header Pill in light mode */
         body.light-theme #settings-modal input[type="text"],
         body.light-theme #settings-modal input[type="password"] {
@@ -431,6 +542,28 @@
         }
         .active-board-offline-glow {
             animation: activeBoardOfflinePulseGlow 2.5s infinite ease-in-out;
+        }
+
+        /* Light Theme Keyframe Glows */
+        @keyframes activeBoardPulseGlowLight {
+            0%, 100% {
+                box-shadow: 0 2px 8px rgba(16, 185, 129, 0.15);
+                border-color: rgba(16, 185, 129, 0.7);
+            }
+            50% {
+                box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+                border-color: rgba(16, 185, 129, 1);
+            }
+        }
+        @keyframes activeBoardOfflinePulseGlowLight {
+            0%, 100% {
+                box-shadow: 0 2px 8px rgba(239, 68, 68, 0.15);
+                border-color: rgba(239, 68, 68, 0.7);
+            }
+            50% {
+                box-shadow: 0 4px 14px rgba(239, 68, 68, 0.3);
+                border-color: rgba(239, 68, 68, 1);
+            }
         }
     </style>
     <script>

@@ -296,3 +296,49 @@ body.light-theme .custom-scrollbar::-webkit-scrollbar-thumb {
 body.light-theme .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Board Registry Light Theme */
+body.light-theme .board-item:not(.board-item-active) {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  border-color: #e2e8f0 !important;
+}
+body.light-theme .board-item:not(.board-item-active):hover {
+  background-color: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+}
+body.light-theme .board-item:not(.board-item-active) .board-name {
+  color: #1e293b !important;
+}
+body.light-theme .board-item:not(.board-item-active) .board-ip {
+  color: #64748b !important;
+}
+body.light-theme .board-item-active.board-item-online,
+body.light-theme .active-board-glow {
+  background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%) !important;
+  background-image: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%) !important;
+  border-color: #10b981 !important;
+}
+body.light-theme .board-item-active.board-item-online .board-name,
+body.light-theme .active-board-glow .board-name {
+  color: #064e3b !important;
+}
+body.light-theme .board-item-active.board-item-online .board-ip,
+body.light-theme .active-board-glow .board-ip {
+  color: #047857 !important;
+}
+body.light-theme .board-item-active.board-item-offline,
+body.light-theme .active-board-offline-glow {
+  background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%) !important;
+  background-image: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%) !important;
+  border-color: #ef4444 !important;
+}
+body.light-theme .board-item-active.board-item-offline .board-name,
+body.light-theme .active-board-offline-glow .board-name {
+  color: #7f1d1d !important;
+}
+body.light-theme .board-item-active.board-item-offline .board-ip,
+body.light-theme .active-board-offline-glow .board-ip {
+  color: #b91c1c !important;
+}
+

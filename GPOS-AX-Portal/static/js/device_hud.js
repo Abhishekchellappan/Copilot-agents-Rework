@@ -90,28 +90,28 @@ class DeviceHUD {
             if (isActive) {
                 const isOnline = board.status === 'online';
                 const cardClass = isOnline 
-                    ? 'border-emerald-500 bg-gradient-to-r from-emerald-950/60 via-slate-800 to-slate-800 active-board-glow'
-                    : 'border-red-500/80 bg-gradient-to-r from-red-950/50 via-slate-800 to-slate-800 active-board-offline-glow';
+                    ? 'board-item-online border-emerald-500 bg-gradient-to-r from-emerald-950/60 via-slate-800 to-slate-800 active-board-glow'
+                    : 'board-item-offline border-red-500/80 bg-gradient-to-r from-red-950/50 via-slate-800 to-slate-800 active-board-offline-glow';
                 const barColor = isOnline 
                     ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,1)]' 
                     : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]';
                 const iconColor = isOnline ? 'text-emerald-400' : 'text-red-400';
                 const textColor = isOnline ? 'text-emerald-300/90' : 'text-red-300/80';
                 const badgeHtml = isOnline
-                    ? '<span class="text-[9px] font-extrabold tracking-wider uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 animate-pulse">ACTIVE</span>'
-                    : '<span class="text-[9px] font-extrabold tracking-wider uppercase px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-400/50 animate-pulse">OFFLINE</span>';
+                    ? '<span class="board-badge text-[9px] font-extrabold tracking-wider uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 animate-pulse">ACTIVE</span>'
+                    : '<span class="board-badge text-[9px] font-extrabold tracking-wider uppercase px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-400/50 animate-pulse">OFFLINE</span>';
                 const pingColor = isOnline ? 'bg-emerald-400' : 'bg-red-400';
 
-                div.className = `relative p-3 rounded-lg border-2 ${cardClass} scale-[1.01] transition-all flex items-center justify-between cursor-pointer`;
+                div.className = `board-item board-item-active relative p-3 rounded-lg border-2 ${cardClass} scale-[1.01] transition-all flex items-center justify-between cursor-pointer`;
                 div.innerHTML = `
-                    <div class="absolute left-0 top-0 bottom-0 w-1.5 ${barColor} rounded-l-lg"></div>
+                    <div class="board-accent-bar absolute left-0 top-0 bottom-0 w-1.5 ${barColor} rounded-l-lg"></div>
                     <div class="flex items-center justify-between w-full pl-2">
                         <div class="flex-1 cursor-pointer" onclick="window.deviceHud.updateTargetIp('${board.ip}')">
-                            <div class="font-bold text-white flex items-center gap-2">
-                                <i data-lucide="hard-drive" class="w-4 h-4 ${iconColor}"></i> ${board.id}
+                            <div class="board-name font-bold text-white flex items-center gap-2">
+                                <i data-lucide="hard-drive" class="w-4 h-4 ${iconColor}"></i> <span>${board.id}</span>
                                 ${badgeHtml}
                             </div>
-                            <div class="text-xs ${textColor} font-mono mt-1">${board.ip}</div>
+                            <div class="board-ip text-xs ${textColor} font-mono mt-1">${board.ip}</div>
                         </div>
                         <div class="flex items-center gap-3">
                             <span class="relative flex h-3 w-3 items-center justify-center">
@@ -125,14 +125,14 @@ class DeviceHUD {
                     </div>
                 `;
             } else {
-                div.className = `p-3 rounded-lg border border-slate-700/70 bg-slate-800/40 hover:bg-slate-800/80 hover:border-slate-600 transition-all flex items-center justify-between cursor-pointer`;
+                div.className = `board-item p-3 rounded-lg border border-slate-700/70 bg-slate-800/40 hover:bg-slate-800/80 hover:border-slate-600 transition-all flex items-center justify-between cursor-pointer`;
                 div.innerHTML = `
                     <div class="flex items-center justify-between w-full">
                         <div class="flex-1 cursor-pointer" onclick="window.deviceHud.updateTargetIp('${board.ip}')">
-                            <div class="font-medium text-slate-300 flex items-center gap-2">
-                                <i data-lucide="hard-drive" class="w-4 h-4 text-slate-400"></i> ${board.id}
+                            <div class="board-name font-medium text-slate-300 flex items-center gap-2">
+                                <i data-lucide="hard-drive" class="w-4 h-4 text-slate-400"></i> <span>${board.id}</span>
                             </div>
-                            <div class="text-xs text-slate-400 font-mono mt-1">${board.ip}</div>
+                            <div class="board-ip text-xs text-slate-400 font-mono mt-1">${board.ip}</div>
                         </div>
                         <div class="flex items-center gap-3">
                             <div class="w-2 h-2 rounded-full ${statusColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]"></div>
