@@ -533,16 +533,125 @@ You MUST NEVER just output plain text for command results. You must present the 
 
 CRITICAL UI RENDERING RULE (SINGLE RESPONSE):
 Whenever you output an `<agent-html>` widget, the widget MUST be your ENTIRE response. DO NOT include any conversational text (like "Here is the status:" or "I've checked the device") before or after the widget. Outputting conversational text alongside a widget causes the chat UI to render two separate message bubbles, which breaks the user experience. ONLY output the raw `<agent-html>` block.
-1. **CPU Benchmark Results**: When you run a benchmark, output this JSON block so the frontend renders the graph:
-<device-benchmark>{"ipc": 1.25, "cacheMiss": 450, "pageFaults": 12, "totalCycles": 12500000}</device-benchmark>
-And follow it with this exact beautifully styled summary widget using `<agent-html>`:
+1. **CPU & Memory Benchmark Results**:
+When you run a benchmark (e.g. `run_perf_benchmark`), ALWAYS emit the `<device-benchmark>` telemetry tag first so the Device HUD gauges update:
+<device-benchmark>{"ipc": 1.29, "cacheMiss": 546, "pageFaults": 17, "totalCycles": 13200000}</device-benchmark>
+
+CRITICAL BENCHMARK FORMATTING DIRECTIVE:
+You MUST NEVER dump raw terminal `<pre>` blocks of `top` or `/proc/meminfo`!
+NEVER output raw lines like `PID USER PR NI...` or `MemTotal: 7958568 kB`.
+You MUST parse all data and output this exact, stunning **Executive System Performance Card** using `<agent-html>`:
 <agent-html>
-<div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
-  <h3 class="text-emerald-400 font-bold mb-2 flex items-center gap-2"><i data-lucide="cpu" class="w-4 h-4"></i> Benchmark Complete</h3>
-  <p class="text-sm text-slate-300 mb-3">The CPU benchmark successfully executed on the target board. Here are the highlights:</p>
-  <div class="grid grid-cols-2 gap-2 text-xs">
-    <div class="bg-slate-900 p-2 rounded border border-slate-700"><span class="text-slate-400 block">Idle</span><span class="text-emerald-400 text-lg font-mono">93.3%</span></div>
-    <div class="bg-slate-900 p-2 rounded border border-slate-700"><span class="text-slate-400 block">System</span><span class="text-amber-400 text-lg font-mono">4.4%</span></div>
+<div class="benchmark-report-card bg-slate-800/90 border border-slate-700/80 rounded-xl p-5 shadow-xl font-sans mb-4">
+  <div class="flex items-center justify-between pb-3 border-b border-slate-700/80 mb-4">
+    <div class="flex items-center gap-2.5">
+      <div class="p-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
+        <i data-lucide="activity" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h2 class="text-base font-bold text-white m-0">System Performance Benchmark</h2>
+        <div class="text-xs text-slate-400 font-mono mt-0.5">Target: <span class="text-slate-200">{{target_ip}}</span> &bull; Sample: <span class="text-slate-200">{{duration}}s</span></div>
+      </div>
+    </div>
+    <div class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
+      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+      {{health_status}} ({{health_score}}/100)
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+    <!-- CPU Utilization -->
+    <div class="benchmark-subcard bg-slate-900/60 p-3.5 rounded-lg border border-slate-700/60">
+      <div class="flex justify-between items-center mb-1.5">
+        <span class="text-xs font-semibold text-slate-300 flex items-center gap-1.5"><i data-lucide="cpu" class="w-3.5 h-3.5 text-blue-400"></i> CPU Load</span>
+        <span class="text-xs font-mono font-bold text-blue-400">{{active_cpu_pct}}% active</span>
+      </div>
+      <div class="benchmark-track w-full h-3 rounded-full bg-slate-800 overflow-hidden flex mb-2">
+        <div style="width: {{user_pct}}%" class="bg-blue-500" title="User"></div>
+        <div style="width: {{sys_pct}}%" class="bg-amber-500" title="System"></div>
+        <div style="width: {{idle_pct}}%" class="bg-emerald-500/40" title="Idle"></div>
+      </div>
+      <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+        <span>User: <strong class="text-blue-300">{{user_pct}}%</strong></span>
+        <span>Sys: <strong class="text-amber-300">{{sys_pct}}%</strong></span>
+        <span>Idle: <strong class="text-emerald-300">{{idle_pct}}%</strong></span>
+      </div>
+    </div>
+
+    <!-- RAM Allocation -->
+    <div class="benchmark-subcard bg-slate-900/60 p-3.5 rounded-lg border border-slate-700/60">
+      <div class="flex justify-between items-center mb-1.5">
+        <span class="text-xs font-semibold text-slate-300 flex items-center gap-1.5"><i data-lucide="hard-drive" class="w-3.5 h-3.5 text-emerald-400"></i> Memory (RAM)</span>
+        <span class="text-xs font-mono font-bold text-emerald-400">{{used_gb}} / {{total_gb}} GB ({{used_pct}}%)</span>
+      </div>
+      <div class="benchmark-track w-full h-3 rounded-full bg-slate-800 overflow-hidden flex mb-2">
+        <div style="width: {{used_pct}}%" class="bg-emerald-500" title="Used"></div>
+        <div style="width: {{cached_pct}}%" class="bg-cyan-500/60" title="Cached"></div>
+        <div style="width: {{free_pct}}%" class="bg-slate-700" title="Free"></div>
+      </div>
+      <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+        <span>Used: <strong class="text-emerald-300">{{used_gb}} GB</strong></span>
+        <span>Cached: <strong class="text-cyan-300">{{cached_gb}} GB</strong></span>
+        <span>Avail: <strong class="text-slate-200">{{avail_gb}} GB</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hardware Counters Grid -->
+  <div class="grid grid-cols-4 gap-2 mb-4 text-center">
+    <div class="benchmark-stat bg-slate-900/40 p-2.5 rounded-lg border border-slate-700/50">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400">IPC Efficiency</div>
+      <div class="text-sm font-bold font-mono text-emerald-400 mt-0.5">{{ipc}}</div>
+    </div>
+    <div class="benchmark-stat bg-slate-900/40 p-2.5 rounded-lg border border-slate-700/50">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400">Cache Misses</div>
+      <div class="text-sm font-bold font-mono text-amber-400 mt-0.5">{{cache_misses}}/s</div>
+    </div>
+    <div class="benchmark-stat bg-slate-900/40 p-2.5 rounded-lg border border-slate-700/50">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400">Page Faults</div>
+      <div class="text-sm font-bold font-mono text-blue-400 mt-0.5">{{page_faults}}</div>
+    </div>
+    <div class="benchmark-stat bg-slate-900/40 p-2.5 rounded-lg border border-slate-700/50">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400">CPU Cycles</div>
+      <div class="text-sm font-bold font-mono text-purple-400 mt-0.5">{{total_cycles}}</div>
+    </div>
+  </div>
+
+  <!-- Top Active Processes Table -->
+  <div class="benchmark-table-wrapper bg-slate-900/60 rounded-lg border border-slate-700/60 overflow-hidden mb-4">
+    <div class="px-3 py-2 bg-slate-900/80 border-b border-slate-700/60 flex items-center justify-between">
+      <span class="text-xs font-semibold text-slate-300 flex items-center gap-1.5"><i data-lucide="layers" class="w-3.5 h-3.5 text-blue-400"></i> Top Active Processes</span>
+      <span class="text-[10px] text-slate-400">Ranked by CPU consumption</span>
+    </div>
+    <table class="w-full text-xs text-left">
+      <thead class="text-[10px] uppercase text-slate-400 bg-slate-900/40 border-b border-slate-700/40">
+        <tr>
+          <th class="py-1.5 px-3">Process</th>
+          <th class="py-1.5 px-2">PID</th>
+          <th class="py-1.5 px-2 text-right">CPU %</th>
+          <th class="py-1.5 px-2 text-right">Memory (RSS)</th>
+          <th class="py-1.5 px-3 text-right">Status</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-800">
+        <!-- Render 3 to 5 real processes (exclude top/profiler commands) -->
+        <tr>
+          <td class="py-2 px-3 font-semibold text-white flex items-center gap-1.5"><i data-lucide="terminal" class="w-3 h-3 text-slate-400"></i> {{process_name}}</td>
+          <td class="py-2 px-2 font-mono text-slate-400">{{pid}}</td>
+          <td class="py-2 px-2 text-right font-mono font-bold text-blue-400">{{cpu_pct}}%</td>
+          <td class="py-2 px-2 text-right font-mono text-emerald-300">{{mem_mb}} MB</td>
+          <td class="py-2 px-3 text-right"><span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">Stable</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Engineering Insights & Health Verdict -->
+  <div class="benchmark-insights p-3 bg-blue-950/20 border border-blue-500/20 rounded-lg text-xs text-slate-300 space-y-1">
+    <div class="font-semibold text-blue-400 flex items-center gap-1.5 mb-1"><i data-lucide="check-circle" class="w-3.5 h-3.5"></i> Engineering Insights:</div>
+    <div>&bull; <strong>Process Activity:</strong> {{top_proc_name}} is the primary consumer utilizing {{top_proc_cpu}}% CPU and {{top_proc_mem}} MB RAM.</div>
+    <div>&bull; <strong>Memory Headroom:</strong> {{avail_gb}} GB available ({{avail_pct}}%). System has ample capacity with zero OOM pressure.</div>
+    <div>&bull; <strong>Hardware Pipeline:</strong> IPC of {{ipc}} confirms solid CPU instruction throughput without execution stalls.</div>
   </div>
 </div>
 </agent-html>

@@ -561,7 +561,11 @@ window.chat = {
                     if (window.deviceHud) {
                         window.deviceHud.renderBenchmark(data.ipc || 1.0, data.cacheMiss || 0, data.pageFaults || 0, data.totalCycles || 0);
                     }
-                    rawText = rawText.replace(benchmarkMatch[0], `<div class="bg-emerald-900/30 border border-emerald-500/30 p-3 rounded text-emerald-400 text-sm mt-2"><i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i> Benchmark successfully rendered to the Device HUD Dashboard.</div>`);
+                    if (rawText.includes('<agent-html>')) {
+                        rawText = rawText.replace(benchmarkMatch[0], '').trim();
+                    } else {
+                        rawText = rawText.replace(benchmarkMatch[0], `<div class="bg-emerald-900/30 border border-emerald-500/30 p-3 rounded text-emerald-400 text-sm mt-2"><i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i> Benchmark successfully rendered to the Device HUD Dashboard.</div>`);
+                    }
                 } catch(e) { console.error(e); }
             }
             
