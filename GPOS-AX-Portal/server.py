@@ -317,6 +317,82 @@ def _classify_status(status_name: str, status_obj: dict = None) -> str:
     return "todo"
 
 
+def _compact_html_for_llm(text: str) -> str:
+    """
+    Extract table rows and text from <agent-html> blocks into clean markdown.
+    Preserves 100% of column headers, ticket keys, summaries, statuses, assignees, etc.,
+    so the LLM has complete semantic knowledge of prior assistant responses without
+    wasting thousands of tokens on repetitive HTML/CSS layout tags.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+
+    def _table_to_md(match):
+        table_html = match.group(0)
+        headers = re.findall(r'<th[^>]*>(.*?)</th>', table_html, flags=re.DOTALL | re.IGNORECASE)
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_html, flags=re.DOTALL | re.IGNORECASE)
+        
+        md_lines = []
+        if headers:
+            clean_headers = [re.sub(r'<[^>]+>', '', h).strip() for h in headers if h.strip()]
+            if clean_headers:
+                md_lines.append("| " + " | ".join(clean_headers) + " |")
+                md_lines.append("| " + " | ".join(["---"] * len(clean_headers)) + " |")
+        
+        for r in rows:
+            tds = re.findall(r'<td[^>]*>(.*?)</td>', r, flags=re.DOTALL | re.IGNORECASE)
+            if tds:
+                clean_tds = [re.sub(r'<[^>]+>', '', td).strip().replace("\n", " ") for td in tds]
+                md_lines.append("| " + " | ".join(clean_tds) + " |")
+        
+        if md_lines:
+            return "\n" + "\n".join(md_lines) + "\n"
+        return ""
+
+    # 1. Convert any <table>...</table> to clean markdown table
+    result = re.sub(r'<table[^>]*>.*?</table>', _table_to_md, text, flags=re.DOTALL | re.IGNORECASE)
+    
+    # 2. Strip remaining HTML tags inside <agent-html>...</agent-html>
+    def _strip_agent_html(match):
+        inner = match.group(1)
+        clean_text = re.sub(r'<[^>]+>', '', inner)
+        clean_text = re.sub(r'\n\s*\n+', '\n\n', clean_text).strip()
+        return f"\n{clean_text}\n"
+
+    result = re.sub(r'<agent-html>(.*?)</agent-html>', _strip_agent_html, result, flags=re.DOTALL | re.IGNORECASE)
+    
+    # 3. Clean up excessive blank lines
+    result = re.sub(r'\n{3,}', '\n\n', result).strip()
+    return result
+
+
+def sanitize_history_for_llm(history: list, max_messages: int = 10) -> list:
+    """
+    Sanitize and compact history messages before feeding to LLM.
+    Converts verbose UI HTML tables/widgets from past assistant turns into
+    clean semantic markdown representation so the LLM retains 100% of the
+    information (keys, titles, assignees, statuses) without wasting thousands
+    of tokens on repetitive HTML layout tags.
+    """
+    if not history:
+        return []
+    
+    compacted = []
+    for h in history[-max_messages:]:
+        role = h.get("role") or ('assistant' if h.get('sender') == 'agent' else 'user')
+        content = h.get("content") or h.get("text") or ""
+        
+        if not content:
+            continue
+            
+        if role == "assistant" and isinstance(content, str):
+            if "<agent-html>" in content or "<table" in content:
+                content = _compact_html_for_llm(content)
+        
+        compacted.append({"role": role, "content": content})
+    return compacted
+
+
 def _jira_headers(pat: str) -> dict:
     """Send both standard Bearer auth and X-Jira-PAT for MCP server proxy compatibility."""
     return {
@@ -853,9 +929,7 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                 tools.append({"type": "function", "function": {"name": t.name, "description": t.description or "", "parameters": t.input_schema}})
 
             messages = [{"role": "system", "content": sys_prompt}]
-            for h in req.history[-10:]:
-                if h.get("role") and h.get("content"):
-                    messages.append({"role": h["role"], "content": h["content"]})
+            messages.extend(sanitize_history_for_llm(req.history, max_messages=10))
             if hasattr(req, 'images') and req.images:
                 content_list = [{"type": "text", "text": req.message}]
                 for img_data in req.images:
@@ -976,6 +1050,9 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 res_text = "(Command returned empty output)"
                         except Exception as e:
                             res_text = f"[ERROR] Tool execution failed: {str(e)}"
+
+                        if len(res_text) > 16000:
+                            res_text = res_text[:16000] + f"\n... [Output truncated to 16,000 characters to prevent context window overflow. Total length was {len(res_text)} characters.]"
 
                         messages.append({
                             "role": "tool",
@@ -1120,9 +1197,7 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
             messages = [{"role": "system", "content": system_prompt}]
             
             if req.history:
-                for h in req.history:
-                    role = 'assistant' if h.get('sender') == 'agent' else 'user'
-                    messages.append({"role": role, "content": h.get('text', '')})
+                messages.extend(sanitize_history_for_llm(req.history, max_messages=10))
             
             if hasattr(req, 'images') and req.images:
                 content_list = [{"type": "text", "text": req.message}]
@@ -1458,9 +1533,7 @@ async def llm_chat(req: ChatRequest, request: Request):
     If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and the user confirms, YOU MUST ACTUALLY EXECUTE THE TOOL. Do NOT just output a success message without calling the tool.
     """
             messages = [{"role": "system", "content": sys_prompt}]
-            for h in req.history[-10:]: # Limit to last 10 messages for context window
-                if h.get("role") and h.get("content"):
-                    messages.append({"role": h["role"], "content": h["content"]})
+            messages.extend(sanitize_history_for_llm(req.history, max_messages=10))
             if hasattr(req, 'images') and req.images:
                 content_list = [{"type": "text", "text": req.message}]
                 for img_data in req.images:
@@ -1598,6 +1671,9 @@ async def llm_chat(req: ChatRequest, request: Request):
                             if "failed (HTTP" in res_text or "Error in" in res_text:
                                 res_text = f"TOOL EXECUTION FAILED: {res_text}\nCRITICAL INSTRUCTION: You MUST inform the user that the action failed and explain the error. DO NOT say it succeeded."
                             
+                            if len(res_text) > 16000:
+                                res_text = res_text[:16000] + f"\n... [Output truncated to 16,000 characters to prevent context window overflow. Total length was {len(res_text)} characters.]"
+
                             messages.append({
                                 "role": "tool",
                                 "name": func_name,
