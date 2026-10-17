@@ -7,6 +7,11 @@ httpx2._sse._SSEParser = MySSEParser
 # ------------------------------------------------
 import os
 import re
+import uuid
+import base64
+import json
+import asyncio
+import subprocess
 import sqlite3
 import logging
 from datetime import date
@@ -934,9 +939,6 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
                                 
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
-                                import uuid
-                                import base64
-                                import re
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
                                 img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
@@ -1202,9 +1204,6 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                     f.write(res_text)
                                 res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
-                                import uuid
-                                import base64
-                                import re
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
                                 img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
@@ -1306,6 +1305,9 @@ async def llm_chat(req: ChatRequest, request: Request):
     from contextlib import AsyncExitStack
     import httpx
     import json
+    import re
+    import uuid
+    import base64
     
     async with AsyncExitStack() as stack:
         try:
@@ -1517,11 +1519,26 @@ async def llm_chat(req: ChatRequest, request: Request):
     
                             # 3. Handle JQL queries: replace SIGPOSDEV with target_project or inject project filter
                             if "jql" in func_args and isinstance(func_args["jql"], str):
-                                jql_str = func_args["jql"]
+                                jql_str = func_args["jql"].strip()
                                 if target_project != "SIGPOSDEV":
                                     jql_str = re.sub(r'\bSIGPOSDEV\b', target_project, jql_str, flags=re.IGNORECASE)
-                                if not re.search(r'\bproject\s*=', jql_str, re.IGNORECASE):
-                                    jql_str = f"project = {target_project} AND ({jql_str})"
+                                
+                                # If project is already specified, ensure no rogue ORDER BY inside parentheses
+                                if re.search(r'\bproject\s*=', jql_str, re.IGNORECASE):
+                                    jql_str = re.sub(r'\(\s*(.*?)\s+ORDER\s+BY\s+(.*?)\s*\)', r'(\1) ORDER BY \2', jql_str, flags=re.IGNORECASE)
+                                else:
+                                    # Project not specified: scope to target_project
+                                    # Keep ORDER BY at the very end outside any parentheses!
+                                    order_match = re.search(r'\s+(ORDER\s+BY\s+.*)$', jql_str, re.IGNORECASE)
+                                    if order_match:
+                                        filter_part = jql_str[:order_match.start()].strip()
+                                        order_part = order_match.group(1).strip()
+                                        if filter_part:
+                                            jql_str = f"project = {target_project} AND ({filter_part}) {order_part}"
+                                        else:
+                                            jql_str = f"project = {target_project} {order_part}"
+                                    else:
+                                        jql_str = f"project = {target_project} AND ({jql_str})"
                                 func_args["jql"] = jql_str
                                 logger.info(f"Dynamically scoped JQL query to project {target_project}: {jql_str}")
                             
@@ -1543,7 +1560,6 @@ async def llm_chat(req: ChatRequest, request: Request):
                                 res_text = str(tool_result.content)
     
                             if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
-                                import uuid
                                 svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
@@ -1553,9 +1569,6 @@ async def llm_chat(req: ChatRequest, request: Request):
                                     f.write(res_text)
                                 res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
-                                import uuid
-                                import base64
-                                import re
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
                                 img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
@@ -1595,7 +1608,17 @@ async def llm_chat(req: ChatRequest, request: Request):
                             if func_name == "get_agent_instructions" and target_project != "SIGPOSDEV":
                                 res_text = re.sub(r'\bSIGPOSDEV\b', target_project, res_text)
                             
-                            if "failed (HTTP" in res_text or "Error in" in res_text:
+                            # Only flag genuine tool execution failures; never flag legitimate Jira bug ticket summaries containing 'Error in...'
+                            is_tool_error = (
+                                res_text.startswith("Error executing ") or
+                                res_text.startswith("Search failed (HTTP") or
+                                res_text.startswith("JQL Search failed (HTTP") or
+                                res_text.startswith("Failed to fetch ") or
+                                res_text.startswith("Error in jira_") or
+                                "failed (HTTP 4" in res_text or "failed (HTTP 5" in res_text or
+                                "HTTP 401" in res_text or "HTTP 403" in res_text
+                            )
+                            if is_tool_error and not res_text.startswith("TOOL EXECUTION FAILED"):
                                 res_text = f"TOOL EXECUTION FAILED: {res_text}\nCRITICAL INSTRUCTION: You MUST inform the user that the action failed and explain the error. DO NOT say it succeeded."
                             
                             messages.append({
