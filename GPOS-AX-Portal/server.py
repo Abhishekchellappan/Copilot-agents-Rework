@@ -481,6 +481,8 @@ async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
     import httpx
     import json
     import re
+    import uuid
+    import base64
     import traceback
 
 
@@ -935,7 +937,6 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 res_text = str(tool_result.content)
 
                             if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
-                                import uuid
                                 svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
@@ -1023,6 +1024,9 @@ async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat
     import os
     import httpx
     import json
+    import re
+    import uuid
+    import base64
     
     async with AsyncExitStack() as stack:
         try:
@@ -1219,7 +1223,6 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                 res_text = str(tool_result.content)
 
                             if func_name == "generate_interactive_flamegraph" and res_text.strip().startswith("<?xml"):
-                                import uuid
                                 svg_filename = f"flamegraph_{uuid.uuid4().hex[:8]}.svg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
