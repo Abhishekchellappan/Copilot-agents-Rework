@@ -3012,90 +3012,121 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshot.
         return "ERROR: No target IP specified."
 
     # 1. Clean up old screenshot artifacts first
-    _run_ssh(ip, f"rm -f '{destination_path}' /tmp/capture*.png /tmp/snap*.png", timeout=5)
+    _run_ssh(ip, f"rm -f '{destination_path}' /tmp/capture*.png /tmp/capture*.jpg /tmp/snap*.png /tmp/snap*.jpg /tmp/snapshot*.png /tmp/snapshot*.jpg", timeout=5)
 
-    # 2. Candidate payloads — explicitly prioritize paths before empty object!
-    payloads = [
-        json.dumps({"output": destination_path, "format": "PNG"}),
-        json.dumps({"path": destination_path, "method": "PNG"}),
-        json.dumps({"output": destination_path}),
-        json.dumps({"path": destination_path}),
-        json.dumps({"format": "PNG", "quality": 100}),
-        "{}"
+    # 2. Comprehensive capture candidates (Luna methods with standard webOS TV & OSE payloads)
+    methods_and_payloads = [
+        # LG webOS TV primary capture service
+        ("luna://com.webos.service.capture/executeOneShot", json.dumps({"path": destination_path, "method": "DISPLAY", "format": "PNG"})),
+        ("luna://com.webos.service.capture/executeOneShot", json.dumps({"path": destination_path, "method": "DISPLAY", "format": "JPG"})),
+        ("luna://com.webos.service.capture/executeOneShot", json.dumps({"path": destination_path, "format": "PNG"})),
+        ("luna://com.webos.service.capture/executeOneShot", json.dumps({"path": destination_path, "format": "JPG"})),
+        
+        # webOS SurfaceManager Compositor Output (webOS OSE & embedded targets)
+        ("luna://com.webos.surfacemanager/captureCompositorOutput", json.dumps({"output": destination_path, "format": "PNG"})),
+        ("luna://com.webos.surfacemanager/captureCompositorOutput", json.dumps({"output": destination_path, "format": "JPG"})),
+        ("luna://com.webos.surfacemanager/captureCompositorOutput", json.dumps({"path": destination_path, "method": "PNG"})),
+        ("luna://com.webos.surfacemanager/captureCompositorOutput", json.dumps({"output": destination_path})),
+        ("luna://com.webos.surfacemanager/captureCompositorOutput", json.dumps({"path": destination_path})),
+        ("luna://com.webos.surfacemanager/captureCompositorOutput", "{}"),
+
+        # TV display and capture variations
+        ("luna://com.webos.service.tv.display/takeScreenShot", json.dumps({"path": destination_path})),
+        ("luna://com.webos.service.tv.display/takeScreenShot", json.dumps({"output": destination_path})),
+        ("luna://com.webos.service.capture/executeScreenshot", json.dumps({"path": destination_path})),
+        ("luna://com.webos.service.capture/takeScreenshot", json.dumps({"path": destination_path})),
+        ("luna://com.webos.service.capture/captureScreen", json.dumps({"path": destination_path})),
+        ("luna://com.webos.service.capture/captureWindow", json.dumps({"path": destination_path})),
+        ("luna://com.webos.service.capture/createScreenshot", json.dumps({"path": destination_path})),
     ]
-    
-    # App identities to try (some webOS builds require a valid ACG-permitted app identity)
+
     app_ids = [
+        "",  # no -a flag (often succeeds directly in root shell)
         "com.webos.surfacemanager",
         "com.webos.app.factorywin",
         "com.webos.service.capture",
         "com.palm.lunasend",
-        ""  # no -a flag at all
     ]
-    
-    methods_to_try = [
-        "luna://com.webos.surfacemanager/captureCompositorOutput",
-        "luna://com.webos.service.tv.display/takeScreenShot",
-        "luna://com.webos.service.capture/executeScreenshot",
-        "luna://com.webos.service.capture/takeScreenshot",
-        "luna://com.webos.service.capture/captureScreen",
-        "luna://com.webos.service.capture/captureWindow",
-        "luna://com.webos.service.capture/createScreenshot",
-    ]
-    
+
     log = []
     success = False
     resolved_file_path = destination_path
-    
-    # 3. Try to take the screenshot
-    for method in methods_to_try:
+
+    # 3. Try Luna API methods
+    for method, payload in methods_and_payloads:
         if success:
             break
         for app_id in app_ids:
             if success:
                 break
             app_flag = f"-a {app_id}" if app_id else ""
-            for payload in payloads:
-                cmd = f"luna-send -n 1 {app_flag} {method} '{payload}'"
-                res = _run_ssh(ip, cmd.replace("  ", " "), timeout=5)
-                if '"returnValue": true' in res or '"returnValue":true' in res:
-                    success = True
-                    # Check if the service returned a specific path
-                    try:
-                        import re
-                        m = re.search(r'"(?:path|output|response|imageFile|file)"\s*:\s*"([^"]+)"', res)
-                        if m:
-                            resolved_file_path = m.group(1)
-                    except Exception:
-                        pass
-                    break
-                log.append(f"{method} [{app_id}]: {res.strip()[:80]}")
-                
+            cmd = f"luna-send -n 1 {app_flag} {method} '{payload}'"
+            res = _run_ssh(ip, cmd.replace("  ", " "), timeout=5)
+            if '"returnValue": true' in res or '"returnValue":true' in res:
+                success = True
+                try:
+                    import re
+                    m = re.search(r'"(?:path|output|response|imageFile|file)"\s*:\s*"([^"]+)"', res)
+                    if m:
+                        resolved_file_path = m.group(1)
+                except Exception:
+                    pass
+                break
+            log.append(f"{method} [{app_id}]: {res.strip()[:80]}")
+
+    # 4. Fallback to Wayland / Linux display utilities if Luna APIs were blocked
     if not success:
-        return "Failed to take screenshot. Target is likely headless, or the capture service is out of memory. Log:\n" + "\n".join(log[:6])
+        fallback_cmds = [
+            f"weston-screenshooter '{destination_path}' 2>/dev/null",
+            f"grim '{destination_path}' 2>/dev/null",
+            f"fbgrab '{destination_path}' 2>/dev/null",
+            f"ffmpeg -y -f fbdev -i /dev/fb0 -frames:v 1 '{destination_path}' 2>/dev/null"
+        ]
+        for fb_cmd in fallback_cmds:
+            _run_ssh(ip, fb_cmd, timeout=5)
+            chk = _run_ssh(ip, f"test -s '{destination_path}' && echo FOUND || echo NOT_FOUND", timeout=3)
+            if "FOUND" in chk:
+                success = True
+                resolved_file_path = destination_path
+                break
 
-    # 4. Give the compositor time to write the file asynchronously
-    _run_ssh(ip, "sync; sleep 1.5", timeout=5)
-
-    # 5. Check if the file exists on the target and determine exact path
+    # 5. Flush filesystem buffers and verify file existence
+    _run_ssh(ip, "sync", timeout=3)
     check_file = _run_ssh(ip, f"test -s '{resolved_file_path}' && echo FOUND || echo NOT_FOUND", timeout=5)
     if "FOUND" not in check_file:
-        # Check if any recent png file was created in /tmp
-        find_res = _run_ssh(ip, "ls -t /tmp/*.png 2>/dev/null | head -n 1", timeout=5)
-        if find_res and find_res.strip() and not find_res.strip().startswith("[") and "NOT_FOUND" not in find_res:
-            resolved_file_path = find_res.strip()
+        find_res = _run_ssh(ip, "ls -t /tmp/snapshot* /tmp/capture* 2>/dev/null | head -n 1", timeout=5)
+        for line in find_res.splitlines():
+            clean_line = line.strip()
+            if clean_line.startswith("/tmp/") and any(clean_line.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".bmp"]):
+                resolved_file_path = clean_line
+                break
 
-    # 6. Extract raw binary cleanly (NO -tt pseudo-terminal!)
-    raw_bytes = _fetch_remote_binary(ip, resolved_file_path, timeout=25)
+    # Final existence verification
+    check_final = _run_ssh(ip, f"test -s '{resolved_file_path}' && echo FOUND || echo NOT_FOUND", timeout=5)
+    if "FOUND" not in check_final:
+        return "Failed to take screenshot. Target is likely headless, or the capture service is out of memory. Log:\n" + "\n".join(log[:6])
 
-    if not raw_bytes or len(raw_bytes) < 64:
-        return f"Failed to retrieve screenshot file `{resolved_file_path}` from `{ip}` (file empty or unreadable)."
+    # 6. Extract Base64 directly from device (fast, clean ASCII, immune to binary PTY corruption)
+    b64_output = _run_ssh(ip, f"base64 '{resolved_file_path}' 2>/dev/null || base64 -w 0 '{resolved_file_path}' 2>/dev/null", timeout=35)
+    clean_lines = []
+    for l in b64_output.splitlines():
+        l_str = l.strip()
+        if not l_str or "base64" in l_str or "Warning:" in l_str or "[STDERR]" in l_str or "[TIMEOUT]" in l_str:
+            continue
+        clean_lines.append(l_str)
+    b64_clean = "".join(clean_lines)
 
-    # 7. Convert pristine binary bytes to Base64 in Python
-    import base64
-    b64_clean = base64.b64encode(raw_bytes).decode("ascii")
+    if len(b64_clean) > 100:
+        return f"SNAPSHOT_BASE64:{b64_clean}"
 
-    return f"SNAPSHOT_BASE64:{b64_clean}"
+    # 7. Fallback: Binary stream extraction over SSH
+    raw_bytes = _fetch_remote_binary(ip, resolved_file_path, timeout=30)
+    if raw_bytes and len(raw_bytes) > 64:
+        import base64
+        b64_clean = base64.b64encode(raw_bytes).decode("ascii")
+        return f"SNAPSHOT_BASE64:{b64_clean}"
+
+    return f"Failed to retrieve screenshot file `{resolved_file_path}` from `{ip}` (file empty or unreadable)."
 
 
 if __name__ == '__main__':

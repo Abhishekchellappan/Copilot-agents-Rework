@@ -498,7 +498,7 @@ When the user asks to run shell commands on the target board (such as `grep`, `l
   Use a resilient shell command:
   `find /usr/palm/applications -maxdepth 2 -iname "*settings*" 2>/dev/null || ls -la /usr/palm/applications | grep -i settings || grep -ri "settings" /usr/palm/applications/ 2>/dev/null | head -n 30`
 - When the user asks to "Run CPU benchmark", ALWAYS call `run_perf_benchmark(target_ip=...)`. It automatically runs the embedded performance profiler and gathers metrics!
-- When the user asks to take a screenshot, capture screen, or snapshot of the current window, ALWAYS call `take_screenshot(target_ip=...)`. It captures the screen directly from the webOS surface compositor!
+- When the user asks to take a screenshot, capture screen, or snapshot of the current window, ALWAYS call `take_screenshot(target_ip=...)`. It captures the screen directly from the webOS surface compositor! When presented with the <agent-html> widget in the tool response, YOU MUST include that exact <agent-html>...</agent-html> block in your response to display the screenshot in the chat UI.
 - When the user asks to "Run leaktracer" or check memory leaks with LeakTracer, ALWAYS call `run_leaktracer(target_ip=..., executable=..., duration_seconds=...)`. It automatically resolves binary paths and preloads the LeakTracer library dynamically!
 
 WEBOS LUNA SERVICE API ARCHITECTURE & DYNAMIC DOCUMENTATION LOOKUP:
@@ -872,6 +872,8 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
             else:
                 messages.append({"role": "user", "content": req.message})
 
+            last_screenshot_widget = None
+            last_flamegraph_widget = None
             async with httpx.AsyncClient() as client:
                 for _ in range(25):
                     payload = {
@@ -887,7 +889,12 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                     messages.append(msg)
 
                     if not msg.get("tool_calls"):
-                        return {"intent": "chat", "message": msg.get("content", "")}
+                        content = msg.get("content", "") or ""
+                        if last_screenshot_widget and "<agent-html>" not in content:
+                            content = f"{content}\n\n{last_screenshot_widget}".strip()
+                        elif last_flamegraph_widget and "<agent-html>" not in content:
+                            content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                        return {"intent": "chat", "message": content}
 
                     for tool_call in msg["tool_calls"]:
                         func_name = tool_call["function"]["name"]
@@ -936,7 +943,9 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 svg_path = os.path.join(static_dir, svg_filename)
                                 with open(svg_path, "w", encoding="utf-8") as f:
                                     f.write(res_text)
-                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                                flame_widget = f"<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                                last_flamegraph_widget = flame_widget
+                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n{flame_widget}"
                                 
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
@@ -955,8 +964,7 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                             os.chmod(img_path, 0o644)
                                         except Exception:
                                             pass
-                                        res_text = (
-                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                        widget_html = (
                                             f"<agent-html>\n"
                                             f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
                                             f"  <div class='flex items-center justify-between mb-3'>\n"
@@ -968,6 +976,11 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                             f"  </div>\n"
                                             f"</div>\n"
                                             f"</agent-html>"
+                                        )
+                                        last_screenshot_widget = widget_html
+                                        res_text = (
+                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                            f"{widget_html}"
                                         )
                                     else:
                                         res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
@@ -986,7 +999,12 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                             "content": res_text
                         })
 
-                return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
+                final_msg = "The agent reached the maximum number of iterations without completing the task."
+                if last_screenshot_widget and "<agent-html>" not in final_msg:
+                    final_msg = f"{final_msg}\n\n{last_screenshot_widget}".strip()
+                elif last_flamegraph_widget and "<agent-html>" not in final_msg:
+                    final_msg = f"{final_msg}\n\n{last_flamegraph_widget}".strip()
+                return {"intent": "chat", "message": final_msg}
 
     except Exception as e:
         err_msg = str(e)
@@ -1137,10 +1155,12 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
             else:
                 messages.append({"role": "user", "content": req.message})
             
+            last_screenshot_widget = None
+            last_flamegraph_widget = None
             async with httpx.AsyncClient(timeout=120.0) as client:
                 for _ in range(25):
                     payload = {
-                        "model": "Chat-EXACODE-A",
+                        "model": req.llm_model or "Chat-EXACODE-A",
                         "messages": messages,
                         "tools": tools,
                         "temperature": 0.1
@@ -1155,7 +1175,12 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                     messages.append(message)
                     
                     if not message.get("tool_calls"):
-                        return {"intent": "chat", "message": message.get("content", "")}
+                        content = message.get("content", "") or ""
+                        if last_screenshot_widget and "<agent-html>" not in content:
+                            content = f"{content}\n\n{last_screenshot_widget}".strip()
+                        elif last_flamegraph_widget and "<agent-html>" not in content:
+                            content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                        return {"intent": "chat", "message": content}
                         
                     for tool_call in message["tool_calls"]:
                         func_name = tool_call["function"]["name"]
@@ -1202,7 +1227,9 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                 svg_path = os.path.join(static_dir, svg_filename)
                                 with open(svg_path, "w", encoding="utf-8") as f:
                                     f.write(res_text)
-                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                                flame_widget = f"<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                                last_flamegraph_widget = flame_widget
+                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n{flame_widget}"
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
@@ -1220,8 +1247,7 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                             os.chmod(img_path, 0o644)
                                         except Exception:
                                             pass
-                                        res_text = (
-                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                        widget_html = (
                                             f"<agent-html>\n"
                                             f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
                                             f"  <div class='flex items-center justify-between mb-3'>\n"
@@ -1233,6 +1259,11 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                             f"  </div>\n"
                                             f"</div>\n"
                                             f"</agent-html>"
+                                        )
+                                        last_screenshot_widget = widget_html
+                                        res_text = (
+                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                            f"{widget_html}"
                                         )
                                     else:
                                         res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
@@ -1253,7 +1284,12 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                     with open('/tmp/llm_debug.txt', 'a') as f:
                         f.write(json.dumps(messages) + "\n\n=======================\n")
                         
-                return {"intent": "chat", "message": "The agent reached the maximum number of iterations without completing the task."}
+                final_msg = "The agent reached the maximum number of iterations without completing the task."
+                if last_screenshot_widget and "<agent-html>" not in final_msg:
+                    final_msg = f"{final_msg}\n\n{last_screenshot_widget}".strip()
+                elif last_flamegraph_widget and "<agent-html>" not in final_msg:
+                    final_msg = f"{final_msg}\n\n{last_flamegraph_widget}".strip()
+                return {"intent": "chat", "message": final_msg}
                 
         except Exception as e:
             return {"intent": "chat", "message": f"?? Supervisor Error: {str(e)}"}
@@ -1474,6 +1510,8 @@ async def llm_chat(req: ChatRequest, request: Request):
             else:
                 messages.append({"role": "user", "content": req.message})
             
+            last_screenshot_widget = None
+            last_flamegraph_widget = None
             async with httpx.AsyncClient() as client:
                 for _ in range(25): # Max 25 tool calls per chat
                     payload = {
@@ -1492,7 +1530,12 @@ async def llm_chat(req: ChatRequest, request: Request):
                     
                     if not msg.get("tool_calls"):
                         # No more tool calls, return final message
-                        return {"intent": "chat", "message": msg.get("content", "")}
+                        content = msg.get("content", "") or ""
+                        if last_screenshot_widget and "<agent-html>" not in content:
+                            content = f"{content}\n\n{last_screenshot_widget}".strip()
+                        elif last_flamegraph_widget and "<agent-html>" not in content:
+                            content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                        return {"intent": "chat", "message": content}
                         
                     # Execute tool calls
                     for tool_call in msg["tool_calls"]:
@@ -1567,7 +1610,9 @@ async def llm_chat(req: ChatRequest, request: Request):
                                 svg_path = os.path.join(static_dir, svg_filename)
                                 with open(svg_path, "w", encoding="utf-8") as f:
                                     f.write(res_text)
-                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                                flame_widget = f"<agent-html>\n<div class='bg-slate-900 border-t-4 border-t-amber-500 rounded-lg p-5 shadow-lg shadow-amber-500/10 font-sans mb-4'>\n  <h2 class='text-lg font-bold text-slate-200 mb-4 flex items-center gap-2'><i data-lucide='flame' class='text-amber-500'></i> Interactive Flame Graph</h2>\n  <iframe src='/static/{svg_filename}' width='100%' height='600px' style='border:1px solid #1e293b; border-radius: 8px; background: #0f172a;'></iframe>\n</div>\n</agent-html>"
+                                last_flamegraph_widget = flame_widget
+                                res_text = f"Flame graph SVG generated. Present it using this HTML widget:\n\n{flame_widget}"
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
@@ -1585,8 +1630,7 @@ async def llm_chat(req: ChatRequest, request: Request):
                                             os.chmod(img_path, 0o644)
                                         except Exception:
                                             pass
-                                        res_text = (
-                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                        widget_html = (
                                             f"<agent-html>\n"
                                             f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
                                             f"  <div class='flex items-center justify-between mb-3'>\n"
@@ -1598,6 +1642,11 @@ async def llm_chat(req: ChatRequest, request: Request):
                                             f"  </div>\n"
                                             f"</div>\n"
                                             f"</agent-html>"
+                                        )
+                                        last_screenshot_widget = widget_html
+                                        res_text = (
+                                            f"Screenshot successfully captured and downloaded from the target device. Present it to the user using this HTML widget:\n\n"
+                                            f"{widget_html}"
                                         )
                                     else:
                                         res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
@@ -1636,7 +1685,12 @@ async def llm_chat(req: ChatRequest, request: Request):
                                 "content": f"Error executing tool: {str(e)}"
                             })
                             
-                return {"intent": "chat", "message": "I reached the maximum number of tool calls and had to stop. I attempted 15 steps but couldn't finalize the answer."}
+                final_msg = "I reached the maximum number of tool calls and had to stop. I attempted 15 steps but couldn't finalize the answer."
+                if last_screenshot_widget and "<agent-html>" not in final_msg:
+                    final_msg = f"{final_msg}\n\n{last_screenshot_widget}".strip()
+                elif last_flamegraph_widget and "<agent-html>" not in final_msg:
+                    final_msg = f"{final_msg}\n\n{last_flamegraph_widget}".strip()
+                return {"intent": "chat", "message": final_msg}
                 
     except Exception as e:
         logger.error(f"MCP/LLM Loop Error: {e}", exc_info=True)
