@@ -3003,7 +3003,8 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
     """
     Take a screenshot of the target device's current window and return it as a Base64 string.
     Uses robust method resolution for webOS surface managers, live snapshot directory scanning, and direct Base64 encoding.
-    
+    Falls back to LSM gallery thumbnails (/tmp/snapshots/default/*) when live capture fails (errorCode:1).
+
     :param target_ip: IP address of the target device.
     :param destination_path: Where to save the screenshot on the target device (default /tmp/snapshots/default/live_snap.jpg)
     """
@@ -3014,25 +3015,67 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
     # 1. Quick connectivity probe (fail fast if device is in standby/powered off)
     probe = _run_ssh(ip, "echo ALIVE", timeout=4)
     if "ALIVE" not in probe:
-        return f"ERROR: Target device `{ip}` is unreachable over SSH (device may be in standby, powered off, or network offline). Detail: {probe.strip()[:120]}"
+        return (f"ERROR: Target device `{ip}` is unreachable over SSH "
+                f"(device may be in standby, powered off, or network offline). "
+                f"Detail: {probe.strip()[:120]}")
 
-    # 2. Clean up temporary test files only (preserve existing system snapshot gallery!)
-    _run_ssh(ip, "rm -f /tmp/snapshots/default/live_snap.jpg /tmp/live_snap.png /tmp/snapshot.png /tmp/snapshot.jpg", timeout=4)
+    # 2. GALLERY-FIRST: Scan for existing LSM/Recents system thumbnails BEFORE attempting live capture.
+    #    The webOS Surface Manager (LSM) maintains live window thumbnails at /tmp/snapshots/default/
+    #    named like: <appid>_<orientation>_<datetime>.jpg — updated every ~60s while an app is in foreground.
+    #    These are the most reliable recovery source when executeOneShot fails with errorCode:1
+    #    (compositor busy, display off, HDCP-protected content, no foreground app, etc.).
+    gallery_scan_cmd = (
+        r"find /tmp/snapshots /tmp -maxdepth 3 \( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' \) "
+        r"-not \( -name 'live_snap.*' -o -name 'snapshot.*' \) "
+        r"-size +1k 2>/dev/null | head -20"
+    )
+    gallery_raw = _run_ssh(ip, gallery_scan_cmd, timeout=6)
+    gallery_candidates = []
+    seen_gc: set = set()
+    for line in gallery_raw.splitlines():
+        p = line.strip()
+        if (p and p.startswith("/tmp/") and p not in seen_gc
+                and any(p.endswith(ext) for ext in [".jpg", ".jpeg", ".png"])):
+            seen_gc.add(p)
+            gallery_candidates.append(p)
 
-    # 3. High-priority Luna capture methods for webOS TV & OSE
-    # (Notice: executeOneShot requires width, height, format, method, and app identity com.webos.surfacemanager)
+    # 3. Remove only our own live_snap target file — do NOT delete LSM gallery thumbnails
+    _run_ssh(ip, "rm -f /tmp/snapshots/default/live_snap.jpg /tmp/snapshots/default/live_snap.png "
+                 "/tmp/live_snap.png /tmp/snapshot.png /tmp/snapshot.jpg", timeout=4)
+
+    # 4. High-priority Luna capture methods for webOS TV & OSE
+    #    executeOneShot: requires width, height, format, method="BLENDED", caller=com.webos.surfacemanager
+    #    captureCompositorOutput: output= is the Weston display output name (NOT a file path)
+    #      Common Weston output names on webOS TV: "default", "HDMI-A-1", "HDMI-A-2", "LVDS-1", "DSI-1"
     capture_commands = [
-        # LG webOS TV surface manager compositor executeOneShot (exact native payload)
-        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot", json.dumps({"width": 1920, "height": 1080, "format": "JPEG", "method": "BLENDED", "path": "/tmp/snapshots/default/live_snap.jpg"})),
-        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot", json.dumps({"width": 1280, "height": 720, "format": "JPEG", "method": "BLENDED", "path": "/tmp/snapshots/default/live_snap.jpg"})),
-        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot", json.dumps({"width": 480, "height": 270, "format": "JPEG", "method": "BLENDED", "path": "/tmp/snapshots/default/live_snap.jpg"})),
-        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot", json.dumps({"width": 1920, "height": 1080, "format": "PNG", "method": "BLENDED", "path": "/tmp/snapshots/default/live_snap.png"})),
-        # webOS SurfaceManager captureCompositorOutput (output: "default" is the Weston output name)
-        ("com.webos.surfacemanager", "luna://com.webos.surfacemanager/captureCompositorOutput", json.dumps({"output": "default", "path": "/tmp/snapshots/default/live_snap.jpg"})),
-        ("com.webos.surfacemanager", "luna://com.webos.surfacemanager/captureCompositorOutput", json.dumps({"output": "default"})),
+        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot",
+         json.dumps({"width": 1920, "height": 1080, "format": "JPEG", "method": "BLENDED",
+                     "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot",
+         json.dumps({"width": 3840, "height": 2160, "format": "JPEG", "method": "BLENDED",
+                     "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot",
+         json.dumps({"width": 1280, "height": 720, "format": "JPEG", "method": "BLENDED",
+                     "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        ("com.webos.surfacemanager", "luna://com.webos.service.capture/executeOneShot",
+         json.dumps({"width": 480, "height": 270, "format": "JPEG", "method": "BLENDED",
+                     "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        # captureCompositorOutput — try all known Weston output names on webOS TV
+        ("com.webos.surfacemanager", "luna://com.webos.surfacemanager/captureCompositorOutput",
+         json.dumps({"output": "default", "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        ("com.webos.surfacemanager", "luna://com.webos.surfacemanager/captureCompositorOutput",
+         json.dumps({"output": "HDMI-A-1", "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        ("com.webos.surfacemanager", "luna://com.webos.surfacemanager/captureCompositorOutput",
+         json.dumps({"output": "HDMI-A-2", "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        ("com.webos.surfacemanager", "luna://com.webos.surfacemanager/captureCompositorOutput",
+         json.dumps({"output": "LVDS-1", "path": "/tmp/snapshots/default/live_snap.jpg"})),
+        ("com.webos.surfacemanager", "luna://com.webos.surfacemanager/captureCompositorOutput",
+         json.dumps({"output": "DSI-1", "path": "/tmp/snapshots/default/live_snap.jpg"})),
         # TV display capture fallback
-        ("", "luna://com.webos.service.tv.display/takeScreenShot", json.dumps({"path": "/tmp/live_snap.png"})),
-        ("com.webos.surfacemanager", "luna://com.webos.service.tv.display/takeScreenShot", json.dumps({"path": "/tmp/live_snap.png"})),
+        ("", "luna://com.webos.service.tv.display/takeScreenShot",
+         json.dumps({"path": "/tmp/live_snap.png"})),
+        ("com.webos.surfacemanager", "luna://com.webos.service.tv.display/takeScreenShot",
+         json.dumps({"path": "/tmp/live_snap.png"})),
     ]
 
     log = []
@@ -3041,62 +3084,92 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
 
     for app_id, method, payload in capture_commands:
         app_flag = f"-a {app_id}" if app_id else ""
-        cmd = f"luna-send -n 1 {app_flag} {method} '{payload}'"
-        res = _run_ssh(ip, cmd.replace("  ", " "), timeout=4)
+        cmd = f"luna-send -n 1 {app_flag} {method} '{payload}'".replace("  ", " ")
+        res = _run_ssh(ip, cmd, timeout=5)
         if '"returnValue": true' in res or '"returnValue":true' in res:
             success = True
             try:
-                import re
                 m = re.search(r'"(?:path|output|response|imageFile|file)"\s*:\s*"([^"]+)"', res)
                 if m:
                     resolved_file_path = m.group(1)
             except Exception:
                 pass
             break
-        log.append(f"{method}: {res.strip()[:80]}")
+        log.append(f"{method}: {res.strip()[:120]}")
 
-    # 4. Fallback utilities if Luna capture didn't return success
+    # 5. Framebuffer / Weston fallback utilities if all Luna methods failed
     if not success:
         fallback_cmds = [
             "weston-screenshooter '/tmp/snapshots/default/live_snap.png' 2>/dev/null",
             "grim '/tmp/snapshots/default/live_snap.png' 2>/dev/null",
             "fbgrab '/tmp/snapshots/default/live_snap.png' 2>/dev/null",
-            "ffmpeg -y -f fbdev -i /dev/fb0 -frames:v 1 '/tmp/snapshots/default/live_snap.jpg' 2>/dev/null"
+            "ffmpeg -y -f fbdev -i /dev/fb0 -frames:v 1 '/tmp/snapshots/default/live_snap.jpg' 2>/dev/null",
         ]
         for fb_cmd in fallback_cmds:
-            _run_ssh(ip, fb_cmd, timeout=4)
-            chk = _run_ssh(ip, "test -s '/tmp/snapshots/default/live_snap.png' -o -s '/tmp/snapshots/default/live_snap.jpg' && echo FOUND || echo NOT_FOUND", timeout=3)
-            if "FOUND" in chk:
+            _run_ssh(ip, fb_cmd, timeout=5)
+            chk = _run_ssh(ip, (r"find /tmp/snapshots/default -maxdepth 1 "
+                                 r"\( -name 'live_snap.png' -o -name 'live_snap.jpg' \) "
+                                 r"-size +1k 2>/dev/null | head -1"), timeout=3)
+            if chk.strip():
                 success = True
+                resolved_file_path = chk.strip().splitlines()[0]
                 break
 
-    # 5. Flush buffers
+    # 6. Flush write buffers so the file is visible
     _run_ssh(ip, "sync", timeout=3)
 
-    # 6. Locate the screenshot file:
-    # First priority: explicitly targeted live files
-    # Second priority: native live snapshots generated by webOS SurfaceManager (/tmp/snapshots/default/*)
-    find_cmd = "ls -t /tmp/snapshots/default/live_snap.* /tmp/live_snap.* /tmp/snapshot.* /tmp/snapshots/default/* /tmp/snapshots/* /tmp/*.png /tmp/*.jpg 2>/dev/null | head -n 5"
-    found_files = _run_ssh(ip, find_cmd, timeout=4)
-    
+    # 7. Locate a valid screenshot file using `find` (robust — no ls error mixing)
+    #    Priority order:
+    #      a) resolved_file_path from a successful Luna call
+    #      b) any live_snap.* just created in /tmp/snapshots/default/
+    #      c) all other files in /tmp/snapshots/default/ or /tmp/ (LSM gallery thumbnails)
+    #      d) pre-scanned gallery_candidates from step 2 (last-resort)
     candidate_path = ""
-    for line in found_files.splitlines():
-        clean_path = line.strip()
-        if not clean_path.startswith("/tmp/"):
-            continue
-        if any(clean_path.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".bmp"]):
-            chk_size = _run_ssh(ip, f"test -s '{clean_path}' && echo FOUND || echo NOT_FOUND", timeout=3)
-            if "FOUND" in chk_size:
-                candidate_path = clean_path
+
+    # (a) Verify file from successful Luna call
+    if resolved_file_path:
+        chk = _run_ssh(ip, f"test -s '{resolved_file_path}' && echo FOUND || echo NOT_FOUND", timeout=3)
+        if "FOUND" in chk:
+            candidate_path = resolved_file_path
+
+    # (b)+(c) Search with find — live_snap files first, then gallery
+    if not candidate_path:
+        find_cmd = (
+            r"find /tmp/snapshots/default /tmp/snapshots /tmp "
+            r"-maxdepth 2 \( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' \) "
+            r"-size +1k 2>/dev/null"
+        )
+        found_raw = _run_ssh(ip, find_cmd, timeout=5)
+        found_files = [l.strip() for l in found_raw.splitlines()
+                       if l.strip().startswith("/tmp/") and
+                       any(l.strip().endswith(ext) for ext in [".png", ".jpg", ".jpeg"])]
+        live_snaps = [f for f in found_files if "live_snap" in f]
+        others = [f for f in found_files if "live_snap" not in f]
+        for fp in live_snaps + others:
+            candidate_path = fp
+            break
+
+    # (d) Pre-scanned gallery as absolute last resort
+    if not candidate_path and gallery_candidates:
+        for gc in gallery_candidates[:5]:
+            chk = _run_ssh(ip, f"test -s '{gc}' && echo FOUND || echo NOT_FOUND", timeout=3)
+            if "FOUND" in chk:
+                candidate_path = gc
                 break
 
     if not candidate_path:
-        return f"Failed to take screenshot on target {ip}. Compositor did not return image data. Log:\n" + "\n".join(log[:6])
+        diag = "\n".join(log[:8]) if log else "(no Luna responses captured)"
+        return (
+            f"Failed to take screenshot on target {ip}.\n"
+            f"All Luna capture methods returned errors and no snapshot files exist on the device.\n"
+            f"Possible causes: TV display is OFF, HDCP-protected content is active, "
+            f"no app has ever launched on this device, or the compositor is not running.\n"
+            f"Luna diagnostic log:\n{diag}"
+        )
 
-    resolved_file_path = candidate_path
-
-    # 7. Extract Base64 directly on target (instant, clean ASCII, immune to binary PTY corruption)
-    b64_output = _run_ssh(ip, f"base64 '{resolved_file_path}' 2>/dev/null || base64 -w 0 '{resolved_file_path}' 2>/dev/null", timeout=25)
+    # 8. Extract Base64 directly on target (avoids binary PTY corruption over SSH)
+    b64_output = _run_ssh(ip, (f"base64 '{candidate_path}' 2>/dev/null || "
+                                f"base64 -w 0 '{candidate_path}' 2>/dev/null"), timeout=25)
     clean_lines = []
     for l in b64_output.splitlines():
         l_str = l.strip()
@@ -3108,14 +3181,14 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
     if len(b64_clean) > 100:
         return f"SNAPSHOT_BASE64:{b64_clean}"
 
-    # 8. Secondary fallback: Stream binary bytes over clean SSH
-    raw_bytes = _fetch_remote_binary(ip, resolved_file_path, timeout=25)
+    # 9. Secondary fallback: stream raw binary bytes over clean SSH channel
+    raw_bytes = _fetch_remote_binary(ip, candidate_path, timeout=25)
     if raw_bytes and len(raw_bytes) > 64:
         import base64
         b64_clean = base64.b64encode(raw_bytes).decode("ascii")
         return f"SNAPSHOT_BASE64:{b64_clean}"
 
-    return f"Failed to retrieve screenshot file `{resolved_file_path}` from `{ip}` (file empty or unreadable)."
+    return f"Failed to retrieve screenshot file `{candidate_path}` from `{ip}` (file empty or unreadable)."
 
 
 if __name__ == '__main__':
