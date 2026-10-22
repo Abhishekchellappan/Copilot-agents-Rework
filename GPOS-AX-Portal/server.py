@@ -49,7 +49,7 @@ app.add_middleware(
 # Configuration
 MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://10.221.31.25:31983').rstrip('/')
 DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://gpos-muralidhar-device-service:8000').rstrip('/')
-JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'https://jira.lge.com/issue').rstrip('/')
+JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'https://jira.lge.com').rstrip('/')
 COLLAB_BASE_URL = os.environ.get('COLLAB_BASE_URL', 'http://collab.lge.com/main/spaces/WEBOSDOCS/pages/1473985612/API+Docs').rstrip('/')
 
 # Constants
@@ -2814,6 +2814,8 @@ async def watchdog_stream(request: Request, ip: str):
         except asyncio.CancelledError:
             process.kill()
             
+    return StreamingResponse(log_generator(), media_type="text/event-stream")
+
 @app.get('/api/artifacts')
 def list_artifacts(request: Request):
     """List all diagnostic files, logs, flamegraphs, and snapshots in the Artifact Vault."""
