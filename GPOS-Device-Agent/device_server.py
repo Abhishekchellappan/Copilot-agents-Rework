@@ -677,16 +677,21 @@ def stream_device_logs(
     filter_keywords: list = None,
     lines: int = 100,
     duration_seconds: int = 15,
+    since: str = "",
+    until: str = "",
     ctx: Context = None
 ) -> str:
     """
-    Stream real-time logs from the target device using tail -f /var/log/messages*.
-    Automatically highlights crash patterns (SIGSEGV, FATAL, core dumped, etc.).
+    Stream or fetch logs from the target device.
+    Supports real-time tailing, specific keyword filtering, and precise time-range filtering (since/until).
+    Automatically checks target device clock and highlights crash patterns (SIGSEGV, FATAL, core dumped, etc.).
 
     :param target_ip: IP address of the target device.
     :param filter_keywords: Optional list of keywords to grep for (e.g. ['audiod', 'webappmanager']).
     :param lines: Number of recent lines to fetch initially (default 100).
     :param duration_seconds: How long to stream live logs (default 15s, max 60s).
+    :param since: Optional start time filter (e.g. '11:15', '2026-10-22 11:15:00', '1 hour ago').
+    :param until: Optional end time filter (e.g. '11:20', '2026-10-22 11:20:00').
     """
     ip = _resolve_target(target_ip)
     if not ip:
@@ -694,16 +699,40 @@ def stream_device_logs(
 
     duration_seconds = min(duration_seconds, 60)
 
-    # Build the tail command
-    tail_cmd = f"tail -n {lines} /var/log/messages* 2>/dev/null"
+    # 1. Probe target device system clock to detect desynchronization (e.g. board running in 2025)
+    board_clock = _run_ssh(ip, "date +'%Y-%m-%d %H:%M:%S' 2>/dev/null", timeout=3).strip()
+    clock_notice = ""
+    if board_clock and not board_clock.startswith("["):
+        clock_notice = f"🕒 **Target System Clock**: `{board_clock}`\n\n"
+
+    # 2. Build time-filtered or tail-filtered command
+    grep_clause = ""
     if filter_keywords:
         grep_pattern = "\\|".join(filter_keywords)
-        tail_cmd += f" | grep -i '{grep_pattern}'"
+        grep_clause = f" | grep -i '{grep_pattern}'"
 
-    log_output = _run_ssh(ip, tail_cmd, timeout=duration_seconds + 10)
+    log_output = ""
+    if since or until:
+        # Time-range requested: first try journalctl
+        since_arg = f'--since "{since}"' if since else ""
+        until_arg = f'--until "{until}"' if until else ""
+        jctl_cmd = f"journalctl {since_arg} {until_arg} -n {lines * 3} 2>/dev/null{grep_clause} | tail -n {lines}"
+        log_output = _run_ssh(ip, jctl_cmd, timeout=duration_seconds + 10)
+
+        # Fallback to syslog /var/log/messages if journalctl produced no output or is unavailable
+        if not log_output or "[ERROR]" in log_output or len(log_output.strip()) < 10:
+            time_filter = since or until
+            awk_cmd = f"grep -i '{time_filter}' /var/log/messages* 2>/dev/null{grep_clause} | tail -n {lines}"
+            fallback_res = _run_ssh(ip, awk_cmd, timeout=duration_seconds + 10)
+            if fallback_res and len(fallback_res.strip()) > 10:
+                log_output = fallback_res
+    else:
+        # Standard tail command
+        tail_cmd = f"tail -n {lines} /var/log/messages* 2>/dev/null{grep_clause}"
+        log_output = _run_ssh(ip, tail_cmd, timeout=duration_seconds + 10)
 
     if not log_output or "[ERROR]" in log_output:
-        return f"❌ Failed to fetch logs from `{ip}`: {log_output}"
+        return f"{clock_notice}❌ Failed to fetch logs from `{ip}`: {log_output}"
 
     # Scan for crash patterns
     log_lines = log_output.split("\n")
@@ -712,8 +741,17 @@ def stream_device_logs(
         if CRASH_RE.search(line):
             flagged_lines.append(f"🔴 {line}")
 
-    output = f"📡 **Device Logs from {ip}** (last {lines} lines):\n\n"
-    output += f"```\n{log_output[-3000:]}\n```\n"
+    filter_info = []
+    if filter_keywords:
+        filter_info.append(f"filter: `{', '.join(filter_keywords)}`")
+    if since:
+        filter_info.append(f"since: `{since}`")
+    if until:
+        filter_info.append(f"until: `{until}`")
+    filter_str = f" ({', '.join(filter_info)})" if filter_info else ""
+
+    output = f"{clock_notice}📡 **Device Logs from {ip}**{filter_str}:\n\n"
+    output += f"```\n{log_output[-3500:]}\n```\n"
 
     if flagged_lines:
         output += f"\n### ⚠️ {len(flagged_lines)} Crash/Error Pattern(s) Detected:\n\n"
@@ -3189,6 +3227,72 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
         return f"SNAPSHOT_BASE64:{b64_clean}"
 
     return f"Failed to retrieve screenshot file `{candidate_path}` from `{ip}` (file empty or unreadable)."
+
+
+@mcp.tool()
+def archive_system_logs(target_ip: str = "", log_types: list = None) -> str:
+    """
+    Bundle complete system logs from the target device into a compressed .tar.gz archive.
+    Collects active and rotated /var/log/messages*, syslog*, journal logs, and dmesg kernel logs.
+    Returns metadata and base64-encoded archive for storage in the Portal Artifact Vault.
+
+    :param target_ip: IP address of the target device.
+    :param log_types: Optional list of log components to include (e.g. ['messages', 'journal', 'dmesg']). Defaults to all.
+    """
+    ip = _resolve_target_alias(target_ip)
+    if not ip:
+        return "ERROR: No target IP specified."
+
+    # Verify device reachability
+    probe = _run_ssh(ip, "echo ALIVE", timeout=4)
+    if "ALIVE" not in probe:
+        return f"ERROR: Target device `{ip}` is unreachable over SSH."
+
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    clean_ip = ip.replace(".", "_")
+    archive_name = f"system_logs_{clean_ip}_{timestamp}.tar.gz"
+    remote_archive = f"/tmp/{archive_name}"
+
+    # Create temporary collection directory on target device
+    staging_dir = f"/tmp/logs_staging_{timestamp}"
+    prep_cmd = (
+        f"mkdir -p {staging_dir} && "
+        f"cp -r /var/log/messages* {staging_dir}/ 2>/dev/null || true; "
+        f"cp -r /var/log/syslog* {staging_dir}/ 2>/dev/null || true; "
+        f"dmesg > {staging_dir}/dmesg.txt 2>/dev/null || true; "
+        f"journalctl -n 5000 > {staging_dir}/journalctl_tail5000.txt 2>/dev/null || true; "
+        f"tar -czf {remote_archive} -C {staging_dir} . 2>/dev/null && rm -rf {staging_dir}"
+    )
+    _run_ssh(ip, prep_cmd, timeout=30)
+
+    # Check size of the generated archive
+    size_str = _run_ssh(ip, f"stat -c %s '{remote_archive}' 2>/dev/null || ls -l '{remote_archive}' | awk '{{print $5}}'", timeout=4).strip()
+    size_bytes = 0
+    try:
+        size_bytes = int(size_str.splitlines()[-1].strip())
+    except Exception:
+        size_bytes = 0
+
+    if size_bytes <= 0:
+        return f"ERROR: Failed to generate log archive on `{ip}`. Check disk space in /tmp."
+
+    size_mb = round(size_bytes / (1024 * 1024), 2)
+    size_human = f"{size_mb} MB" if size_mb >= 1.0 else f"{round(size_bytes / 1024, 1)} KB"
+
+    # Base64 encode for direct transfer to portal artifact vault
+    b64_output = _run_ssh(ip, f"base64 '{remote_archive}' 2>/dev/null || base64 -w 0 '{remote_archive}' 2>/dev/null", timeout=45)
+    clean_lines = [l.strip() for l in b64_output.splitlines() if l.strip() and "base64" not in l and "Warning:" not in l and not l.startswith("[")]
+    b64_clean = "".join(clean_lines)
+
+    if len(b64_clean) > 50:
+        return f"LOG_ARCHIVE_BASE64:{archive_name}:{size_human}:{size_bytes}:{b64_clean}"
+
+    return (
+        f"SUCCESS: System logs bundled into `{remote_archive}` ({size_human}) on target `{ip}`.\n"
+        f"Artifact Name: `{archive_name}`\n"
+        f"Remote Path: `{remote_archive}`"
+    )
 
 
 if __name__ == '__main__':

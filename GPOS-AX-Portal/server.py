@@ -49,7 +49,7 @@ app.add_middleware(
 # Configuration
 MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://10.221.31.25:31983').rstrip('/')
 DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://gpos-muralidhar-device-service:8000').rstrip('/')
-JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'http://jira.lge.com/issue').rstrip('/')
+JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'https://jira.lge.com/issue').rstrip('/')
 COLLAB_BASE_URL = os.environ.get('COLLAB_BASE_URL', 'http://collab.lge.com/main/spaces/WEBOSDOCS/pages/1473985612/API+Docs').rstrip('/')
 
 # Constants
@@ -332,24 +332,33 @@ def _jira_headers(pat: str) -> dict:
     }
 
 
+_DIRECT_JIRA_DISABLED_UNTIL = 0
+
 def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "GET", json_body: dict = None) -> Dict[str, Any]:
     """
     Execute request against Jira:
-    1. Direct to JIRA_BASE_URL.
+    1. Direct to JIRA_BASE_URL (HTTPS, fast-fail with 4s timeout).
     2. Fallback to MCP_SERVER_URL REST proxy.
     """
+    global _DIRECT_JIRA_DISABLED_UNTIL
     headers = _jira_headers(pat)
     clean_endpoint = endpoint.lstrip('/')
     
-    # 1. Try Direct to Jira Data Center
-    direct_url = f"{JIRA_BASE_URL}/rest/{clean_endpoint}"
-    try:
-        resp = requests.request(method, direct_url, headers=headers, params=params, json=json_body, timeout=12)
-        if resp.status_code == 200:
-            return resp.json()
-        logger.info(f"Direct Jira returned {resp.status_code}, trying MCP proxy fallback...")
-    except Exception as e:
-        logger.info(f"Direct Jira call failed ({e}), falling back to MCP proxy...")
+    # 1. Try Direct to Jira Data Center (if not circuit-broken)
+    if time.time() >= _DIRECT_JIRA_DISABLED_UNTIL:
+        direct_url = f"{JIRA_BASE_URL}/rest/{clean_endpoint}"
+        try:
+            resp = requests.request(method, direct_url, headers=headers, params=params, json=json_body, timeout=4, verify=False)
+            if resp.status_code == 200:
+                return resp.json()
+            elif resp.status_code in (401, 403):
+                raise HTTPException(status_code=resp.status_code, detail=f"Jira Authentication Failed (HTTP {resp.status_code}). Please check your Jira PAT in Settings.")
+            logger.info(f"Direct Jira returned {resp.status_code}, trying MCP proxy fallback...")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Direct Jira call failed ({e}), circuit-breaking direct calls for 5 min; falling back to MCP proxy...")
+            _DIRECT_JIRA_DISABLED_UNTIL = time.time() + 300
 
     # 2. Try MCP Server REST Proxy
     mcp_url = f"{MCP_SERVER_URL}/rest/{clean_endpoint}"
@@ -502,6 +511,10 @@ When the user asks to run shell commands on the target board (such as `grep`, `l
 - When the user asks to "Run CPU benchmark", ALWAYS call `run_perf_benchmark(target_ip=...)`. It automatically runs the embedded performance profiler and gathers metrics!
 - When the user asks to take a screenshot, capture screen, or snapshot of the current window, ALWAYS call `take_screenshot(target_ip=...)`. It captures the screen directly from the webOS surface compositor! When presented with the <agent-html> widget in the tool response, YOU MUST include that exact <agent-html>...</agent-html> block in your response to display the screenshot in the chat UI.
 - When the user asks to "Run leaktracer" or check memory leaks with LeakTracer, ALWAYS call `run_leaktracer(target_ip=..., executable=..., duration_seconds=...)`. It automatically resolves binary paths and preloads the LeakTracer library dynamically!
+- When the user asks for logs with a specific time window, timestamp, or date (e.g., "between 11:15 and 11:20", "from 10:00 to 10:30"):
+  ALWAYS call `stream_device_logs(target_ip=..., filter_keywords=[...], since=..., until=...)` or use `execute_device_command` with `journalctl --since "..." --until "..."`. NEVER refuse, claim you cannot filter by time, or ask the user for permission to run journalctl — execute the query immediately!
+- When the user asks to "Download complete system logs" or "Capture all logs" or save logs to the vault:
+  ALWAYS call `archive_system_logs(target_ip=...)`. It bundles all system logs into a compressed .tar.gz package on the target device and registers it into the Artifact Vault!
 
 WEBOS LUNA SERVICE API ARCHITECTURE & DYNAMIC DOCUMENTATION LOOKUP:
 webOS system operations are managed dynamically by Luna services on the device bus (e.g., settings, audio, wifi, alarms, bluetooth, notifications, camera, display, etc.).
@@ -987,6 +1000,45 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                         res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
                                 except Exception as e:
                                     res_text = f"Screenshot captured but failed to decode base64 on portal side: {e}"
+
+                            elif func_name == "archive_system_logs" and "LOG_ARCHIVE_BASE64:" in res_text:
+                                parts = res_text.split("LOG_ARCHIVE_BASE64:")[1].strip().split(":", 3)
+                                if len(parts) == 4:
+                                    arc_name, size_human, size_bytes, b64_clean = parts
+                                    artifacts_dir = os.path.join(os.path.dirname(__file__), "static", "artifacts")
+                                    if not os.path.exists(artifacts_dir):
+                                        os.makedirs(artifacts_dir)
+                                    arc_path = os.path.join(artifacts_dir, arc_name)
+                                    try:
+                                        raw_bytes = base64.b64decode(b64_clean)
+                                        with open(arc_path, "wb") as f:
+                                            f.write(raw_bytes)
+                                        try:
+                                            os.chmod(arc_path, 0o644)
+                                        except Exception:
+                                            pass
+                                        widget_html = (
+                                            f"<agent-html>\n"
+                                            f"<div class='bg-slate-900 border-t-4 border-t-emerald-500 rounded-lg p-5 shadow-lg shadow-emerald-500/10 font-sans mb-4'>\n"
+                                            f"  <div class='flex items-center justify-between mb-3'>\n"
+                                            f"    <h2 class='text-lg font-bold text-slate-200 flex items-center gap-2 m-0'><i data-lucide='archive' class='text-emerald-400'></i> System Log Archive</h2>\n"
+                                            f"    <span class='px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-xs font-mono font-bold'>{size_human}</span>\n"
+                                            f"  </div>\n"
+                                            f"  <p class='text-xs text-slate-400 mb-4'>Complete system logs have been bundled into a compressed archive and saved to the <strong>Artifact Vault</strong>.</p>\n"
+                                            f"  <div class='flex items-center gap-3'>\n"
+                                            f"    <a href='/static/artifacts/{arc_name}' download='{arc_name}' class='px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors no-underline'><i data-lucide='download' class='w-4 h-4'></i> Download Archive ({size_human})</a>\n"
+                                            f"    <button onclick=\"switchView('device-hud')\" class='px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors'><i data-lucide='vault' class='w-4 h-4 text-emerald-400'></i> View in Artifact Vault</button>\n"
+                                            f"  </div>\n"
+                                            f"</div>\n"
+                                            f"</agent-html>"
+                                        )
+                                        last_screenshot_widget = widget_html
+                                        res_text = (
+                                            f"System logs packaged into `{arc_name}` ({size_human}) and published to the Artifact Vault.\n\n"
+                                            f"{widget_html}"
+                                        )
+                                    except Exception as e:
+                                        res_text = f"Log archive generated on device, but failed to save to portal vault: {e}"
                                 
                             if not res_text:
                                 res_text = "(Command returned empty output)"
@@ -1272,6 +1324,45 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                         res_text = f"Screenshot capture returned empty image data ({len(raw_bytes)} bytes)."
                                 except Exception as e:
                                     res_text = f"Screenshot captured but failed to decode base64 on portal side: {e}"
+
+                            elif func_name == "archive_system_logs" and "LOG_ARCHIVE_BASE64:" in res_text:
+                                parts = res_text.split("LOG_ARCHIVE_BASE64:")[1].strip().split(":", 3)
+                                if len(parts) == 4:
+                                    arc_name, size_human, size_bytes, b64_clean = parts
+                                    artifacts_dir = os.path.join(os.path.dirname(__file__), "static", "artifacts")
+                                    if not os.path.exists(artifacts_dir):
+                                        os.makedirs(artifacts_dir)
+                                    arc_path = os.path.join(artifacts_dir, arc_name)
+                                    try:
+                                        raw_bytes = base64.b64decode(b64_clean)
+                                        with open(arc_path, "wb") as f:
+                                            f.write(raw_bytes)
+                                        try:
+                                            os.chmod(arc_path, 0o644)
+                                        except Exception:
+                                            pass
+                                        widget_html = (
+                                            f"<agent-html>\n"
+                                            f"<div class='bg-slate-900 border-t-4 border-t-emerald-500 rounded-lg p-5 shadow-lg shadow-emerald-500/10 font-sans mb-4'>\n"
+                                            f"  <div class='flex items-center justify-between mb-3'>\n"
+                                            f"    <h2 class='text-lg font-bold text-slate-200 flex items-center gap-2 m-0'><i data-lucide='archive' class='text-emerald-400'></i> System Log Archive</h2>\n"
+                                            f"    <span class='px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-xs font-mono font-bold'>{size_human}</span>\n"
+                                            f"  </div>\n"
+                                            f"  <p class='text-xs text-slate-400 mb-4'>Complete system logs have been bundled into a compressed archive and saved to the <strong>Artifact Vault</strong>.</p>\n"
+                                            f"  <div class='flex items-center gap-3'>\n"
+                                            f"    <a href='/static/artifacts/{arc_name}' download='{arc_name}' class='px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors no-underline'><i data-lucide='download' class='w-4 h-4'></i> Download Archive ({size_human})</a>\n"
+                                            f"    <button onclick=\"switchView('device-hud')\" class='px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors'><i data-lucide='vault' class='w-4 h-4 text-emerald-400'></i> View in Artifact Vault</button>\n"
+                                            f"  </div>\n"
+                                            f"</div>\n"
+                                            f"</agent-html>"
+                                        )
+                                        last_screenshot_widget = widget_html
+                                        res_text = (
+                                            f"System logs packaged into `{arc_name}` ({size_human}) and published to the Artifact Vault.\n\n"
+                                            f"{widget_html}"
+                                        )
+                                    except Exception as e:
+                                        res_text = f"Log archive generated on device, but failed to save to portal vault: {e}"
                             if not res_text:
                                 res_text = "(Command returned empty output)"
                         except Exception as e:
@@ -2723,7 +2814,58 @@ async def watchdog_stream(request: Request, ip: str):
         except asyncio.CancelledError:
             process.kill()
             
-    return StreamingResponse(log_generator(), media_type="text/event-stream")
+@app.get('/api/artifacts')
+def list_artifacts(request: Request):
+    """List all diagnostic files, logs, flamegraphs, and snapshots in the Artifact Vault."""
+    artifacts = []
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    artifacts_dir = os.path.join(static_dir, "artifacts")
+    
+    # 1. Scan /static/artifacts/ (Log bundles, tar.gz)
+    if os.path.exists(artifacts_dir):
+        for fname in sorted(os.listdir(artifacts_dir), reverse=True):
+            fpath = os.path.join(artifacts_dir, fname)
+            if os.path.isfile(fpath):
+                size = os.path.getsize(fpath)
+                mtime = os.path.getmtime(fpath)
+                size_mb = round(size / (1024 * 1024), 2)
+                size_str = f"{size_mb} MB" if size_mb >= 1.0 else f"{round(size / 1024, 1)} KB"
+                file_type = "Log Archive" if fname.endswith(".tar.gz") or fname.endswith(".zip") else "Diagnostic File"
+                artifacts.append({
+                    "name": fname,
+                    "type": file_type,
+                    "size": size_str,
+                    "url": f"/static/artifacts/{fname}",
+                    "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+                })
+                
+    # 2. Scan /static/ for flamegraphs and snapshots
+    if os.path.exists(static_dir):
+        for fname in sorted(os.listdir(static_dir), reverse=True):
+            fpath = os.path.join(static_dir, fname)
+            if os.path.isfile(fpath):
+                if fname.startswith("flamegraph_") and fname.endswith(".svg"):
+                    size = os.path.getsize(fpath)
+                    mtime = os.path.getmtime(fpath)
+                    artifacts.append({
+                        "name": fname,
+                        "type": "Interactive Flamegraph",
+                        "size": f"{round(size / 1024, 1)} KB",
+                        "url": f"/static/{fname}",
+                        "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                elif fname.startswith("snap_") and (fname.endswith(".png") or fname.endswith(".jpg")):
+                    size = os.path.getsize(fpath)
+                    mtime = os.path.getmtime(fpath)
+                    artifacts.append({
+                        "name": fname,
+                        "type": "Screen Snapshot",
+                        "size": f"{round(size / 1024, 1)} KB",
+                        "url": f"/static/{fname}",
+                        "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    
+    return {"artifacts": artifacts[:50]}
 
 
 

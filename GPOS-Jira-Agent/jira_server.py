@@ -72,8 +72,11 @@ print(f"📚 Loaded {_knowledge_file_count} markdown knowledge files into agent 
 
 # ─── Server & Config ──────────────────────────────────────────────
 mcp = FastMCP("GPOS Jira Agent", instructions=AGENT_KNOWLEDGE if AGENT_KNOWLEDGE else None)
-JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "http://jira.lge.com/issue").rstrip("/")
+JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "https://jira.lge.com/issue").rstrip("/")
 DEFAULT_PAT = os.environ.get("JIRA_PAT", "")
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
@@ -1134,6 +1137,7 @@ async def _proxy(request: Request):
             headers=_headers(request=request),
             data=body or None,
             timeout=15,
+            verify=False,
         )
         return Response(
             content=resp.content,

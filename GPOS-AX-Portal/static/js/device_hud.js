@@ -27,7 +27,66 @@ class DeviceHUD {
         this.startTelemetrySimulation();
         this.pingAllBoards();
         this.updateTargetIp(this.boards.length > 0 ? this.boards[0].ip : 'None');
+        this.loadArtifactVault();
         this.isInitialized = true;
+    }
+
+    async loadArtifactVault() {
+        const tbody = document.getElementById('artifact-vault-list');
+        if (!tbody) return;
+        
+        try {
+            const token = localStorage.getItem('auth_token');
+            const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+            const res = await fetch('/api/artifacts', { headers });
+            if (res.status === 401) { return; }
+            if (!res.ok) return;
+            const data = await res.json();
+            const artifacts = data.artifacts || [];
+            
+            if (artifacts.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" class="text-center py-8 text-slate-500 text-sm">Vault is empty.<br>Ask the agent to download logs, take snapshots, or run benchmarks to generate artifacts.</td></tr>`;
+                return;
+            }
+            
+            let html = '';
+            for (let a of artifacts) {
+                let badgeColor = 'bg-blue-500/20 text-blue-400 border border-blue-500/30';
+                let icon = 'file-text';
+                if (a.type === 'Log Archive') {
+                    badgeColor = 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+                    icon = 'archive';
+                } else if (a.type === 'Interactive Flamegraph') {
+                    badgeColor = 'bg-amber-500/20 text-amber-400 border border-amber-500/30';
+                    icon = 'flame';
+                } else if (a.type === 'Screen Snapshot') {
+                    badgeColor = 'bg-purple-500/20 text-purple-400 border border-purple-500/30';
+                    icon = 'camera';
+                }
+                
+                html += `
+                    <tr class="hover:bg-slate-700/30 transition-colors">
+                        <td class="px-4 py-3 font-mono text-xs text-white flex items-center gap-2">
+                            <i data-lucide="${icon}" class="w-4 h-4 text-slate-400"></i>
+                            <span class="truncate max-w-[200px]" title="${a.name}">${a.name}</span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${badgeColor}">${a.type}</span>
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-400 font-mono">${a.size}</td>
+                        <td class="px-4 py-3 text-right">
+                            <a href="${a.url}" download="${a.name}" target="_blank" class="px-2.5 py-1 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded text-xs font-medium inline-flex items-center gap-1 transition-colors no-underline">
+                                <i data-lucide="download" class="w-3 h-3"></i> Download
+                            </a>
+                        </td>
+                    </tr>
+                `;
+            }
+            tbody.innerHTML = html;
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        } catch (e) {
+            console.error("Error loading artifact vault:", e);
+        }
     }
 
     async pingAllBoards() {

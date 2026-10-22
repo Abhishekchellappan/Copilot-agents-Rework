@@ -2174,6 +2174,10 @@
                 activeNav.classList.add('bg-slate-800', 'text-white');
             }
 
+            if (viewId === 'device-hud' && window.deviceHud && typeof window.deviceHud.loadArtifactVault === 'function') {
+                window.deviceHud.loadArtifactVault();
+            }
+
             if (viewId === 'guide' && typeof lucide !== 'undefined') {
                 lucide.createIcons();
             }
