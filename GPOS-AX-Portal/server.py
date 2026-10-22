@@ -552,10 +552,10 @@ DYNAMIC SERVICE-FIRST WORKFLOW (FOLLOW FOR ALL SYSTEM ACTIONS & SETTINGS):
    - When the user asks for boundary or test values (e.g. 0% or 100%), execute the requested instruction directly without refusal lectures. If the device API returns an error or constraint, report the actual device response.
 
 CRITICAL PRESENTATION RULES (THE WOW FACTOR):
-You MUST NEVER just output plain text for command results. You must present the data using beautiful UI widgets via `<agent-html>` tags.
+Present your findings, benchmarks, diagnostics, and logs using rich visual UI widgets via `<agent-html>` tags whenever available.
+- When an `<agent-html>` widget is provided by a tool (e.g. for screenshots, flamegraphs, system logs, or benchmarks), output that exact `<agent-html>` widget as your response.
+- When presenting logs or shell execution results, present them using the provided `<agent-html>` Log Terminal widget or a well-formatted code block. NEVER return an empty response!
 
-CRITICAL UI RENDERING RULE (SINGLE RESPONSE):
-Whenever you output an `<agent-html>` widget, the widget MUST be your ENTIRE response. DO NOT include any conversational text (like "Here is the status:" or "I've checked the device") before or after the widget. Outputting conversational text alongside a widget causes the chat UI to render two separate message bubbles, which breaks the user experience. ONLY output the raw `<agent-html>` block.
 1. **CPU & Memory Benchmark Results**:
 When you run a benchmark (e.g. `run_perf_benchmark`), ALWAYS emit the `<device-benchmark>` telemetry tag first so the Device HUD gauges update:
 <device-benchmark>{"ipc": 1.29, "cacheMiss": 546, "pageFaults": 17, "totalCycles": 13200000}</device-benchmark>
@@ -892,6 +892,8 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
 
             last_screenshot_widget = None
             last_flamegraph_widget = None
+            last_log_widget = None
+            last_tool_output = None
             async with httpx.AsyncClient() as client:
                 for _ in range(25):
                     payload = {
@@ -907,11 +909,25 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                     messages.append(msg)
 
                     if not msg.get("tool_calls"):
-                        content = msg.get("content", "") or ""
-                        if last_screenshot_widget and "<agent-html>" not in content:
-                            content = f"{content}\n\n{last_screenshot_widget}".strip()
-                        elif last_flamegraph_widget and "<agent-html>" not in content:
-                            content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                        content = (msg.get("content") or "").strip()
+                        if not content:
+                            if last_log_widget:
+                                content = last_log_widget
+                            elif last_screenshot_widget:
+                                content = last_screenshot_widget
+                            elif last_flamegraph_widget:
+                                content = last_flamegraph_widget
+                            elif last_tool_output:
+                                content = last_tool_output
+                            else:
+                                content = "⚠️ Command finished, but no output was returned."
+                        else:
+                            if last_log_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_log_widget}".strip()
+                            elif last_screenshot_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_screenshot_widget}".strip()
+                            elif last_flamegraph_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_flamegraph_widget}".strip()
                         return {"intent": "chat", "message": content}
 
                     for tool_call in msg["tool_calls"]:
@@ -1064,11 +1080,70 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                         )
                                     except Exception as e:
                                         res_text = f"Log archive generated on device, but failed to save to portal vault: {e}"
+
+                            elif func_name == "stream_device_logs":
+                                raw_logs = res_text
+                                if "```" in res_text:
+                                    parts = res_text.split("```")
+                                    if len(parts) >= 3:
+                                        raw_logs = parts[1].strip()
                                 
+                                import html as py_html
+                                escaped_logs = py_html.escape(raw_logs)
+                                target_dev = func_args.get("target_ip") or "Target Device"
+                                kw_arg = func_args.get("filter_keywords") or []
+                                if isinstance(kw_arg, list):
+                                    filter_str = ", ".join(kw_arg)
+                                else:
+                                    filter_str = str(kw_arg)
+                                filter_badge = f"<span class='px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono text-xs border border-blue-500/30'>{py_html.escape(filter_str)}</span>" if filter_str else ""
+                                
+                                has_crash = "Crash/Error Pattern" in res_text or "🔴" in res_text
+                                status_badge = "<span class='px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-semibold text-xs border border-red-500/30 flex items-center gap-1'><span class='w-2 h-2 rounded-full bg-red-500 animate-pulse'></span> Issue Detected</span>" if has_crash else "<span class='px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold text-xs border border-emerald-500/30 flex items-center gap-1'><span class='w-2 h-2 rounded-full bg-emerald-400'></span> Stream Active</span>"
+                                
+                                widget_html = (
+                                    f"<agent-html>\n"
+                                    f"<div class='bg-slate-900 border border-slate-700/80 rounded-xl overflow-hidden shadow-2xl mb-4 font-sans'>\n"
+                                    f"  <div class='px-4 py-3 bg-slate-800/90 border-b border-slate-700/80 flex items-center justify-between'>\n"
+                                    f"    <div class='flex items-center gap-2.5'>\n"
+                                    f"      <div class='p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'>\n"
+                                    f"        <i data-lucide='terminal' class='w-4 h-4'></i>\n"
+                                    f"      </div>\n"
+                                    f"      <div>\n"
+                                    f"        <h3 class='text-sm font-bold text-slate-100 m-0'>Device Log Terminal</h3>\n"
+                                    f"        <div class='text-[11px] text-slate-400 font-mono mt-0.5'>Target: <strong class='text-slate-200'>{target_dev}</strong></div>\n"
+                                    f"      </div>\n"
+                                    f"    </div>\n"
+                                    f"    <div class='flex items-center gap-2'>\n"
+                                    f"      {filter_badge}\n"
+                                    f"      {status_badge}\n"
+                                    f"    </div>\n"
+                                    f"  </div>\n"
+                                    f"  <div class='p-4 bg-black/95 font-mono text-xs text-slate-300 max-h-[400px] overflow-y-auto overflow-x-auto whitespace-pre leading-relaxed select-text border-b border-slate-800'>\n"
+                                    f"<pre class='m-0 p-0 text-slate-300 font-mono text-xs leading-5'>{escaped_logs}</pre>\n"
+                                    f"  </div>\n"
+                                    f"  <div class='px-4 py-2.5 bg-slate-900/90 text-[11px] text-slate-400 flex items-center justify-between font-mono'>\n"
+                                    f"    <span class='flex items-center gap-1'><i data-lucide='cpu' class='w-3.5 h-3.5 text-blue-400'></i> Source: /var/log/messages &bull; pmlogd</span>\n"
+                                    f"    <div class='flex items-center gap-2'>\n"
+                                    f"      <button onclick=\"navigator.clipboard.writeText(this.closest('.bg-slate-900').querySelector('pre').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Logs', 2000);\" class='px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-xs transition-colors flex items-center gap-1'><i data-lucide='copy' class='w-3 h-3'></i> Copy Logs</button>\n"
+                                    f"      <button onclick=\"switchView('device-hud'); if(window.deviceHud) window.deviceHud.loadArtifactVault();\" class='px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-xs transition-colors flex items-center gap-1'><i data-lucide='vault' class='w-3 h-3 text-emerald-400'></i> Artifact Vault</button>\n"
+                                    f"    </div>\n"
+                                    f"  </div>\n"
+                                    f"</div>\n"
+                                    f"</agent-html>"
+                                )
+                                last_log_widget = widget_html
+                                res_text = (
+                                    f"Device logs captured from {target_dev}. Present them using this HTML widget:\n\n"
+                                    f"{widget_html}"
+                                )
+
                             if not res_text:
                                 res_text = "(Command returned empty output)"
+                            last_tool_output = res_text
                         except Exception as e:
                             res_text = f"[ERROR] Tool execution failed: {str(e)}"
+                            last_tool_output = res_text
 
                         messages.append({
                             "role": "tool",
@@ -1077,11 +1152,15 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                             "content": res_text
                         })
 
-                final_msg = "The agent reached the maximum number of iterations without completing the task."
-                if last_screenshot_widget and "<agent-html>" not in final_msg:
-                    final_msg = f"{final_msg}\n\n{last_screenshot_widget}".strip()
+                final_msg = "The agent reached the maximum number of iterations."
+                if last_log_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_log_widget
+                elif last_screenshot_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_screenshot_widget
                 elif last_flamegraph_widget and "<agent-html>" not in final_msg:
-                    final_msg = f"{final_msg}\n\n{last_flamegraph_widget}".strip()
+                    final_msg = last_flamegraph_widget
+                elif last_tool_output:
+                    final_msg = last_tool_output
                 return {"intent": "chat", "message": final_msg}
 
     except Exception as e:
@@ -1238,6 +1317,8 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
             
             last_screenshot_widget = None
             last_flamegraph_widget = None
+            last_log_widget = None
+            last_tool_output = None
             async with httpx.AsyncClient(timeout=120.0) as client:
                 for _ in range(25):
                     payload = {
@@ -1256,11 +1337,25 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                     messages.append(message)
                     
                     if not message.get("tool_calls"):
-                        content = message.get("content", "") or ""
-                        if last_screenshot_widget and "<agent-html>" not in content:
-                            content = f"{content}\n\n{last_screenshot_widget}".strip()
-                        elif last_flamegraph_widget and "<agent-html>" not in content:
-                            content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                        content = (message.get("content") or "").strip()
+                        if not content:
+                            if last_log_widget:
+                                content = last_log_widget
+                            elif last_screenshot_widget:
+                                content = last_screenshot_widget
+                            elif last_flamegraph_widget:
+                                content = last_flamegraph_widget
+                            elif last_tool_output:
+                                content = last_tool_output
+                            else:
+                                content = "⚠️ Command finished, but no output was returned."
+                        else:
+                            if last_log_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_log_widget}".strip()
+                            elif last_screenshot_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_screenshot_widget}".strip()
+                            elif last_flamegraph_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_flamegraph_widget}".strip()
                         return {"intent": "chat", "message": content}
                         
                     for tool_call in message["tool_calls"]:
@@ -1410,10 +1505,70 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                         )
                                     except Exception as e:
                                         res_text = f"Log archive generated on device, but failed to save to portal vault: {e}"
+
+                            elif func_name == "stream_device_logs":
+                                raw_logs = res_text
+                                if "```" in res_text:
+                                    parts = res_text.split("```")
+                                    if len(parts) >= 3:
+                                        raw_logs = parts[1].strip()
+                                
+                                import html as py_html
+                                escaped_logs = py_html.escape(raw_logs)
+                                target_dev = func_args.get("target_ip") or "Target Device"
+                                kw_arg = func_args.get("filter_keywords") or []
+                                if isinstance(kw_arg, list):
+                                    filter_str = ", ".join(kw_arg)
+                                else:
+                                    filter_str = str(kw_arg)
+                                filter_badge = f"<span class='px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono text-xs border border-blue-500/30'>{py_html.escape(filter_str)}</span>" if filter_str else ""
+                                
+                                has_crash = "Crash/Error Pattern" in res_text or "🔴" in res_text
+                                status_badge = "<span class='px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-semibold text-xs border border-red-500/30 flex items-center gap-1'><span class='w-2 h-2 rounded-full bg-red-500 animate-pulse'></span> Issue Detected</span>" if has_crash else "<span class='px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold text-xs border border-emerald-500/30 flex items-center gap-1'><span class='w-2 h-2 rounded-full bg-emerald-400'></span> Stream Active</span>"
+                                
+                                widget_html = (
+                                    f"<agent-html>\n"
+                                    f"<div class='bg-slate-900 border border-slate-700/80 rounded-xl overflow-hidden shadow-2xl mb-4 font-sans'>\n"
+                                    f"  <div class='px-4 py-3 bg-slate-800/90 border-b border-slate-700/80 flex items-center justify-between'>\n"
+                                    f"    <div class='flex items-center gap-2.5'>\n"
+                                    f"      <div class='p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'>\n"
+                                    f"        <i data-lucide='terminal' class='w-4 h-4'></i>\n"
+                                    f"      </div>\n"
+                                    f"      <div>\n"
+                                    f"        <h3 class='text-sm font-bold text-slate-100 m-0'>Device Log Terminal</h3>\n"
+                                    f"        <div class='text-[11px] text-slate-400 font-mono mt-0.5'>Target: <strong class='text-slate-200'>{target_dev}</strong></div>\n"
+                                    f"      </div>\n"
+                                    f"    </div>\n"
+                                    f"    <div class='flex items-center gap-2'>\n"
+                                    f"      {filter_badge}\n"
+                                    f"      {status_badge}\n"
+                                    f"    </div>\n"
+                                    f"  </div>\n"
+                                    f"  <div class='p-4 bg-black/95 font-mono text-xs text-slate-300 max-h-[400px] overflow-y-auto overflow-x-auto whitespace-pre leading-relaxed select-text border-b border-slate-800'>\n"
+                                    f"<pre class='m-0 p-0 text-slate-300 font-mono text-xs leading-5'>{escaped_logs}</pre>\n"
+                                    f"  </div>\n"
+                                    f"  <div class='px-4 py-2.5 bg-slate-900/90 text-[11px] text-slate-400 flex items-center justify-between font-mono'>\n"
+                                    f"    <span class='flex items-center gap-1'><i data-lucide='cpu' class='w-3.5 h-3.5 text-blue-400'></i> Source: /var/log/messages &bull; pmlogd</span>\n"
+                                    f"    <div class='flex items-center gap-2'>\n"
+                                    f"      <button onclick=\"navigator.clipboard.writeText(this.closest('.bg-slate-900').querySelector('pre').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Logs', 2000);\" class='px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-xs transition-colors flex items-center gap-1'><i data-lucide='copy' class='w-3 h-3'></i> Copy Logs</button>\n"
+                                    f"      <button onclick=\"switchView('device-hud'); if(window.deviceHud) window.deviceHud.loadArtifactVault();\" class='px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-xs transition-colors flex items-center gap-1'><i data-lucide='vault' class='w-3 h-3 text-emerald-400'></i> Artifact Vault</button>\n"
+                                    f"    </div>\n"
+                                    f"  </div>\n"
+                                    f"</div>\n"
+                                    f"</agent-html>"
+                                )
+                                last_log_widget = widget_html
+                                res_text = (
+                                    f"Device logs captured from {target_dev}. Present them using this HTML widget:\n\n"
+                                    f"{widget_html}"
+                                )
+
                             if not res_text:
                                 res_text = "(Command returned empty output)"
+                            last_tool_output = res_text
                         except Exception as e:
                             res_text = f"Tool execution failed: {str(e)}"
+                            last_tool_output = res_text
                             
                         messages.append({
                             "role": "tool",
@@ -1425,11 +1580,15 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                     with open('/tmp/llm_debug.txt', 'a') as f:
                         f.write(json.dumps(messages) + "\n\n=======================\n")
                         
-                final_msg = "The agent reached the maximum number of iterations without completing the task."
-                if last_screenshot_widget and "<agent-html>" not in final_msg:
-                    final_msg = f"{final_msg}\n\n{last_screenshot_widget}".strip()
+                final_msg = "The supervisor reached the maximum number of iterations."
+                if last_log_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_log_widget
+                elif last_screenshot_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_screenshot_widget
                 elif last_flamegraph_widget and "<agent-html>" not in final_msg:
-                    final_msg = f"{final_msg}\n\n{last_flamegraph_widget}".strip()
+                    final_msg = last_flamegraph_widget
+                elif last_tool_output:
+                    final_msg = last_tool_output
                 return {"intent": "chat", "message": final_msg}
                 
         except Exception as e:
@@ -1656,6 +1815,8 @@ async def llm_chat(req: ChatRequest, request: Request):
             
             last_screenshot_widget = None
             last_flamegraph_widget = None
+            last_log_widget = None
+            last_tool_output = None
             async with httpx.AsyncClient() as client:
                 for _ in range(25): # Max 25 tool calls per chat
                     payload = {
@@ -1674,11 +1835,25 @@ async def llm_chat(req: ChatRequest, request: Request):
                     
                     if not msg.get("tool_calls"):
                         # No more tool calls, return final message
-                        content = msg.get("content", "") or ""
-                        if last_screenshot_widget and "<agent-html>" not in content:
-                            content = f"{content}\n\n{last_screenshot_widget}".strip()
-                        elif last_flamegraph_widget and "<agent-html>" not in content:
-                            content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                        content = (msg.get("content") or "").strip()
+                        if not content:
+                            if last_log_widget:
+                                content = last_log_widget
+                            elif last_screenshot_widget:
+                                content = last_screenshot_widget
+                            elif last_flamegraph_widget:
+                                content = last_flamegraph_widget
+                            elif last_tool_output:
+                                content = last_tool_output
+                            else:
+                                content = "⚠️ Command finished, but no output was returned."
+                        else:
+                            if last_log_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_log_widget}".strip()
+                            elif last_screenshot_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_screenshot_widget}".strip()
+                            elif last_flamegraph_widget and "<agent-html>" not in content:
+                                content = f"{content}\n\n{last_flamegraph_widget}".strip()
                         return {"intent": "chat", "message": content}
                         
                     # Execute tool calls
@@ -1817,6 +1992,7 @@ async def llm_chat(req: ChatRequest, request: Request):
                             if is_tool_error and not res_text.startswith("TOOL EXECUTION FAILED"):
                                 res_text = f"TOOL EXECUTION FAILED: {res_text}\nCRITICAL INSTRUCTION: You MUST inform the user that the action failed and explain the error. DO NOT say it succeeded."
                             
+                            last_tool_output = res_text
                             messages.append({
                                 "role": "tool",
                                 "name": func_name,
@@ -1825,18 +2001,24 @@ async def llm_chat(req: ChatRequest, request: Request):
                             })
                         except Exception as e:
                             logger.error(f"Tool call failed: {e}")
+                            res_text = f"Error executing tool: {str(e)}"
+                            last_tool_output = res_text
                             messages.append({
                                 "role": "tool",
                                 "name": func_name,
                                 "tool_call_id": tool_call["id"],
-                                "content": f"Error executing tool: {str(e)}"
+                                "content": res_text
                             })
                             
-                final_msg = "I reached the maximum number of tool calls and had to stop. I attempted 15 steps but couldn't finalize the answer."
-                if last_screenshot_widget and "<agent-html>" not in final_msg:
-                    final_msg = f"{final_msg}\n\n{last_screenshot_widget}".strip()
+                final_msg = "I reached the maximum number of tool calls and had to stop."
+                if last_log_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_log_widget
+                elif last_screenshot_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_screenshot_widget
                 elif last_flamegraph_widget and "<agent-html>" not in final_msg:
-                    final_msg = f"{final_msg}\n\n{last_flamegraph_widget}".strip()
+                    final_msg = last_flamegraph_widget
+                elif last_tool_output:
+                    final_msg = last_tool_output
                 return {"intent": "chat", "message": final_msg}
                 
     except Exception as e:

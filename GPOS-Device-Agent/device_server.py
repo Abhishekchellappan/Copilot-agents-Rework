@@ -707,6 +707,11 @@ def stream_device_logs(
 
     # 2. Build time-filtered or tail-filtered command
     # On webOS embedded targets, /var/log/messages* and rotated .gz files are the primary log source.
+    if isinstance(filter_keywords, str):
+        filter_keywords = [k.strip() for k in filter_keywords.replace(",", " ").split() if k.strip()]
+    elif not filter_keywords:
+        filter_keywords = []
+
     grep_pattern = "\\|".join(filter_keywords) if filter_keywords else ""
 
     # Fetch logs using zgrep or tail from /var/log/messages*
@@ -718,7 +723,7 @@ def stream_device_logs(
     raw_output = _run_ssh(ip, fetch_cmd, timeout=duration_seconds + 10)
 
     # Check for actual SSH communication failure
-    if any(err in raw_output for err in ["[ERROR]", "[TIMEOUT]"]):
+    if raw_output.startswith(("[ERROR] SSH", "[TIMEOUT] SSH")):
         return f"{clock_notice}❌ Failed to connect to device `{ip}`: {raw_output}"
 
     # Parse and filter lines by time if since/until provided

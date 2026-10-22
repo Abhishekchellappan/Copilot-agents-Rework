@@ -641,7 +641,12 @@ window.chat = {
                 this.saveHistory();
                 
             } else {
-                this.addMessage(rawText, 'agent');
+                if (rawText && rawText.trim()) {
+                    this.addMessage(rawText, 'agent');
+                } else {
+                    console.warn("Agent returned empty response");
+                    this.addMessage("⚠️ The agent completed execution, but returned an empty response. Please verify device connection or try again.", 'agent');
+                }
             }
         } else {
             this.removeLoading(loadingId);
@@ -723,6 +728,10 @@ window.chat = {
       bubbleClass = isError 
         ? 'bg-red-500/10 border border-red-500/30 text-red-300 rounded-tl-sm' 
         : 'bg-slate-700 border border-slate-600 text-slate-200 rounded-tl-sm shadow-sm prose prose-invert prose-blue max-w-none text-sm';
+    }
+
+    if (sender !== 'user' && (!text || !text.trim()) && (!images || images.length === 0)) {
+      text = "⚠️ (No response content)";
     }
 
     // Basic markdown conversion for bold and line breaks
