@@ -706,49 +706,99 @@ def stream_device_logs(
         clock_notice = f"🕒 **Target System Clock**: `{board_clock}`\n\n"
 
     # 2. Build time-filtered or tail-filtered command
-    grep_clause = ""
+    # On webOS embedded targets, /var/log/messages* and rotated .gz files are the primary log source.
+    grep_pattern = "\\|".join(filter_keywords) if filter_keywords else ""
+
+    # Fetch logs using zgrep or tail from /var/log/messages*
     if filter_keywords:
-        grep_pattern = "\\|".join(filter_keywords)
-        grep_clause = f" | grep -i '{grep_pattern}'"
-
-    log_output = ""
-    if since or until:
-        # Time-range requested: first try journalctl
-        since_arg = f'--since "{since}"' if since else ""
-        until_arg = f'--until "{until}"' if until else ""
-        jctl_cmd = f"journalctl {since_arg} {until_arg} -n {lines * 3} 2>/dev/null{grep_clause} | tail -n {lines}"
-        log_output = _run_ssh(ip, jctl_cmd, timeout=duration_seconds + 10)
-
-        # Fallback to syslog /var/log/messages if journalctl produced no output or is unavailable
-        if not log_output or "[ERROR]" in log_output or len(log_output.strip()) < 10:
-            time_filter = since or until
-            awk_cmd = f"grep -i '{time_filter}' /var/log/messages* 2>/dev/null{grep_clause} | tail -n {lines}"
-            fallback_res = _run_ssh(ip, awk_cmd, timeout=duration_seconds + 10)
-            if fallback_res and len(fallback_res.strip()) > 10:
-                log_output = fallback_res
+        fetch_cmd = f"zgrep -i '{grep_pattern}' /var/log/messages* 2>/dev/null | sed 's|^/var/log/[^:]*:||' | tail -n {lines * 4}"
     else:
-        # Standard tail command
-        tail_cmd = f"tail -n {lines} /var/log/messages* 2>/dev/null{grep_clause}"
-        log_output = _run_ssh(ip, tail_cmd, timeout=duration_seconds + 10)
+        fetch_cmd = f"tail -n {lines * 2} /var/log/messages 2>/dev/null"
 
-    if not log_output or "[ERROR]" in log_output:
-        return f"{clock_notice}❌ Failed to fetch logs from `{ip}`: {log_output}"
+    raw_output = _run_ssh(ip, fetch_cmd, timeout=duration_seconds + 10)
 
-    # Scan for crash patterns
-    log_lines = log_output.split("\n")
-    flagged_lines = []
-    for line in log_lines:
-        if CRASH_RE.search(line):
-            flagged_lines.append(f"🔴 {line}")
+    # Check for actual SSH communication failure
+    if any(err in raw_output for err in ["[ERROR]", "[TIMEOUT]"]):
+        return f"{clock_notice}❌ Failed to connect to device `{ip}`: {raw_output}"
+
+    # Parse and filter lines by time if since/until provided
+    raw_lines = [l.strip() for l in raw_output.splitlines() if l.strip()]
+
+    def _extract_hhmm(s: str) -> str:
+        m = re.search(r'(\d{1,2}:\d{2}(?::\d{2})?)', s)
+        if m:
+            parts = m.group(1).split(':')
+            if len(parts) == 2:
+                return f"{int(parts[0]):02d}:{int(parts[1]):02d}:00"
+            elif len(parts) == 3:
+                return f"{int(parts[0]):02d}:{int(parts[1]):02d}:{int(parts[2]):02d}"
+        return ""
+
+    def _extract_line_time(line: str) -> str:
+        m = re.search(r'T(\d{2}:\d{2}:\d{2})', line)
+        if m:
+            return m.group(1)
+        m = re.search(r'\b(\d{2}:\d{2}:\d{2})\b', line)
+        if m:
+            return m.group(1)
+        return ""
+
+    since_t = _extract_hhmm(since) if since else ""
+    until_t = _extract_hhmm(until) if until else ""
+    if until and len(until.strip().split(':')) == 2:
+        m_until = re.search(r'(\d{1,2}):(\d{2})', until)
+        if m_until:
+            until_t = f"{int(m_until.group(1)):02d}:{int(m_until.group(2)):02d}:59"
+
+    filtered_lines = []
+    if since_t or until_t:
+        for line in raw_lines:
+            lt = _extract_line_time(line)
+            if not lt:
+                filtered_lines.append(line)
+                continue
+            if since_t and lt < since_t:
+                continue
+            if until_t and lt > until_t:
+                continue
+            filtered_lines.append(line)
+    else:
+        filtered_lines = raw_lines
+
+    filtered_lines = filtered_lines[-lines:]
 
     filter_info = []
     if filter_keywords:
-        filter_info.append(f"filter: `{', '.join(filter_keywords)}`")
+        filter_info.append(f"service/filter: `{', '.join(filter_keywords)}`")
     if since:
         filter_info.append(f"since: `{since}`")
     if until:
         filter_info.append(f"until: `{until}`")
     filter_str = f" ({', '.join(filter_info)})" if filter_info else ""
+
+    # If no lines matched, provide helpful diagnostic context rather than claiming a connection error
+    if not filtered_lines:
+        first_line = raw_lines[0] if raw_lines else ""
+        last_line = raw_lines[-1] if raw_lines else ""
+        first_ts = _extract_line_time(first_line) or "earliest"
+        last_ts = _extract_line_time(last_line) or "latest"
+
+        return (
+            f"{clock_notice}ℹ️ **No matching logs found on `{ip}`**{filter_str}.\n\n"
+            f"- **Target System Time**: `{board_clock}`\n"
+            f"- **Active Buffer Retention**: `{first_ts}` to `{last_ts}`\n\n"
+            f"> **Diagnostic Note**: On busy webOS target boards, `/var/log/messages` rotates rapidly under high debug traffic. "
+            f"The logs currently retained in the on-board buffer span from `{first_ts}` to `{last_ts}`. "
+            f"If the requested time window (`{since}` - `{until}`) is older than `{first_ts}`, the events have already been rotated out by `pmlogd`."
+        )
+
+    log_output = "\n".join(filtered_lines)
+
+    # Scan for crash patterns
+    flagged_lines = []
+    for line in filtered_lines:
+        if CRASH_RE.search(line):
+            flagged_lines.append(f"🔴 {line}")
 
     output = f"{clock_notice}📡 **Device Logs from {ip}**{filter_str}:\n\n"
     output += f"```\n{log_output[-3500:]}\n```\n"
