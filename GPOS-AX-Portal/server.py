@@ -967,10 +967,10 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
-                                img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
+                                img_filename = f"snap_{uuid.uuid4().hex[:8]}.jpg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
-                                    os.makedirs(static_dir)
+                                    os.makedirs(static_dir, exist_ok=True)
                                 img_path = os.path.join(static_dir, img_filename)
                                 try:
                                     raw_bytes = base64.b64decode(b64_clean)
@@ -981,12 +981,24 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                             os.chmod(img_path, 0o644)
                                         except Exception:
                                             pass
+                                        # Also persist in /app/data/artifacts if PVC is mounted
+                                        if os.path.exists("/app/data"):
+                                            try:
+                                                pvc_dir = "/app/data/artifacts"
+                                                os.makedirs(pvc_dir, exist_ok=True)
+                                                with open(os.path.join(pvc_dir, img_filename), "wb") as pf:
+                                                    pf.write(raw_bytes)
+                                            except Exception:
+                                                pass
                                         widget_html = (
                                             f"<agent-html>\n"
                                             f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
                                             f"  <div class='flex items-center justify-between mb-3'>\n"
                                             f"    <h2 class='text-lg font-bold text-slate-200 flex items-center gap-2 m-0'><i data-lucide='camera' class='text-blue-500'></i> Live Device Snapshot</h2>\n"
-                                            f"    <a href='/static/{img_filename}' target='_blank' class='text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-mono'><i data-lucide='external-link' class='w-3 h-3'></i> View Full Size</a>\n"
+                                            f"    <div class='flex items-center gap-2'>\n"
+                                            f"      <a href='/static/{img_filename}' target='_blank' class='text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-mono'><i data-lucide='external-link' class='w-3 h-3'></i> View Full Size</a>\n"
+                                            f"      <button onclick=\"switchView('device-hud'); if(window.deviceHud) window.deviceHud.loadArtifactVault();\" class='px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-xs font-medium flex items-center gap-1 transition-colors'><i data-lucide='vault' class='w-3 h-3 text-emerald-400'></i> View in Vault</button>\n"
+                                            f"    </div>\n"
                                             f"  </div>\n"
                                             f"  <div class='rounded overflow-hidden border border-slate-700 bg-black flex justify-center p-1'>\n"
                                             f"    <img src='/static/{img_filename}' alt='Device Screenshot' class='max-w-full h-auto object-contain rounded' style='max-height: 480px;' />\n"
@@ -1301,10 +1313,10 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                             elif func_name == "take_screenshot" and "SNAPSHOT_BASE64:" in res_text:
                                 b64_data = res_text.split("SNAPSHOT_BASE64:")[1].strip()
                                 b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
-                                img_filename = f"snap_{uuid.uuid4().hex[:8]}.png"
+                                img_filename = f"snap_{uuid.uuid4().hex[:8]}.jpg"
                                 static_dir = os.path.join(os.path.dirname(__file__), "static")
                                 if not os.path.exists(static_dir):
-                                    os.makedirs(static_dir)
+                                    os.makedirs(static_dir, exist_ok=True)
                                 img_path = os.path.join(static_dir, img_filename)
                                 try:
                                     raw_bytes = base64.b64decode(b64_clean)
@@ -1315,12 +1327,24 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                             os.chmod(img_path, 0o644)
                                         except Exception:
                                             pass
+                                        # Also persist in /app/data/artifacts if PVC is mounted
+                                        if os.path.exists("/app/data"):
+                                            try:
+                                                pvc_dir = "/app/data/artifacts"
+                                                os.makedirs(pvc_dir, exist_ok=True)
+                                                with open(os.path.join(pvc_dir, img_filename), "wb") as pf:
+                                                    pf.write(raw_bytes)
+                                            except Exception:
+                                                pass
                                         widget_html = (
                                             f"<agent-html>\n"
                                             f"<div class='bg-slate-900 border-t-4 border-t-blue-500 rounded-lg p-5 shadow-lg shadow-blue-500/10 font-sans mb-4'>\n"
                                             f"  <div class='flex items-center justify-between mb-3'>\n"
                                             f"    <h2 class='text-lg font-bold text-slate-200 flex items-center gap-2 m-0'><i data-lucide='camera' class='text-blue-500'></i> Live Device Snapshot</h2>\n"
-                                            f"    <a href='/static/{img_filename}' target='_blank' class='text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-mono'><i data-lucide='external-link' class='w-3 h-3'></i> View Full Size</a>\n"
+                                            f"    <div class='flex items-center gap-2'>\n"
+                                            f"      <a href='/static/{img_filename}' target='_blank' class='text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-mono'><i data-lucide='external-link' class='w-3 h-3'></i> View Full Size</a>\n"
+                                            f"      <button onclick=\"switchView('device-hud'); if(window.deviceHud) window.deviceHud.loadArtifactVault();\" class='px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded text-xs font-medium flex items-center gap-1 transition-colors'><i data-lucide='vault' class='w-3 h-3 text-emerald-400'></i> View in Vault</button>\n"
+                                            f"    </div>\n"
                                             f"  </div>\n"
                                             f"  <div class='rounded overflow-hidden border border-slate-700 bg-black flex justify-center p-1'>\n"
                                             f"    <img src='/static/{img_filename}' alt='Device Screenshot' class='max-w-full h-auto object-contain rounded' style='max-height: 480px;' />\n"
