@@ -1470,16 +1470,19 @@ async def llm_chat(req: ChatRequest, request: Request):
                     }
                 })
                 
-            sys_prompt = f"""You are the GPOS Jira & Governance Agent for Jira Project '{target_project}'.
+            sys_prompt = f"""You are the GPOS Jira & Governance Agent.
+    Your active workspace project is '{target_project}'.
     You have access to a suite of MCP tools (Jira, Code Search, etc.).
     
-    CRITICAL JIRA PROJECT DIRECTIVE:
-    You are strictly working with Jira project: '{target_project}'.
-    ALL queries, JQL searches, sprint reports, and ticket operations MUST target project '{target_project}'.
-    Whenever you search for Jira issues (using search_jira_issues or jira_search), your JQL MUST explicitly include: `project = {target_project}`.
-    DO NOT use project 'SIGPOSDEV' under any circumstances unless '{target_project}' is explicitly 'SIGPOSDEV'.
-    When tools accept a project_key argument (e.g. generate_sprint_report, get_sprint_burndown, create_jira_issue, jira_generate_sprint_report, jira_get_sprint_burndown, jira_create_issue), ALWAYS pass project_key="{target_project}".
-    TIP: If the user asks for "my" tickets (e.g., "my stories", "my bugs"), you MUST use `project = {target_project} AND assignee = currentUser()` in your JQL search.
+    JIRA PROJECT & CROSS-PROJECT RULES:
+    1. DEFAULT WORKSPACE PROJECT:
+       - Default to project '{target_project}' for general queries, sprint reports, burndowns, backlog queries, or when the user asks for "my tickets", "my bugs", or creates an issue without specifying a project key.
+       - For general searches without a specific ticket key or project, scope to `project = {target_project}` (e.g., `project = {target_project} AND assignee = currentUser()`).
+    2. CROSS-PROJECT TICKETS & KEYS FULLY PERMITTED:
+       - NEVER refuse, block, or apologize when the user asks about a specific ticket key (e.g. 'HSWEBOS-2770', or any 'KEY-123' from ANY project), or when the user asks about another project!
+       - You MUST fetch and summarize the ticket immediately using `jira_get_issue(issue_key="...")` or `jira_search(jql="key = ...")`.
+       - DO NOT claim that your instructions strictly limit you to {target_project}. You have full access to any Jira project or ticket readable by the user's Jira credentials/PAT. Always fetch the requested ticket!
+    3. When tools accept a project_key argument (e.g. generate_sprint_report, get_sprint_burndown, create_jira_issue), pass the requested project key if specified by the user, or default to "{target_project}".
     
     CRITICAL LOG ANALYSIS RULE:
     When a user asks you to analyze an attached crash log (like a .7z or .zip file attached to a bug ticket), you MUST perform the following sequence:
@@ -1646,29 +1649,32 @@ async def llm_chat(req: ChatRequest, request: Request):
                             if "pat" in schema or "token" in schema:
                                 func_args["pat"] = pat
                             
-                            # 2. Inject or override project_key / project arguments
+                            # 2. Inject default project_key / project arguments only if not provided
                             if "project_key" in schema or "project_key" in func_args:
                                 val = func_args.get("project_key")
-                                if not val or val.upper() == "SIGPOSDEV" or target_project != "SIGPOSDEV":
+                                if not val:
                                     func_args["project_key"] = target_project
                                     
                             if "project" in schema or "project" in func_args:
                                 val = func_args.get("project")
-                                if not val or val.upper() == "SIGPOSDEV" or target_project != "SIGPOSDEV":
+                                if not val:
                                     func_args["project"] = target_project
     
-                            # 3. Handle JQL queries: replace SIGPOSDEV with target_project or inject project filter
+                            # 3. Handle JQL queries:
                             if "jql" in func_args and isinstance(func_args["jql"], str):
                                 jql_str = func_args["jql"].strip()
-                                if target_project != "SIGPOSDEV":
-                                    jql_str = re.sub(r'\bSIGPOSDEV\b', target_project, jql_str, flags=re.IGNORECASE)
                                 
-                                # If project is already specified, ensure no rogue ORDER BY inside parentheses
-                                if re.search(r'\bproject\s*=', jql_str, re.IGNORECASE):
+                                # Check if a specific ticket key/ID or specific project is already targeted
+                                has_specific_key = re.search(r'\b(key|issueKey|issue|id)\s*(=|in|!=)\s*', jql_str, re.IGNORECASE)
+                                has_project = re.search(r'\bproject\s*(=|in|!=)\s*', jql_str, re.IGNORECASE)
+                                
+                                if has_specific_key or has_project:
+                                    # Specific ticket key or project specified - do NOT inject target_project!
+                                    # Ensure no rogue ORDER BY inside parentheses
                                     jql_str = re.sub(r'\(\s*(.*?)\s+ORDER\s+BY\s+(.*?)\s*\)', r'(\1) ORDER BY \2', jql_str, flags=re.IGNORECASE)
                                 else:
-                                    # Project not specified: scope to target_project
-                                    # Keep ORDER BY at the very end outside any parentheses!
+                                    # Generic search without key or project (e.g. "my open bugs", "sprint in openSprints()"):
+                                    # Scope to default target_project
                                     order_match = re.search(r'\s+(ORDER\s+BY\s+.*)$', jql_str, re.IGNORECASE)
                                     if order_match:
                                         filter_part = jql_str[:order_match.start()].strip()
@@ -1680,7 +1686,7 @@ async def llm_chat(req: ChatRequest, request: Request):
                                     else:
                                         jql_str = f"project = {target_project} AND ({jql_str})"
                                 func_args["jql"] = jql_str
-                                logger.info(f"Dynamically scoped JQL query to project {target_project}: {jql_str}")
+                                logger.info(f"Processed JQL query: {jql_str}")
                             
                             tool_result = await session.call_tool(func_name, arguments=func_args)
                             
