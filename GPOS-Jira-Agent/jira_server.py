@@ -72,7 +72,7 @@ print(f"📚 Loaded {_knowledge_file_count} markdown knowledge files into agent 
 
 # ─── Server & Config ──────────────────────────────────────────────
 mcp = FastMCP("GPOS Jira Agent", instructions=AGENT_KNOWLEDGE if AGENT_KNOWLEDGE else None)
-JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "https://jira.lge.com").rstrip("/")
+JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "http://jira.lge.com").rstrip("/")
 DEFAULT_PAT = os.environ.get("JIRA_PAT", "")
 
 import urllib3

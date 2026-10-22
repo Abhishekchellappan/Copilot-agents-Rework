@@ -49,7 +49,7 @@ app.add_middleware(
 # Configuration
 MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://10.221.31.25:31983').rstrip('/')
 DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://gpos-muralidhar-device-service:8000').rstrip('/')
-JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'https://jira.lge.com').rstrip('/')
+JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'http://jira.lge.com').rstrip('/')
 COLLAB_BASE_URL = os.environ.get('COLLAB_BASE_URL', 'http://collab.lge.com/main/spaces/WEBOSDOCS/pages/1473985612/API+Docs').rstrip('/')
 
 # Constants
@@ -332,19 +332,32 @@ def _jira_headers(pat: str) -> dict:
     }
 
 
-_DIRECT_JIRA_DISABLED_UNTIL = 0
+_DIRECT_JIRA_DISABLED_UNTIL = float('inf')  # Always use MCP proxy (direct http://jira.lge.com:80 drops packets inside K8s)
 
 def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "GET", json_body: dict = None) -> Dict[str, Any]:
     """
-    Execute request against Jira:
-    1. Direct to JIRA_BASE_URL (HTTPS, fast-fail with 4s timeout).
-    2. Fallback to MCP_SERVER_URL REST proxy.
+    Execute request against Jira via MCP proxy (direct Jira is unreachable from within K8s pods).
+    Falls back to direct HTTP only if MCP proxy itself is unavailable.
     """
     global _DIRECT_JIRA_DISABLED_UNTIL
     headers = _jira_headers(pat)
     clean_endpoint = endpoint.lstrip('/')
-    
-    # 1. Try Direct to Jira Data Center (if not circuit-broken)
+
+    # 1. Try MCP Server REST Proxy (primary path - always used inside K8s)
+    try:
+        mcp_url = f"{MCP_SERVER_URL}/rest/{clean_endpoint}"
+        resp = requests.request(method, mcp_url, headers=headers, params=params, json=json_body, timeout=15)
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code in (401, 403):
+            raise HTTPException(status_code=resp.status_code, detail=f"Jira Authentication Failed (HTTP {resp.status_code}). Please check your Jira PAT in Settings.")
+        logger.info(f"MCP proxy returned {resp.status_code}, trying direct Jira fallback...")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"MCP proxy call failed ({e}), trying direct Jira as fallback...")
+
+    # 2. Fallback: Direct Jira (only if MCP proxy is down)
     if time.time() >= _DIRECT_JIRA_DISABLED_UNTIL:
         direct_url = f"{JIRA_BASE_URL}/rest/{clean_endpoint}"
         try:
@@ -353,22 +366,12 @@ def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "G
                 return resp.json()
             elif resp.status_code in (401, 403):
                 raise HTTPException(status_code=resp.status_code, detail=f"Jira Authentication Failed (HTTP {resp.status_code}). Please check your Jira PAT in Settings.")
-            logger.info(f"Direct Jira returned {resp.status_code}, trying MCP proxy fallback...")
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"Direct Jira call failed ({e}), circuit-breaking direct calls for 5 min; falling back to MCP proxy...")
-            _DIRECT_JIRA_DISABLED_UNTIL = time.time() + 300
+            logger.warning(f"Direct Jira call also failed ({e}). Both paths unavailable.")
 
-    # 2. Try MCP Server REST Proxy
-    mcp_url = f"{MCP_SERVER_URL}/rest/{clean_endpoint}"
-    resp = requests.request(method, mcp_url, headers=headers, params=params, json=json_body, timeout=15)
-    if resp.status_code != 200:
-        raise HTTPException(
-            status_code=resp.status_code, 
-            detail=f"Jira API error ({resp.status_code}): {resp.text}"
-        )
-    return resp.json()
+    raise HTTPException(status_code=503, detail="Jira service unavailable. Please try again in a few moments.")
 
 
 def _get_field_names(project_key: str, pat: str) -> dict:
