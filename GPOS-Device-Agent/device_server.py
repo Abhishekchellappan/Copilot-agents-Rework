@@ -3330,7 +3330,15 @@ def archive_system_logs(target_ip: str = "", log_types: list = None) -> str:
     size_mb = round(size_bytes / (1024 * 1024), 2)
     size_human = f"{size_mb} MB" if size_mb >= 1.0 else f"{round(size_bytes / 1024, 1)} KB"
 
-    # Base64 encode for direct transfer to portal artifact vault
+    # Fetch binary directly over raw SSH (no PTY) to guarantee clean, uncorrupted byte stream
+    import base64
+    raw_archive = _fetch_remote_binary(ip, remote_archive, timeout=45)
+    if raw_archive and len(raw_archive) > 64:
+        b64_clean = base64.b64encode(raw_archive).decode('ascii')
+        _run_ssh(ip, f"rm -f '{remote_archive}'", timeout=5)
+        return f"LOG_ARCHIVE_BASE64:{archive_name}:{size_human}:{len(raw_archive)}:{b64_clean}"
+
+    # Fallback to in-shell base64 encoding if raw binary fetch failed
     b64_output = _run_ssh(ip, f"base64 '{remote_archive}' 2>/dev/null || base64 -w 0 '{remote_archive}' 2>/dev/null", timeout=45)
     clean_lines = [l.strip() for l in b64_output.splitlines() if l.strip() and "base64" not in l and "Warning:" not in l and not l.startswith("[")]
     b64_clean = "".join(clean_lines)

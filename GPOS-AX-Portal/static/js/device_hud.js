@@ -45,7 +45,13 @@ class DeviceHUD {
             const artifacts = data.artifacts || [];
             
             if (artifacts.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="4" class="text-center py-8 text-slate-500 text-sm">Vault is empty.<br>Ask the agent to download logs, take snapshots, or run benchmarks to generate artifacts.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="4" class="text-center py-8 text-slate-500 text-sm">
+                    <i data-lucide="archive" class="w-8 h-8 mx-auto mb-2 text-slate-600"></i>
+                    <div class="text-slate-400 font-medium">Vault is empty</div>
+                    <div class="text-xs text-slate-500 mt-1">To generate artifacts, go to <b>Agent Studio &rarr; GPOS Device Agent</b> and run:</div>
+                    <div class="mt-2 text-xs font-mono bg-slate-900/60 inline-block px-3 py-1.5 rounded border border-slate-700 text-emerald-400 cursor-pointer hover:border-emerald-500/50 transition-colors" onclick="switchView('studio'); if(window.chat) { window.chat.switchAgent('device-agent'); document.getElementById('chat-input').value='Download complete system logs for device 10.221.66.108'; }" title="Click to fill prompt in Agent Studio">Download complete system logs for device 10.221.66.108</div>
+                </td></tr>`;
+                if (typeof lucide !== 'undefined') lucide.createIcons();
                 return;
             }
             

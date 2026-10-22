@@ -1008,9 +1008,10 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 parts = res_text.split("LOG_ARCHIVE_BASE64:")[1].strip().split(":", 3)
                                 if len(parts) == 4:
                                     arc_name, size_human, size_bytes, b64_clean = parts
+                                    b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_clean)
                                     artifacts_dir = os.path.join(os.path.dirname(__file__), "static", "artifacts")
                                     if not os.path.exists(artifacts_dir):
-                                        os.makedirs(artifacts_dir)
+                                        os.makedirs(artifacts_dir, exist_ok=True)
                                     arc_path = os.path.join(artifacts_dir, arc_name)
                                     try:
                                         raw_bytes = base64.b64decode(b64_clean)
@@ -1020,6 +1021,15 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                             os.chmod(arc_path, 0o644)
                                         except Exception:
                                             pass
+                                        # Also persist in /app/data/artifacts if PVC is mounted
+                                        if os.path.exists("/app/data"):
+                                            try:
+                                                pvc_dir = "/app/data/artifacts"
+                                                os.makedirs(pvc_dir, exist_ok=True)
+                                                with open(os.path.join(pvc_dir, arc_name), "wb") as pf:
+                                                    pf.write(raw_bytes)
+                                            except Exception:
+                                                pass
                                         widget_html = (
                                             f"<agent-html>\n"
                                             f"<div class='bg-slate-900 border-t-4 border-t-emerald-500 rounded-lg p-5 shadow-lg shadow-emerald-500/10 font-sans mb-4'>\n"
@@ -1030,7 +1040,7 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                             f"  <p class='text-xs text-slate-400 mb-4'>Complete system logs have been bundled into a compressed archive and saved to the <strong>Artifact Vault</strong>.</p>\n"
                                             f"  <div class='flex items-center gap-3'>\n"
                                             f"    <a href='/static/artifacts/{arc_name}' download='{arc_name}' class='px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors no-underline'><i data-lucide='download' class='w-4 h-4'></i> Download Archive ({size_human})</a>\n"
-                                            f"    <button onclick=\"switchView('device-hud')\" class='px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors'><i data-lucide='vault' class='w-4 h-4 text-emerald-400'></i> View in Artifact Vault</button>\n"
+                                            f"    <button onclick=\"switchView('device-hud'); if(window.deviceHud) window.deviceHud.loadArtifactVault();\" class='px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors'><i data-lucide='vault' class='w-4 h-4 text-emerald-400'></i> View in Artifact Vault</button>\n"
                                             f"  </div>\n"
                                             f"</div>\n"
                                             f"</agent-html>"
@@ -1332,9 +1342,10 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                 parts = res_text.split("LOG_ARCHIVE_BASE64:")[1].strip().split(":", 3)
                                 if len(parts) == 4:
                                     arc_name, size_human, size_bytes, b64_clean = parts
+                                    b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_clean)
                                     artifacts_dir = os.path.join(os.path.dirname(__file__), "static", "artifacts")
                                     if not os.path.exists(artifacts_dir):
-                                        os.makedirs(artifacts_dir)
+                                        os.makedirs(artifacts_dir, exist_ok=True)
                                     arc_path = os.path.join(artifacts_dir, arc_name)
                                     try:
                                         raw_bytes = base64.b64decode(b64_clean)
@@ -1344,6 +1355,15 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                             os.chmod(arc_path, 0o644)
                                         except Exception:
                                             pass
+                                        # Also persist in /app/data/artifacts if PVC is mounted
+                                        if os.path.exists("/app/data"):
+                                            try:
+                                                pvc_dir = "/app/data/artifacts"
+                                                os.makedirs(pvc_dir, exist_ok=True)
+                                                with open(os.path.join(pvc_dir, arc_name), "wb") as pf:
+                                                    pf.write(raw_bytes)
+                                            except Exception:
+                                                pass
                                         widget_html = (
                                             f"<agent-html>\n"
                                             f"<div class='bg-slate-900 border-t-4 border-t-emerald-500 rounded-lg p-5 shadow-lg shadow-emerald-500/10 font-sans mb-4'>\n"
@@ -1354,7 +1374,7 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                             f"  <p class='text-xs text-slate-400 mb-4'>Complete system logs have been bundled into a compressed archive and saved to the <strong>Artifact Vault</strong>.</p>\n"
                                             f"  <div class='flex items-center gap-3'>\n"
                                             f"    <a href='/static/artifacts/{arc_name}' download='{arc_name}' class='px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors no-underline'><i data-lucide='download' class='w-4 h-4'></i> Download Archive ({size_human})</a>\n"
-                                            f"    <button onclick=\"switchView('device-hud')\" class='px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors'><i data-lucide='vault' class='w-4 h-4 text-emerald-400'></i> View in Artifact Vault</button>\n"
+                                            f"    <button onclick=\"switchView('device-hud'); if(window.deviceHud) window.deviceHud.loadArtifactVault();\" class='px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors'><i data-lucide='vault' class='w-4 h-4 text-emerald-400'></i> View in Artifact Vault</button>\n"
                                             f"  </div>\n"
                                             f"</div>\n"
                                             f"</agent-html>"
@@ -2829,9 +2849,24 @@ async def watchdog_stream(request: Request, ip: str):
 def list_artifacts(request: Request):
     """List all diagnostic files, logs, flamegraphs, and snapshots in the Artifact Vault."""
     from datetime import datetime
+    import shutil
     artifacts = []
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     artifacts_dir = os.path.join(static_dir, "artifacts")
+    if not os.path.exists(artifacts_dir):
+        os.makedirs(artifacts_dir, exist_ok=True)
+
+    # Sync persistent volume artifacts from /app/data/artifacts if available
+    pvc_dir = "/app/data/artifacts"
+    if os.path.exists(pvc_dir):
+        try:
+            for pf in os.listdir(pvc_dir):
+                src = os.path.join(pvc_dir, pf)
+                dst = os.path.join(artifacts_dir, pf)
+                if os.path.isfile(src) and not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+        except Exception:
+            pass
     
     # 1. Scan /static/artifacts/ (Log bundles, tar.gz)
     if os.path.exists(artifacts_dir):
