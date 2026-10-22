@@ -45,7 +45,7 @@ class DeviceHUD {
             const artifacts = data.artifacts || [];
             
             if (artifacts.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="4" class="text-center py-8 text-slate-500 text-sm">
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-slate-500 text-sm">
                     <i data-lucide="archive" class="w-8 h-8 mx-auto mb-2 text-slate-600"></i>
                     <div class="text-slate-400 font-medium">Vault is empty</div>
                     <div class="text-xs text-slate-500 mt-1">To generate artifacts, go to <b>Agent Studio &rarr; GPOS Device Agent</b> and run:</div>
@@ -70,20 +70,34 @@ class DeviceHUD {
                     icon = 'camera';
                 }
                 
+                const timeStr = a.created_at || 'Recently';
+                const safeName = (a.name || '').replace(/'/g, "\\'");
+                
                 html += `
-                    <tr class="hover:bg-slate-700/30 transition-colors">
+                    <tr class="hover:bg-slate-700/30 transition-colors" id="artifact-row-${(a.name || '').replace(/[^a-zA-Z0-9]/g, '_')}">
                         <td class="px-4 py-3 font-mono text-xs text-white flex items-center gap-2">
-                            <i data-lucide="${icon}" class="w-4 h-4 text-slate-400"></i>
+                            <i data-lucide="${icon}" class="w-4 h-4 text-slate-400 shrink-0"></i>
                             <span class="truncate max-w-[200px]" title="${a.name}">${a.name}</span>
                         </td>
                         <td class="px-4 py-3">
                             <span class="px-2 py-0.5 rounded text-[10px] font-bold ${badgeColor}">${a.type}</span>
                         </td>
                         <td class="px-4 py-3 text-xs text-slate-400 font-mono">${a.size}</td>
+                        <td class="px-4 py-3 text-xs text-slate-300 font-mono whitespace-nowrap">
+                            <span class="flex items-center gap-1.5 text-slate-400">
+                                <i data-lucide="clock" class="w-3.5 h-3.5 text-slate-500"></i>
+                                ${timeStr}
+                            </span>
+                        </td>
                         <td class="px-4 py-3 text-right">
-                            <a href="${a.url}" download="${a.name}" target="_blank" class="px-2.5 py-1 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded text-xs font-medium inline-flex items-center gap-1 transition-colors no-underline">
-                                <i data-lucide="download" class="w-3 h-3"></i> Download
-                            </a>
+                            <div class="inline-flex items-center justify-end gap-1.5">
+                                <a href="${a.url}" download="${a.name}" target="_blank" class="px-2.5 py-1 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded text-xs font-medium inline-flex items-center gap-1 transition-colors no-underline" title="Download artifact">
+                                    <i data-lucide="download" class="w-3 h-3"></i> Download
+                                </a>
+                                <button onclick="window.deviceHud.deleteArtifact('${safeName}')" class="px-2 py-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/30 hover:border-red-600 rounded text-xs font-medium inline-flex items-center gap-1 transition-all cursor-pointer" title="Delete artifact from vault">
+                                    <i data-lucide="trash-2" class="w-3 h-3"></i> Delete
+                                </button>
+                            </div>
                         </td>
                     </tr>
                 `;
@@ -92,6 +106,47 @@ class DeviceHUD {
             if (typeof lucide !== 'undefined') lucide.createIcons();
         } catch (e) {
             console.error("Error loading artifact vault:", e);
+        }
+    }
+
+    async deleteArtifact(filename) {
+        if (!confirm(`Are you sure you want to delete "${filename}" from the Artifact Vault?`)) {
+            return;
+        }
+        try {
+            const token = localStorage.getItem('auth_token');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            
+            const rowId = `artifact-row-${filename.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            const rowElem = document.getElementById(rowId);
+            if (rowElem) {
+                rowElem.style.opacity = '0.4';
+                rowElem.style.pointerEvents = 'none';
+            }
+
+            const res = await fetch('/api/artifacts/delete', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({ filename: filename })
+            });
+            
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                alert(`Failed to delete artifact: ${errData.detail || res.statusText}`);
+                if (rowElem) {
+                    rowElem.style.opacity = '1';
+                    rowElem.style.pointerEvents = 'auto';
+                }
+                return;
+            }
+            
+            // Reload the table
+            await this.loadArtifactVault();
+        } catch (e) {
+            console.error("Error deleting artifact:", e);
+            alert("Error deleting artifact: " + e.message);
+            await this.loadArtifactVault();
         }
     }
 

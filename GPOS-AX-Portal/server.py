@@ -286,7 +286,7 @@ def get_current_user(request: Request) -> str:
 
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
-    if request.url.path.startswith("/api/") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info", "/api/artifacts"]:
+    if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/artifacts") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info"]:
         if request.method != "OPTIONS":  # Skip auth check for CORS preflight
             try:
                 get_current_user(request)
@@ -3056,7 +3056,7 @@ def list_artifacts(request: Request):
     """List all diagnostic files, logs, flamegraphs, and snapshots in the Artifact Vault."""
     from datetime import datetime
     import shutil
-    artifacts = []
+    
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     artifacts_dir = os.path.join(static_dir, "artifacts")
     if not os.path.exists(artifacts_dir):
@@ -3074,51 +3074,115 @@ def list_artifacts(request: Request):
         except Exception:
             pass
     
-    # 1. Scan /static/artifacts/ (Log bundles, tar.gz)
+    seen_files = {}
+
+    # 1. Scan /static/artifacts/ (Log bundles, tar.gz, snapshots synced from PVC)
     if os.path.exists(artifacts_dir):
-        for fname in sorted(os.listdir(artifacts_dir), reverse=True):
+        for fname in os.listdir(artifacts_dir):
             fpath = os.path.join(artifacts_dir, fname)
             if os.path.isfile(fpath):
                 size = os.path.getsize(fpath)
                 mtime = os.path.getmtime(fpath)
                 size_mb = round(size / (1024 * 1024), 2)
                 size_str = f"{size_mb} MB" if size_mb >= 1.0 else f"{round(size / 1024, 1)} KB"
-                file_type = "Log Archive" if fname.endswith(".tar.gz") or fname.endswith(".zip") else "Diagnostic File"
-                artifacts.append({
+                
+                # Classify type accurately
+                if fname.endswith(".tar.gz") or fname.endswith(".zip"):
+                    file_type = "Log Archive"
+                elif fname.startswith("snap_") and (fname.endswith(".png") or fname.endswith(".jpg")):
+                    file_type = "Screen Snapshot"
+                elif fname.startswith("flamegraph_") and fname.endswith(".svg"):
+                    file_type = "Interactive Flamegraph"
+                else:
+                    file_type = "Diagnostic File"
+
+                seen_files[fname] = {
                     "name": fname,
                     "type": file_type,
                     "size": size_str,
                     "url": f"/static/artifacts/{fname}",
-                    "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-                })
+                    "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                    "mtime": mtime
+                }
                 
-    # 2. Scan /static/ for flamegraphs and snapshots
+    # 2. Scan /static/ for flamegraphs and snapshots (avoiding duplicate listings)
     if os.path.exists(static_dir):
-        for fname in sorted(os.listdir(static_dir), reverse=True):
+        for fname in os.listdir(static_dir):
+            if fname in seen_files:
+                continue
             fpath = os.path.join(static_dir, fname)
             if os.path.isfile(fpath):
                 if fname.startswith("flamegraph_") and fname.endswith(".svg"):
                     size = os.path.getsize(fpath)
                     mtime = os.path.getmtime(fpath)
-                    artifacts.append({
+                    seen_files[fname] = {
                         "name": fname,
                         "type": "Interactive Flamegraph",
                         "size": f"{round(size / 1024, 1)} KB",
                         "url": f"/static/{fname}",
-                        "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-                    })
+                        "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                        "mtime": mtime
+                    }
                 elif fname.startswith("snap_") and (fname.endswith(".png") or fname.endswith(".jpg")):
                     size = os.path.getsize(fpath)
                     mtime = os.path.getmtime(fpath)
-                    artifacts.append({
+                    seen_files[fname] = {
                         "name": fname,
                         "type": "Screen Snapshot",
                         "size": f"{round(size / 1024, 1)} KB",
                         "url": f"/static/{fname}",
-                        "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-                    })
+                        "created_at": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                        "mtime": mtime
+                    }
                     
-    return {"artifacts": artifacts[:50]}
+    # Sort newest first by mtime so latest logs and snapshots always appear at the top
+    sorted_artifacts = sorted(seen_files.values(), key=lambda x: x["mtime"], reverse=True)
+    return {"artifacts": sorted_artifacts[:100]}
+
+
+@app.delete('/api/artifacts/{filename}')
+async def delete_artifact_by_param(filename: str):
+    """Delete an artifact by filename URL parameter."""
+    return _do_delete_artifact(filename)
+
+
+@app.post('/api/artifacts/delete')
+async def delete_artifact_by_body(req: Request):
+    """Delete an artifact via JSON body {filename: '...'}."""
+    try:
+        body = await req.json()
+        filename = body.get("filename", "")
+    except Exception:
+        filename = ""
+    return _do_delete_artifact(filename)
+
+
+def _do_delete_artifact(filename: str):
+    clean_name = os.path.basename(filename.strip())
+    if not clean_name or clean_name in [".", ".."]:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    paths_to_check = [
+        os.path.join(static_dir, "artifacts", clean_name),
+        os.path.join(static_dir, clean_name),
+        os.path.join("/app/data/artifacts", clean_name),
+        os.path.join("/app/data", clean_name)
+    ]
+    deleted = False
+    for p in paths_to_check:
+        if os.path.isfile(p):
+            try:
+                os.remove(p)
+                deleted = True
+                logger.info(f"Artifact deleted: {p}")
+            except Exception as e:
+                logger.error(f"Failed to delete {p}: {e}")
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Artifact '{clean_name}' not found or already deleted")
+
+    return {"status": "success", "message": f"Successfully deleted {clean_name}", "filename": clean_name}
 
 
 
