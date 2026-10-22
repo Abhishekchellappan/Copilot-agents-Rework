@@ -286,7 +286,7 @@ def get_current_user(request: Request) -> str:
 
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
-    if request.url.path.startswith("/api/") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info"]:
+    if request.url.path.startswith("/api/") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info", "/api/artifacts"]:
         if request.method != "OPTIONS":  # Skip auth check for CORS preflight
             try:
                 get_current_user(request)
@@ -2828,6 +2828,7 @@ async def watchdog_stream(request: Request, ip: str):
 @app.get('/api/artifacts')
 def list_artifacts(request: Request):
     """List all diagnostic files, logs, flamegraphs, and snapshots in the Artifact Vault."""
+    from datetime import datetime
     artifacts = []
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     artifacts_dir = os.path.join(static_dir, "artifacts")
