@@ -485,6 +485,19 @@ import httpx
 import json
 import subprocess
 
+def unwrap_exception(e: BaseException) -> str:
+    """Recursively extract the deepest root cause from ExceptionGroup / TaskGroup errors."""
+    if hasattr(e, "exceptions") and getattr(e, "exceptions"):
+        extracted = []
+        for sub in getattr(e, "exceptions"):
+            msg = unwrap_exception(sub)
+            if msg and "unhandled errors in a TaskGroup" not in msg:
+                extracted.append(msg)
+        if extracted:
+            return "; ".join(extracted)
+        return unwrap_exception(getattr(e, "exceptions")[0])
+    return str(e)
+
 async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
     from mcp.client.sse import sse_client
     from mcp.client.session import ClientSession
@@ -1164,9 +1177,7 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                 return {"intent": "chat", "message": final_msg}
 
     except Exception as e:
-        err_msg = str(e)
-        if hasattr(e, "exceptions") and getattr(e, "exceptions"):
-            err_msg = "; ".join(str(sub_e) for sub_e in getattr(e, "exceptions"))
+        err_msg = unwrap_exception(e)
         logger.error(f"Device LLM Chat Error: {err_msg}", exc_info=True)
         return {
             "intent": "chat", 
@@ -1186,20 +1197,46 @@ async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat
     
     async with AsyncExitStack() as stack:
         try:
-            # Connect to Jira MCP
-            jira_streams = await stack.enter_async_context(sse_client(f"{MCP_SERVER_URL}/sse", headers={"X-Jira-PAT": pat}))
-            jira_session = await stack.enter_async_context(ClientSession(jira_streams[0], jira_streams[1]))
-            await jira_session.initialize()
+            # Connect to Jira MCP with retry
+            jira_session = None
+            last_jira_err = None
+            for attempt in range(3):
+                try:
+                    jira_streams = await stack.enter_async_context(sse_client(f"{MCP_SERVER_URL}/sse", headers={"X-Jira-PAT": pat}))
+                    jira_session = await stack.enter_async_context(ClientSession(jira_streams[0], jira_streams[1]))
+                    await jira_session.initialize()
+                    break
+                except (Exception, BaseException) as conn_err:
+                    last_jira_err = conn_err
+                    if attempt < 2:
+                        import asyncio
+                        logger.warning(f"Jira MCP connection attempt {attempt+1} failed in supervisor ({unwrap_exception(conn_err)}). Retrying in 1.5s...")
+                        await asyncio.sleep(1.5)
+                    else:
+                        raise last_jira_err
             
-            # Connect to Device MCP
+            # Connect to Device MCP with retry
             collab_pat = req.collab_pat or os.environ.get("COLLAB_PAT", "") or os.environ.get("DEFAULT_COLLAB_PAT", "")
             sse_headers = {"X-Collab-URL": COLLAB_BASE_URL}
             if collab_pat:
                 sse_headers["X-Collab-PAT"] = collab_pat
 
-            device_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse", headers=sse_headers))
-            device_session = await stack.enter_async_context(ClientSession(device_streams[0], device_streams[1]))
-            await device_session.initialize()
+            device_session = None
+            last_dev_err = None
+            for attempt in range(3):
+                try:
+                    device_streams = await stack.enter_async_context(sse_client(f"{DEVICE_MCP_SERVER_URL}/sse", headers=sse_headers))
+                    device_session = await stack.enter_async_context(ClientSession(device_streams[0], device_streams[1]))
+                    await device_session.initialize()
+                    break
+                except (Exception, BaseException) as conn_err:
+                    last_dev_err = conn_err
+                    if attempt < 2:
+                        import asyncio
+                        logger.warning(f"Device MCP connection attempt {attempt+1} failed in supervisor ({unwrap_exception(conn_err)}). Retrying in 1.5s...")
+                        await asyncio.sleep(1.5)
+                    else:
+                        raise last_dev_err
             
             # Aggregate tools
             jira_tools_resp = await jira_session.list_tools()
@@ -1592,7 +1629,9 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                 return {"intent": "chat", "message": final_msg}
                 
         except Exception as e:
-            return {"intent": "chat", "message": f"?? Supervisor Error: {str(e)}"}
+            err_msg = unwrap_exception(e)
+            logger.error(f"Supervisor LLM Chat Error: {err_msg}", exc_info=True)
+            return {"intent": "chat", "message": f"⚠️ Supervisor Error: {err_msg}"}
 
 
 @app.post("/api/chat")
@@ -1647,11 +1686,25 @@ async def llm_chat(req: ChatRequest, request: Request):
     
     try:
         async with AsyncExitStack() as stack:
-            # Connect to MCP server with PAT in headers
+            # Connect to MCP server with retry for transient socket drops/container warmup
             mcp_headers = {"X-Jira-PAT": pat}
-            streams = await stack.enter_async_context(sse_client(f"{MCP_SERVER_URL}/sse", headers=mcp_headers))
-            session = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
-            await session.initialize()
+            session = None
+            last_conn_err = None
+            for attempt in range(3):
+                try:
+                    streams = await stack.enter_async_context(sse_client(f"{MCP_SERVER_URL}/sse", headers=mcp_headers))
+                    session = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
+                    await session.initialize()
+                    break
+                except (Exception, BaseException) as conn_err:
+                    last_conn_err = conn_err
+                    if attempt < 2:
+                        import asyncio
+                        logger.warning(f"Jira MCP connection attempt {attempt+1} failed ({unwrap_exception(conn_err)}). Retrying in 1.5s...")
+                        await asyncio.sleep(1.5)
+                    else:
+                        logger.error(f"Failed to connect to Jira MCP after 3 attempts: {unwrap_exception(conn_err)}")
+                        raise last_conn_err
             
             target_project = req.project_key.strip().upper() if req.project_key else "SIGPOSDEV"
             
@@ -2022,16 +2075,12 @@ async def llm_chat(req: ChatRequest, request: Request):
                 return {"intent": "chat", "message": final_msg}
                 
     except Exception as e:
-        logger.error(f"MCP/LLM Loop Error: {e}", exc_info=True)
-        err_msg = str(e)
-        if hasattr(e, "exceptions") and e.exceptions:
-            err_msg = "; ".join([str(sub) for sub in e.exceptions])
+        err_msg = unwrap_exception(e)
+        logger.error(f"MCP/LLM Loop Error: {err_msg}", exc_info=True)
         return {"intent": "chat", "message": f"⚠️ Jira Agent Error: {err_msg}"}
     except BaseException as e:
-        logger.error(f"MCP/LLM Loop Fatal Error: {e}", exc_info=True)
-        err_msg = str(e)
-        if hasattr(e, "exceptions") and e.exceptions:
-            err_msg = "; ".join([str(sub) for sub in e.exceptions])
+        err_msg = unwrap_exception(e)
+        logger.error(f"MCP/LLM Loop Fatal Error: {err_msg}", exc_info=True)
         return {"intent": "chat", "message": f"⚠️ Jira Agent Error: {err_msg}"}
 @app.get("/api/user")
 def get_user_profile(request: Request):

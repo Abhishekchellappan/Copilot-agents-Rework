@@ -697,7 +697,7 @@ window.chat = {
 
   addMessage(text, sender, isError = false, images = []) {
     const div = document.createElement('div');
-    div.className = `flex gap-4 max-w-3xl ${sender === 'user' ? 'ml-auto flex-row-reverse group' : ''}`;
+    div.className = `flex gap-4 ${sender === 'user' ? 'max-w-2xl ml-auto flex-row-reverse group' : 'max-w-4xl w-full'}`;
     
     let avatar = '';
     let bubbleClass = '';
