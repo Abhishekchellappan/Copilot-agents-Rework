@@ -604,6 +604,32 @@ class DeviceHUD {
             setTimeout(() => this.refreshLiveFrame(), 600);
         });
 
+        // Physical Keyboard Navigation for Live Monitor
+        window.addEventListener('keydown', (e) => {
+            const modal = document.getElementById('live-monitor-modal');
+            if (!modal || modal.classList.contains('hidden') || !this.liveMonitorIp) return;
+            
+            // Do not intercept if user is typing inside an input or textarea
+            const tag = document.activeElement?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+            const keyMap = {
+                'ArrowUp': 'UP',
+                'ArrowDown': 'DOWN',
+                'ArrowLeft': 'LEFT',
+                'ArrowRight': 'RIGHT',
+                'Enter': 'OK',
+                'Escape': 'BACK',
+                'Backspace': 'BACK'
+            };
+
+            const remoteKey = keyMap[e.key];
+            if (remoteKey) {
+                e.preventDefault();
+                this.sendRemoteKey(remoteKey);
+            }
+        });
+
         this.canvasInitialized = true;
     }
 

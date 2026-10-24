@@ -2859,14 +2859,17 @@ def device_input_click(req: DeviceClickInput):
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
-    cmd = (
-        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"down\"}}' 2>/dev/null; "
-        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"up\"}}' 2>/dev/null || "
-        f"luna-send -n 1 luna://com.webos.surfacemanager/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"click\"}}' 2>/dev/null"
-    )
+    payload = json.dumps({
+        "events": [
+            {"eventtype": "setpos", "x": x, "y": y},
+            {"eventtype": "click"},
+            {"eventtype": "touch_tap", "x": x, "y": y}
+        ]
+    })
+    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
     try:
         res = subprocess.run(
-            f"ssh {ssh_opts} root@{ip} '{cmd}'",
+            f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
             shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
         )
         return {"status": "ok", "x": x, "y": y, "target_ip": ip, "detail": res.stdout.strip()[:100]}
@@ -2879,19 +2882,44 @@ def device_input_click(req: DeviceClickInput):
 def device_input_key(req: DeviceKeyInput):
     ip = req.ip.strip()
     key = req.key.strip().upper()
-    key_map = {
-        "OK": "ENTER",
-        "VOL_UP": "VOLUME_UP",
-        "VOL_DOWN": "VOLUME_DOWN",
-        "CH_UP": "CHANNEL_UP",
-        "CH_DOWN": "CHANNEL_DOWN"
+    key_codes_map = {
+        "UP": [103],
+        "DOWN": [108],
+        "LEFT": [105],
+        "RIGHT": [106],
+        "ENTER": [28, 352],
+        "OK": [28, 352],
+        "BACK": [158, 412, 174, 1],
+        "ESC": [1],
+        "HOME": [172, 102],
+        "MENU": [139, 141],
+        "SETTINGS": [141, 139],
+        "POWER": [116],
+        "VOL_UP": [115],
+        "VOLUME_UP": [115],
+        "VOL_DOWN": [114],
+        "VOLUME_DOWN": [114],
+        "MUTE": [113],
+        "CH_UP": [402],
+        "CHANNEL_UP": [402],
+        "CH_DOWN": [403],
+        "CHANNEL_DOWN": [403],
+        "RED": [398],
+        "GREEN": [399],
+        "YELLOW": [400],
+        "BLUE": [401],
+        "PLAY": [207],
+        "PAUSE": [201],
+        "STOP": [128],
+        "REWIND": [168],
+        "FAST_FORWARD": [208]
     }
-    target_key = key_map.get(key, key)
+    codes = key_codes_map.get(key, [28])
 
     # 1. Primary: Forward to Device Agent
     for base_url in _get_device_mcp_urls():
         try:
-            resp = requests.post(f"{base_url}/input/key", json={"ip": ip, "key": target_key}, timeout=6)
+            resp = requests.post(f"{base_url}/input/key", json={"ip": ip, "key": key}, timeout=6)
             if resp.status_code == 200:
                 return resp.json()
         except Exception as e:
@@ -2902,16 +2930,19 @@ def device_input_key(req: DeviceKeyInput):
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
-    cmd = (
-        f"luna-send -n 1 luna://com.webos.service.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null || "
-        f"luna-send -n 1 luna://com.webos.service.tv.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null"
-    )
+    events = []
+    for c in codes:
+        events.append({"eventtype": "keydown", "keycodenum": c})
+    for c in codes:
+        events.append({"eventtype": "keyup", "keycodenum": c})
+    payload = json.dumps({"events": events})
+    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
     try:
         res = subprocess.run(
-            f"ssh {ssh_opts} root@{ip} '{cmd}'",
+            f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
             shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
         )
-        return {"status": "ok", "key": target_key, "target_ip": ip, "detail": res.stdout.strip()[:100]}
+        return {"status": "ok", "key": key, "target_ip": ip, "detail": res.stdout.strip()[:100]}
     except Exception as e:
         logger.error(f"Failed to execute key on {ip}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2935,23 +2966,37 @@ def device_input_text(req: DeviceTextInput):
 
     # 2. Secondary fallback: Direct SSH
     import subprocess
-    escaped = text.replace("'", "'\\''")
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
-    cmd = (
-        f"luna-send -n 1 luna://com.webos.service.ime/insertText '{{\"text\": \"{escaped}\"}}' 2>/dev/null || "
-        f"luna-send -n 1 luna://com.webos.service.ime/sendText '{{\"text\": \"{escaped}\"}}' 2>/dev/null"
-    )
-    try:
-        res = subprocess.run(
-            f"ssh {ssh_opts} root@{ip} '{cmd}'",
-            shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
-        )
-        return {"status": "ok", "text": text, "target_ip": ip, "detail": res.stdout.strip()[:100]}
-    except Exception as e:
-        logger.error(f"Failed to inject text on {ip}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    char_map = {
+        'a': 30, 'b': 48, 'c': 46, 'd': 32, 'e': 18, 'f': 33, 'g': 34, 'h': 35,
+        'i': 23, 'j': 36, 'k': 37, 'l': 38, 'm': 50, 'n': 49, 'o': 24, 'p': 25,
+        'q': 16, 'r': 19, 's': 31, 't': 20, 'u': 22, 'v': 47, 'w': 17, 'x': 45,
+        'y': 21, 'z': 44,
+        '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10, '0': 11,
+        ' ': 57, '-': 12, '=': 13, '.': 52, '/': 53, '\n': 28, '\t': 15, '\b': 14
+    }
+    events = []
+    for ch in text.lower()[:50]:
+        code = char_map.get(ch)
+        if code:
+            events.append({"eventtype": "keydown", "keycodenum": code})
+            events.append({"eventtype": "keyup", "keycodenum": code})
+
+    if events:
+        payload = json.dumps({"events": events})
+        cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
+        try:
+            res = subprocess.run(
+                f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
+                shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
+            )
+            return {"status": "ok", "text": text, "target_ip": ip, "detail": res.stdout.strip()[:100]}
+        except Exception as e:
+            logger.error(f"Failed to inject text on {ip}: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok", "text": text, "target_ip": ip, "detail": "Skipped"}
 
 @app.get("/api/search")
 def search_issues(request: Request, jql: str = "project = SIGPOSDEV ORDER BY updated DESC", max_results: int = 50):

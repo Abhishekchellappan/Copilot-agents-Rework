@@ -3286,7 +3286,7 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
 def device_mouse_click(target_ip: str = "", x: int = 0, y: int = 0) -> str:
     """
     Inject an interactive pointer/mouse click event at coordinates (x, y) on the target board display.
-    Dispatches down and up events via webOS Surface Manager and Linux input subsystem.
+    Dispatches coordinates and clicks via webOS input generator subsystem (supporting both pointer and touch).
 
     :param target_ip: IP address of the target device.
     :param x: Horizontal pixel coordinate (0-1920).
@@ -3296,11 +3296,14 @@ def device_mouse_click(target_ip: str = "", x: int = 0, y: int = 0) -> str:
     if not ip:
         return "ERROR: No target IP specified."
 
-    cmd = (
-        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"down\"}}' 2>/dev/null; "
-        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"up\"}}' 2>/dev/null || "
-        f"luna-send -n 1 luna://com.webos.surfacemanager/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"click\"}}' 2>/dev/null"
-    )
+    payload = json.dumps({
+        "events": [
+            {"eventtype": "setpos", "x": x, "y": y},
+            {"eventtype": "click"},
+            {"eventtype": "touch_tap", "x": x, "y": y}
+        ]
+    })
+    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
     res = _run_ssh(ip, cmd, timeout=5)
     return f"CLICK_EXECUTED at ({x}, {y}) on `{ip}`. Detail: {res.strip()[:100]}"
 
@@ -3318,20 +3321,49 @@ def device_send_key(target_ip: str = "", key: str = "ENTER") -> str:
         return "ERROR: No target IP specified."
 
     key_clean = key.strip().upper()
-    key_map = {
-        "OK": "ENTER",
-        "VOL_UP": "VOLUME_UP",
-        "VOL_DOWN": "VOLUME_DOWN",
-        "CH_UP": "CHANNEL_UP",
-        "CH_DOWN": "CHANNEL_DOWN"
+    key_codes_map = {
+        "UP": [103],
+        "DOWN": [108],
+        "LEFT": [105],
+        "RIGHT": [106],
+        "ENTER": [28, 352],
+        "OK": [28, 352],
+        "BACK": [158, 412, 174, 1],
+        "ESC": [1],
+        "HOME": [172, 102],
+        "MENU": [139, 141],
+        "SETTINGS": [141, 139],
+        "POWER": [116],
+        "VOL_UP": [115],
+        "VOLUME_UP": [115],
+        "VOL_DOWN": [114],
+        "VOLUME_DOWN": [114],
+        "MUTE": [113],
+        "CH_UP": [402],
+        "CHANNEL_UP": [402],
+        "CH_DOWN": [403],
+        "CHANNEL_DOWN": [403],
+        "RED": [398],
+        "GREEN": [399],
+        "YELLOW": [400],
+        "BLUE": [401],
+        "PLAY": [207],
+        "PAUSE": [201],
+        "STOP": [128],
+        "REWIND": [168],
+        "FAST_FORWARD": [208]
     }
-    target_key = key_map.get(key_clean, key_clean)
-    cmd = (
-        f"luna-send -n 1 luna://com.webos.service.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null || "
-        f"luna-send -n 1 luna://com.webos.service.tv.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null"
-    )
+    codes = key_codes_map.get(key_clean, [28])
+    events = []
+    for c in codes:
+        events.append({"eventtype": "keydown", "keycodenum": c})
+    for c in codes:
+        events.append({"eventtype": "keyup", "keycodenum": c})
+
+    payload = json.dumps({"events": events})
+    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
     res = _run_ssh(ip, cmd, timeout=5)
-    return f"KEY_EXECUTED `{target_key}` on `{ip}`. Detail: {res.strip()[:100]}"
+    return f"KEY_EXECUTED `{key_clean}` on `{ip}`. Detail: {res.strip()[:100]}"
 
 
 @mcp.tool()
@@ -3349,13 +3381,27 @@ def device_type_text(target_ip: str = "", text: str = "") -> str:
     if not text:
         return "ERROR: No text provided."
 
-    escaped = text.replace("'", "'\\''")
-    cmd = (
-        f"luna-send -n 1 luna://com.webos.service.ime/insertText '{{\"text\": \"{escaped}\"}}' 2>/dev/null || "
-        f"luna-send -n 1 luna://com.webos.service.ime/sendText '{{\"text\": \"{escaped}\"}}' 2>/dev/null"
-    )
-    res = _run_ssh(ip, cmd, timeout=5)
-    return f"TEXT_INJECTED `{text}` on `{ip}`. Detail: {res.strip()[:100]}"
+    char_map = {
+        'a': 30, 'b': 48, 'c': 46, 'd': 32, 'e': 18, 'f': 33, 'g': 34, 'h': 35,
+        'i': 23, 'j': 36, 'k': 37, 'l': 38, 'm': 50, 'n': 49, 'o': 24, 'p': 25,
+        'q': 16, 'r': 19, 's': 31, 't': 20, 'u': 22, 'v': 47, 'w': 17, 'x': 45,
+        'y': 21, 'z': 44,
+        '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10, '0': 11,
+        ' ': 57, '-': 12, '=': 13, '.': 52, '/': 53, '\n': 28, '\t': 15, '\b': 14
+    }
+    events = []
+    for ch in text.lower()[:50]:
+        code = char_map.get(ch)
+        if code:
+            events.append({"eventtype": "keydown", "keycodenum": code})
+            events.append({"eventtype": "keyup", "keycodenum": code})
+
+    if events:
+        payload = json.dumps({"events": events})
+        cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
+        res = _run_ssh(ip, cmd, timeout=5)
+        return f"TEXT_INJECTED `{text}` on `{ip}`. Detail: {res.strip()[:100]}"
+    return f"TEXT_SKIPPED (no supported characters) on `{ip}`."
 
 
 @mcp.tool()
