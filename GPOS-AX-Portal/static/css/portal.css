@@ -217,8 +217,7 @@
 .agent-content ol { list-style-type: decimal; margin-left: 1.5rem; margin-bottom: 0.75rem; }
 .agent-content li { margin-bottom: 0.25rem; }
 .agent-content strong { font-weight: 600; color: #f8fafc; }
-
-/* Markdown Tables */
+/* Markdown & Jira Tables */
 .agent-content table {
   width: 100%;
   min-width: 620px;
@@ -226,28 +225,44 @@
   margin-top: 0.5rem;
   margin-bottom: 1rem;
   font-size: 0.85rem;
+  color: #cbd5e1;
 }
 .agent-content th {
-  background-color: rgba(15, 23, 42, 0.7);
-  color: #cbd5e1;
+  background-color: rgba(15, 23, 42, 0.85);
+  color: #94a3b8;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   font-weight: 600;
   text-align: left;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid rgba(71, 85, 105, 0.4);
+  padding: 0.6rem 0.75rem;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: 1px solid rgba(71, 85, 105, 0.6);
   white-space: nowrap;
 }
 .agent-content td {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid rgba(71, 85, 105, 0.4);
-  background-color: rgba(30, 41, 59, 0.3);
+  padding: 0.6rem 0.75rem;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: 1px solid rgba(71, 85, 105, 0.4);
+  background-color: rgba(15, 23, 42, 0.3);
   word-break: normal;
   vertical-align: top;
 }
 .agent-content td a {
   white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #60a5fa;
+  font-weight: 500;
 }
 .agent-content tr:nth-child(even) td {
-  background-color: rgba(30, 41, 59, 0.5);
+  background-color: rgba(30, 41, 59, 0.4);
+}
+.agent-content tbody tr:hover td {
+  background-color: rgba(51, 65, 85, 0.4);
 }
 
 /* Light Theme overrides for Markdown */
@@ -257,9 +272,10 @@ body.light-theme .agent-content h3,
 body.light-theme .agent-content strong { color: #0f172a; }
 body.light-theme .agent-content h2 { border-bottom-color: #cbd5e1; }
 body.light-theme .agent-content a { color: #2563eb; }
-body.light-theme .agent-content th { background-color: #e2e8f0; color: #334155; border-color: #cbd5e1; }
-body.light-theme .agent-content td { border-color: #cbd5e1; background-color: #ffffff; }
+body.light-theme .agent-content th { background-color: #f1f5f9; color: #475569; border-bottom: 1px solid #cbd5e1; }
+body.light-theme .agent-content td { border-bottom: 1px solid #e2e8f0; background-color: transparent; }
 body.light-theme .agent-content tr:nth-child(even) td { background-color: #f8fafc; }
+body.light-theme .agent-content tbody tr:hover td { background-color: #f1f5f9; }
 body.light-theme .mermaid { background-color: #ffffff; border: 1px solid #cbd5e1; }
 
 /* Additional Light Theme overrides */

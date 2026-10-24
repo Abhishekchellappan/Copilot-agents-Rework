@@ -1791,29 +1791,30 @@ async def llm_chat(req: ChatRequest, request: Request):
     </agent-html>
     
     CRITICAL FORMATTING RULES:
-    1. **Jira Tickets Array**:
-    You MUST NEVER output plain-text lists of tickets or custom markdown tables of tickets. 
-    Whenever you need to display a list of tickets, you MUST output a raw HTML `<table>` wrapped EXACTLY in `<agent-html>` tags.
-    Use this exact HTML structure:
+    1. **Jira Tickets & Stories Table (MANDATORY)**:
+    You are STRICTLY FORBIDDEN from outputting plain-text lists or markdown pipe tables (`| Key | Type | ... |`) when presenting Jira tickets, stories, bugs, or search results.
+    Whenever displaying any list of tickets or search results, you MUST ALWAYS output raw HTML wrapped EXACTLY in `<agent-html>` tags.
+    Use this exact HTML structure with semantic badge styling:
     <agent-html>
     <table class="w-full text-sm text-left text-slate-300">
       <thead class="text-xs text-slate-400 bg-slate-800 uppercase">
-    <tr><th>Key</th><th>Type</th><th>Status</th><th>Priority</th><th>Summary</th><th>Assignee</th></tr>
+        <tr><th>Key</th><th>Type</th><th>Status</th><th>Priority</th><th>Summary</th><th>Assignee</th></tr>
       </thead>
       <tbody>
-    <tr class="bg-slate-900 border-b border-slate-700">
-      <td class="px-3 py-2 font-mono text-blue-400">{target_project}-1</td>
-      <td class="px-3 py-2">Story</td>
-      <td class="px-3 py-2 text-emerald-400">Open</td>
-      <td class="px-3 py-2 text-amber-400">P2</td>
-      <td class="px-3 py-2">Fix bug</td>
-      <td class="px-3 py-2">abhishek15.c</td>
-    </tr>
+        <tr class="bg-slate-900 border-b border-slate-700">
+          <td class="px-3 py-2 font-mono text-blue-400">{target_project}-1</td>
+          <td class="px-3 py-2">Story</td>
+          <td class="px-3 py-2 text-emerald-400">Resolved</td>
+          <td class="px-3 py-2 text-amber-400">P2</td>
+          <td class="px-3 py-2">Fix bug</td>
+          <td class="px-3 py-2">abhishek15.c</td>
+        </tr>
       </tbody>
     </table>
     </agent-html>
+    Note for badges: Use `text-emerald-400` for Resolved/Done/Closed/Verified, `text-blue-400` for In Progress/In Review, and `text-slate-400` for Open/To Do. For Priority, use `text-amber-400` for P1/P2/Highest/High.
     
-    2. **General Tables**: When presenting other tabular data (like developer stats), you MUST use STRICT GitHub Flavored Markdown (GFM) tables with the `|` character. NEVER align columns with spaces.
+    2. **Non-Jira Tabular Data**: ONLY for non-ticket general comparisons (e.g. system benchmarks), you may use standard Markdown tables.
     
     3. **Sprint Health / Report**:
     The `jira_generate_sprint_report` tool returns a pre-formatted Markdown string with a Mermaid pie chart and tables. Return this directly to the user as it is already formatted.

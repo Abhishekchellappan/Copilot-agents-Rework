@@ -769,6 +769,47 @@ window.chat = {
 
     this.messagesContainer.appendChild(div);
     if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    // Auto-style Jira tables to match the agent-html template (Status & Priority colors)
+    if (sender !== 'user') {
+      const tables = div.querySelectorAll('.agent-content table');
+      tables.forEach(table => {
+        const ths = Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim().toLowerCase());
+        const statusIdx = ths.indexOf('status');
+        const priorityIdx = ths.indexOf('priority');
+        const keyIdx = ths.indexOf('key');
+        
+        if (statusIdx !== -1 || priorityIdx !== -1 || keyIdx !== -1) {
+          const rows = table.querySelectorAll('tbody tr');
+          rows.forEach(tr => {
+            const tds = tr.querySelectorAll('td');
+            if (keyIdx !== -1 && tds[keyIdx]) {
+              tds[keyIdx].classList.add('font-mono', 'text-blue-400');
+            }
+            if (statusIdx !== -1 && tds[statusIdx]) {
+              const st = tds[statusIdx].textContent.trim().toLowerCase();
+              if (st.includes('resolved') || st.includes('done') || st.includes('closed') || st.includes('verified')) {
+                tds[statusIdx].className = (tds[statusIdx].className + ' text-emerald-400 font-medium').trim();
+              } else if (st.includes('progress') || st.includes('review') || st.includes('testing')) {
+                tds[statusIdx].className = (tds[statusIdx].className + ' text-blue-400 font-medium').trim();
+              } else if (st.includes('open') || st.includes('to do')) {
+                tds[statusIdx].className = (tds[statusIdx].className + ' text-slate-400').trim();
+              }
+            }
+            if (priorityIdx !== -1 && tds[priorityIdx]) {
+              const pr = tds[priorityIdx].textContent.trim().toUpperCase();
+              if (pr.includes('P1') || pr.includes('P2') || pr.includes('HIGH') || pr.includes('CRITICAL')) {
+                tds[priorityIdx].className = (tds[priorityIdx].className + ' text-amber-400 font-medium').trim();
+              } else if (pr.includes('P0') || pr.includes('BLOCKER')) {
+                tds[priorityIdx].className = (tds[priorityIdx].className + ' text-red-400 font-bold').trim();
+              } else {
+                tds[priorityIdx].className = (tds[priorityIdx].className + ' text-slate-400').trim();
+              }
+            }
+          });
+        }
+      });
+    }
     
     // Render mermaid diagrams if any exist
     if (sender !== 'user' && typeof mermaid !== 'undefined') {
