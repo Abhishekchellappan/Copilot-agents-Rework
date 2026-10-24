@@ -16,6 +16,11 @@ class DeviceHUD {
         
         this.isInitialized = false;
         this.telemetryInterval = null;
+        this.liveMonitorIp = null;
+        this.liveMonitorBoardId = null;
+        this.liveRefreshTimer = null;
+        this.liveAutoRefresh = true;
+        this.canvasInitialized = false;
     }
 
     init() {
@@ -233,7 +238,11 @@ class DeviceHUD {
                             </div>
                             <div class="board-ip text-xs ${textColor} font-mono mt-1">${board.ip}</div>
                         </div>
-                        <div class="flex items-center gap-3">
+                        <div class="flex items-center gap-2">
+                            <button onclick="event.stopPropagation(); window.deviceHud.openLiveMonitor('${board.ip}', '${board.id}')" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600/60 border border-indigo-500/50 text-indigo-300 hover:text-white text-xs font-semibold transition-all shadow-sm" title="Open Live Monitor & Interactive Screen">
+                                <i data-lucide="tv" class="w-3.5 h-3.5 text-indigo-400"></i>
+                                <span>Live Monitor</span>
+                            </button>
                             <span class="relative flex h-3 w-3 items-center justify-center">
                                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full ${pingColor} opacity-75"></span>
                                 <span class="relative inline-flex rounded-full h-2 w-2 ${statusColor} shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
@@ -254,7 +263,11 @@ class DeviceHUD {
                             </div>
                             <div class="board-ip text-xs text-slate-400 font-mono mt-1">${board.ip}</div>
                         </div>
-                        <div class="flex items-center gap-3">
+                        <div class="flex items-center gap-2">
+                            <button onclick="event.stopPropagation(); window.deviceHud.openLiveMonitor('${board.ip}', '${board.id}')" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-700/60 hover:bg-indigo-600/50 border border-slate-600/70 text-slate-300 hover:text-white text-xs font-medium transition-all shadow-sm" title="Open Live Monitor">
+                                <i data-lucide="tv" class="w-3.5 h-3.5 text-slate-400"></i>
+                                <span>Live Monitor</span>
+                            </button>
                             <div class="w-2 h-2 rounded-full ${statusColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]"></div>
                             <button onclick="event.stopPropagation(); window.deviceHud.deleteBoard('${board.ip}')" class="text-slate-500 hover:text-red-400 p-1 rounded hover:bg-slate-700/50 transition-colors" title="Remove Board">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
@@ -468,6 +481,225 @@ class DeviceHUD {
                 });
             }
         }, 100);
+    }
+
+    openLiveMonitor(ip, boardId) {
+        if (!ip || ip === 'None') {
+            alert('Please select a valid target board first.');
+            return;
+        }
+        this.liveMonitorIp = ip;
+        this.liveMonitorBoardId = boardId || ip;
+
+        const modal = document.getElementById('live-monitor-modal');
+        if (!modal) return;
+
+        // Set labels
+        const nameEl = document.getElementById('lm-board-name');
+        const ipEl = document.getElementById('lm-board-ip');
+        const statusEl = document.getElementById('lm-status-text');
+        if (nameEl) nameEl.textContent = this.liveMonitorBoardId;
+        if (ipEl) ipEl.textContent = this.liveMonitorIp;
+        if (statusEl) statusEl.textContent = 'Connecting to ' + this.liveMonitorIp + '...';
+
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+
+        this.setupLiveMonitorCanvas();
+        this.refreshLiveFrame();
+
+        if (this.liveAutoRefresh) {
+            this.startLiveRefreshTimer();
+        }
+
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    closeLiveMonitor() {
+        const modal = document.getElementById('live-monitor-modal');
+        if (modal) {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+        if (this.liveRefreshTimer) {
+            clearInterval(this.liveRefreshTimer);
+            this.liveRefreshTimer = null;
+        }
+    }
+
+    toggleLiveAutoRefresh() {
+        this.liveAutoRefresh = !this.liveAutoRefresh;
+        const btnLabel = document.getElementById('lm-autorefresh-label');
+        const btn = document.getElementById('lm-autorefresh-btn');
+        if (this.liveAutoRefresh) {
+            if (btnLabel) btnLabel.textContent = 'Auto-Refresh (3s)';
+            if (btn) btn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/60 text-indigo-300 text-xs font-medium border border-indigo-500/40 transition-colors';
+            this.startLiveRefreshTimer();
+        } else {
+            if (btnLabel) btnLabel.textContent = 'Auto-Refresh: Paused';
+            if (btn) btn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-medium border border-slate-700 transition-colors';
+            if (this.liveRefreshTimer) {
+                clearInterval(this.liveRefreshTimer);
+                this.liveRefreshTimer = null;
+            }
+        }
+    }
+
+    startLiveRefreshTimer() {
+        if (this.liveRefreshTimer) clearInterval(this.liveRefreshTimer);
+        this.liveRefreshTimer = setInterval(() => {
+            const modal = document.getElementById('live-monitor-modal');
+            if (modal && !modal.classList.contains('hidden') && this.liveAutoRefresh) {
+                this.refreshLiveFrame();
+            }
+        }, 3000);
+    }
+
+    setupLiveMonitorCanvas() {
+        if (this.canvasInitialized) return;
+        const canvas = document.getElementById('live-monitor-canvas');
+        if (!canvas) return;
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+            const scaleX = 1920 / rect.width;
+            const scaleY = 1080 / rect.height;
+            const x = Math.max(0, Math.min(1920, Math.round((e.clientX - rect.left) * scaleX)));
+            const y = Math.max(0, Math.min(1080, Math.round((e.clientY - rect.top) * scaleY)));
+
+            const coordEl = document.getElementById('lm-coords');
+            if (coordEl) coordEl.textContent = `X: ${x} | Y: ${y}`;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            const coordEl = document.getElementById('lm-coords');
+            if (coordEl) coordEl.textContent = 'X: --- | Y: ---';
+        });
+
+        canvas.addEventListener('click', async (e) => {
+            if (!this.liveMonitorIp) return;
+            const rect = canvas.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+            const scaleX = 1920 / rect.width;
+            const scaleY = 1080 / rect.height;
+            const boardX = Math.max(0, Math.min(1920, Math.round((e.clientX - rect.left) * scaleX)));
+            const boardY = Math.max(0, Math.min(1080, Math.round((e.clientY - rect.top) * scaleY)));
+
+            this.showClickRipple(e.clientX - rect.left, e.clientY - rect.top);
+
+            const statusEl = document.getElementById('lm-status-text');
+            if (statusEl) statusEl.textContent = `Injecting click at (${boardX}, ${boardY}) on ${this.liveMonitorIp}...`;
+
+            try {
+                await this.sendDeviceInput('/api/device/input/click', {
+                    ip: this.liveMonitorIp,
+                    x: boardX,
+                    y: boardY
+                });
+            } catch (err) {
+                console.error('Click injection error:', err);
+            }
+
+            setTimeout(() => this.refreshLiveFrame(), 600);
+        });
+
+        this.canvasInitialized = true;
+    }
+
+    showClickRipple(relX, relY) {
+        const ripple = document.getElementById('lm-click-indicator');
+        if (!ripple) return;
+        ripple.style.left = relX + 'px';
+        ripple.style.top = relY + 'px';
+        ripple.classList.remove('scale-0', 'opacity-0');
+        ripple.classList.add('scale-150', 'opacity-100');
+        setTimeout(() => {
+            ripple.classList.remove('scale-150', 'opacity-100');
+            ripple.classList.add('scale-0', 'opacity-0');
+        }, 350);
+    }
+
+    async refreshLiveFrame() {
+        if (!this.liveMonitorIp) return;
+        const loading = document.getElementById('lm-loading');
+        const statusEl = document.getElementById('lm-status-text');
+
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        const frameUrl = `/api/device/screen/frame?ip=${encodeURIComponent(this.liveMonitorIp)}&t=${Date.now()}`;
+
+        img.onload = () => {
+            const canvas = document.getElementById('live-monitor-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            if (loading) loading.classList.add('hidden');
+            if (statusEl) statusEl.textContent = `Display synchronized • ${new Date().toLocaleTimeString()}`;
+        };
+
+        img.onerror = () => {
+            if (loading) loading.classList.add('hidden');
+            if (statusEl) statusEl.textContent = `Standby / offline response from ${this.liveMonitorIp}`;
+        };
+
+        img.src = frameUrl;
+    }
+
+    async sendRemoteKey(key) {
+        if (!this.liveMonitorIp) return;
+        const statusEl = document.getElementById('lm-status-text');
+        if (statusEl) statusEl.textContent = `Sent remote key [${key}] to ${this.liveMonitorIp}...`;
+
+        try {
+            await this.sendDeviceInput('/api/device/input/key', {
+                ip: this.liveMonitorIp,
+                key: key
+            });
+        } catch (err) {
+            console.error('Key injection error:', err);
+        }
+
+        setTimeout(() => this.refreshLiveFrame(), 600);
+    }
+
+    async sendRemoteText() {
+        if (!this.liveMonitorIp) return;
+        const inputEl = document.getElementById('lm-text-input');
+        if (!inputEl) return;
+        const text = inputEl.value.trim();
+        if (!text) return;
+
+        const statusEl = document.getElementById('lm-status-text');
+        if (statusEl) statusEl.textContent = `Injecting text "${text}"...`;
+
+        try {
+            await this.sendDeviceInput('/api/device/input/text', {
+                ip: this.liveMonitorIp,
+                text: text
+            });
+            inputEl.value = '';
+        } catch (err) {
+            console.error('Text injection error:', err);
+        }
+
+        setTimeout(() => this.refreshLiveFrame(), 700);
+    }
+
+    async sendDeviceInput(endpoint, payload) {
+        const token = localStorage.getItem('auth_token');
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        return await res.json();
     }
 }
 

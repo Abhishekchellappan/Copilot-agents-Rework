@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpos-muralidhar-device-dev
+  namespace: ai-user2
+  labels:
+    app: gpos-muralidhar-device-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gpos-muralidhar-device-dev
+  template:
+    metadata:
+      labels:
+        app: gpos-muralidhar-device-dev
+    spec:
+      containers:
+      - name: device-mcp
+        image: abhishek15c/gpos-device-agent:dev
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: sse-port
+        env:
+        - name: DEFAULT_TARGET_USER
+          value: "root"
+        - name: CROSS_GDB_PATH
+          value: "gdb-multiarch"
+        - name: SSH_KEY_PATH
+          value: "/root/.ssh/id_rsa"
+        - name: GDBSERVER_IPK_PATH
+          value: "/tools/gdbserver.ipk"
+        - name: DEFAULT_COLLAB_URL
+          value: ""
+        - name: DEFAULT_COLLAB_PAT
+          value: ""
+        volumeMounts:
+        - name: ssh-key-volume
+          mountPath: /root/.ssh
+          readOnly: true
+      volumes:
+      - name: ssh-key-volume
+        secret:
+          secretName: gpos-device-agent-ssh-key
+          defaultMode: 0400
+          optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpos-muralidhar-device-service-dev
+  namespace: ai-user2
+spec:
+  type: NodePort
+  selector:
+    app: gpos-muralidhar-device-dev
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000

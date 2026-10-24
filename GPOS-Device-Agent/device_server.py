@@ -3283,6 +3283,82 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
 
 
 @mcp.tool()
+def device_mouse_click(target_ip: str = "", x: int = 0, y: int = 0) -> str:
+    """
+    Inject an interactive pointer/mouse click event at coordinates (x, y) on the target board display.
+    Dispatches down and up events via webOS Surface Manager and Linux input subsystem.
+
+    :param target_ip: IP address of the target device.
+    :param x: Horizontal pixel coordinate (0-1920).
+    :param y: Vertical pixel coordinate (0-1080).
+    """
+    ip = _resolve_target_alias(target_ip)
+    if not ip:
+        return "ERROR: No target IP specified."
+
+    cmd = (
+        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"down\"}}' 2>/dev/null; "
+        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"up\"}}' 2>/dev/null || "
+        f"luna-send -n 1 luna://com.webos.surfacemanager/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"click\"}}' 2>/dev/null"
+    )
+    res = _run_ssh(ip, cmd, timeout=5)
+    return f"CLICK_EXECUTED at ({x}, {y}) on `{ip}`. Detail: {res.strip()[:100]}"
+
+
+@mcp.tool()
+def device_send_key(target_ip: str = "", key: str = "ENTER") -> str:
+    """
+    Inject a remote control or keyboard key event on the target board (UP, DOWN, LEFT, RIGHT, ENTER, BACK, HOME, POWER, SETTINGS, etc.).
+
+    :param target_ip: IP address of the target device.
+    :param key: Key name to inject (e.g. 'ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SETTINGS', 'POWER', 'VOL_UP', 'VOL_DOWN').
+    """
+    ip = _resolve_target_alias(target_ip)
+    if not ip:
+        return "ERROR: No target IP specified."
+
+    key_clean = key.strip().upper()
+    key_map = {
+        "OK": "ENTER",
+        "VOL_UP": "VOLUME_UP",
+        "VOL_DOWN": "VOLUME_DOWN",
+        "CH_UP": "CHANNEL_UP",
+        "CH_DOWN": "CHANNEL_DOWN"
+    }
+    target_key = key_map.get(key_clean, key_clean)
+    cmd = (
+        f"luna-send -n 1 luna://com.webos.service.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null || "
+        f"luna-send -n 1 luna://com.webos.service.tv.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null"
+    )
+    res = _run_ssh(ip, cmd, timeout=5)
+    return f"KEY_EXECUTED `{target_key}` on `{ip}`. Detail: {res.strip()[:100]}"
+
+
+@mcp.tool()
+def device_type_text(target_ip: str = "", text: str = "") -> str:
+    """
+    Type a string of text into the active focused input field on the target board display.
+
+    :param target_ip: IP address of the target device.
+    :param text: String of text or URL to inject.
+    """
+    ip = _resolve_target_alias(target_ip)
+    if not ip:
+        return "ERROR: No target IP specified."
+
+    if not text:
+        return "ERROR: No text provided."
+
+    escaped = text.replace("'", "'\\''")
+    cmd = (
+        f"luna-send -n 1 luna://com.webos.service.ime/insertText '{{\"text\": \"{escaped}\"}}' 2>/dev/null || "
+        f"luna-send -n 1 luna://com.webos.service.ime/sendText '{{\"text\": \"{escaped}\"}}' 2>/dev/null"
+    )
+    res = _run_ssh(ip, cmd, timeout=5)
+    return f"TEXT_INJECTED `{text}` on `{ip}`. Detail: {res.strip()[:100]}"
+
+
+@mcp.tool()
 def archive_system_logs(target_ip: str = "", log_types: list = None) -> str:
     """
     Bundle complete system logs from the target device into a compressed .tar.gz archive.

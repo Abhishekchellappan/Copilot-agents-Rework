@@ -16,7 +16,7 @@ import sqlite3
 import logging
 from datetime import date
 from typing import Optional, Dict, Any, List, Tuple
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -286,7 +286,7 @@ def get_current_user(request: Request) -> str:
 
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
-    if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/artifacts") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info"]:
+    if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/artifacts") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info", "/api/device/screen/frame"]:
         if request.method != "OPTIONS":  # Skip auth check for CORS preflight
             try:
                 get_current_user(request)
@@ -2721,6 +2721,163 @@ def get_device_info(ip: str):
         return {"target": board_name, "os": os_name, "uptime": uptime_str, "cpu": cpu_val}
     except Exception as e:
         return {"target": "Unknown Device", "os": "Error", "uptime": "--", "cpu": 0}
+
+
+class DeviceClickInput(BaseModel):
+    ip: str
+    x: int
+    y: int
+
+class DeviceKeyInput(BaseModel):
+    ip: str
+    key: str
+
+class DeviceTextInput(BaseModel):
+    ip: str
+    text: str
+
+
+@app.get("/api/device/screen/frame")
+def get_device_screen_frame(ip: str):
+    import subprocess
+    clean_ip = ip.strip()
+    if not clean_ip or clean_ip.lower() == "none":
+        raise HTTPException(status_code=400, detail="Valid target IP is required")
+
+    ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    target_snap = "/tmp/snapshots/default/live_snap.jpg"
+
+    # Capture command script executed on target board
+    capture_script = (
+        "mkdir -p /tmp/snapshots/default; rm -f /tmp/snapshots/default/live_snap.jpg; "
+        "H=$(luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/createHandle '{}' 2>/dev/null | grep -o '\"handle\":[0-9]*' | cut -d: -f2); "
+        "if [ -n \"$H\" ]; then luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/executeOneShot \"{\\\"handle\\\":$H,\\\"path\\\":\\\"/tmp/snapshots/default/live_snap.jpg\\\",\\\"method\\\":\\\"blended\\\",\\\"format\\\":\\\"jpeg\\\",\\\"width\\\":1920,\\\"height\\\":1080}\" 2>/dev/null; fi; "
+        "if [ ! -s /tmp/snapshots/default/live_snap.jpg ]; then luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.surfacemanager/captureCompositorOutput '{\"output\":\"HDMI-A-1\",\"path\":\"/tmp/snapshots/default/live_snap.jpg\"}' 2>/dev/null || luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.surfacemanager/captureCompositorOutput '{\"output\":\"default\",\"path\":\"/tmp/snapshots/default/live_snap.jpg\"}' 2>/dev/null; fi; "
+        "if [ -s /tmp/snapshots/default/live_snap.jpg ]; then echo '/tmp/snapshots/default/live_snap.jpg'; "
+        "else find /tmp/snapshots/default /tmp/snapshots /tmp -maxdepth 2 \( -name '*.jpg' -o -name '*.png' \) -size +1k 2>/dev/null | head -1; fi"
+    )
+
+    found_path = ""
+    try:
+        res = subprocess.run(
+            f"ssh {ssh_opts} root@{clean_ip} '{capture_script}'",
+            shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=8
+        )
+        if res.returncode == 0:
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip().startswith("/tmp/")]
+            if lines:
+                found_path = lines[-1]
+    except Exception as e:
+        logger.warning(f"Screen capture attempt failed on {clean_ip}: {e}")
+
+    if found_path:
+        try:
+            fetch_cmd = f"ssh {ssh_opts} root@{clean_ip} 'cat \"{found_path}\"'"
+            cat_res = subprocess.run(fetch_cmd, shell=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=10)
+            if cat_res.returncode == 0 and len(cat_res.stdout) > 64:
+                media_type = "image/png" if found_path.endswith(".png") else "image/jpeg"
+                return Response(
+                    content=cat_res.stdout,
+                    media_type=media_type,
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0"
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Failed to fetch frame binary from {clean_ip}: {e}")
+
+    fallback_svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+        <rect width="1920" height="1080" fill="#0f172a"/>
+        <rect x="40" y="40" width="1840" height="1000" rx="20" fill="#1e293b" stroke="#334155" stroke-width="3"/>
+        <circle cx="960" cy="460" r="90" fill="#0f172a" stroke="#3b82f6" stroke-width="4"/>
+        <text x="960" y="480" font-family="sans-serif" font-size="60" text-anchor="middle">📺</text>
+        <text x="960" y="610" font-family="sans-serif" font-size="34" font-weight="bold" fill="#f8fafc" text-anchor="middle">Live Board Display Stream: {clean_ip}</text>
+        <text x="960" y="665" font-family="sans-serif" font-size="22" fill="#94a3b8" text-anchor="middle">Compositor frame buffer is standby or waking up...</text>
+        <text x="960" y="710" font-family="sans-serif" font-size="18" fill="#64748b" text-anchor="middle">Click "Refresh Frame" or use the Remote D-Pad / Keyboard on the right to wake display</text>
+    </svg>"""
+    return Response(
+        content=fallback_svg.encode('utf-8'),
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
+
+
+@app.post("/api/device/input/click")
+def device_input_click(req: DeviceClickInput):
+    import subprocess
+    ip = req.ip.strip()
+    x = int(req.x)
+    y = int(req.y)
+    ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    cmd = (
+        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"down\"}}' 2>/dev/null; "
+        f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"up\"}}' 2>/dev/null || "
+        f"luna-send -n 1 luna://com.webos.surfacemanager/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"click\"}}' 2>/dev/null"
+    )
+    try:
+        res = subprocess.run(
+            f"ssh {ssh_opts} root@{ip} '{cmd}'",
+            shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
+        )
+        return {"status": "ok", "x": x, "y": y, "target_ip": ip, "detail": res.stdout.strip()[:100]}
+    except Exception as e:
+        logger.error(f"Failed to execute click on {ip}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/device/input/key")
+def device_input_key(req: DeviceKeyInput):
+    import subprocess
+    ip = req.ip.strip()
+    key = req.key.strip().upper()
+    key_map = {
+        "OK": "ENTER",
+        "VOL_UP": "VOLUME_UP",
+        "VOL_DOWN": "VOLUME_DOWN",
+        "CH_UP": "CHANNEL_UP",
+        "CH_DOWN": "CHANNEL_DOWN"
+    }
+    target_key = key_map.get(key, key)
+    ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    cmd = (
+        f"luna-send -n 1 luna://com.webos.service.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null || "
+        f"luna-send -n 1 luna://com.webos.service.tv.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null"
+    )
+    try:
+        res = subprocess.run(
+            f"ssh {ssh_opts} root@{ip} '{cmd}'",
+            shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
+        )
+        return {"status": "ok", "key": target_key, "target_ip": ip, "detail": res.stdout.strip()[:100]}
+    except Exception as e:
+        logger.error(f"Failed to execute key on {ip}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/device/input/text")
+def device_input_text(req: DeviceTextInput):
+    import subprocess
+    ip = req.ip.strip()
+    text = req.text
+    if not text:
+        return {"status": "ok", "detail": "Empty text"}
+    escaped = text.replace("'", "'\\''")
+    ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    cmd = (
+        f"luna-send -n 1 luna://com.webos.service.ime/insertText '{{\"text\": \"{escaped}\"}}' 2>/dev/null || "
+        f"luna-send -n 1 luna://com.webos.service.ime/sendText '{{\"text\": \"{escaped}\"}}' 2>/dev/null"
+    )
+    try:
+        res = subprocess.run(
+            f"ssh {ssh_opts} root@{ip} '{cmd}'",
+            shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
+        )
+        return {"status": "ok", "text": text, "target_ip": ip, "detail": res.stdout.strip()[:100]}
+    except Exception as e:
+        logger.error(f"Failed to inject text on {ip}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/search")
 def search_issues(request: Request, jql: str = "project = SIGPOSDEV ORDER BY updated DESC", max_results: int = 50):
