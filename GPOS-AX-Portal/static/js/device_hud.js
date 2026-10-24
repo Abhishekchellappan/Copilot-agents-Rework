@@ -82,7 +82,7 @@ class DeviceHUD {
                     <tr class="hover:bg-slate-700/30 transition-colors" id="artifact-row-${(a.name || '').replace(/[^a-zA-Z0-9]/g, '_')}">
                         <td class="px-4 py-3 font-mono text-xs text-white flex items-center gap-2">
                             <i data-lucide="${icon}" class="w-4 h-4 text-slate-400 shrink-0"></i>
-                            <span class="truncate max-w-[200px]" title="${a.name}">${a.name}</span>
+                            <span class="truncate max-w-[380px] 2xl:max-w-[500px]" title="${a.name}">${a.name}</span>
                         </td>
                         <td class="px-4 py-3">
                             <span class="px-2 py-0.5 rounded text-[10px] font-bold ${badgeColor}">${a.type}</span>
@@ -230,24 +230,25 @@ class DeviceHUD {
                 div.className = `board-item board-item-active relative p-3 rounded-lg border-2 ${cardClass} scale-[1.01] transition-all flex items-center justify-between cursor-pointer`;
                 div.innerHTML = `
                     <div class="board-accent-bar absolute left-0 top-0 bottom-0 w-1.5 ${barColor} rounded-l-lg"></div>
-                    <div class="flex items-center justify-between w-full pl-2">
-                        <div class="flex-1 cursor-pointer" onclick="window.deviceHud.updateTargetIp('${board.ip}')">
+                    <div class="flex items-center justify-between w-full pl-2 gap-3">
+                        <div class="flex-1 min-w-0 cursor-pointer" onclick="window.deviceHud.updateTargetIp('${board.ip}')">
                             <div class="board-name font-bold text-white flex items-center gap-2">
-                                <i data-lucide="hard-drive" class="w-4 h-4 ${iconColor}"></i> <span>${board.id}</span>
+                                <i data-lucide="hard-drive" class="w-4 h-4 ${iconColor} shrink-0"></i>
+                                <span class="whitespace-nowrap font-mono tracking-tight">${board.id}</span>
                                 ${badgeHtml}
                             </div>
-                            <div class="board-ip text-xs ${textColor} font-mono mt-1">${board.ip}</div>
+                            <div class="board-ip text-xs ${textColor} font-mono mt-0.5 whitespace-nowrap">${board.ip}</div>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <button onclick="event.stopPropagation(); window.deviceHud.openLiveMonitor('${board.ip}', '${board.id}')" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600/60 border border-indigo-500/50 text-indigo-300 hover:text-white text-xs font-semibold transition-all shadow-sm" title="Open Live Monitor & Interactive Screen">
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button onclick="event.stopPropagation(); window.deviceHud.openLiveMonitor('${board.ip}', '${board.id}')" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600/60 border border-indigo-500/50 text-indigo-300 hover:text-white text-xs font-semibold transition-all shadow-sm whitespace-nowrap" title="Open Live Monitor & Interactive Screen">
                                 <i data-lucide="tv" class="w-3.5 h-3.5 text-indigo-400"></i>
                                 <span>Live Monitor</span>
                             </button>
-                            <span class="relative flex h-3 w-3 items-center justify-center">
+                            <span class="relative flex h-3 w-3 items-center justify-center shrink-0">
                                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full ${pingColor} opacity-75"></span>
                                 <span class="relative inline-flex rounded-full h-2 w-2 ${statusColor} shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
                             </span>
-                            <button onclick="event.stopPropagation(); window.deviceHud.deleteBoard('${board.ip}')" class="text-slate-500 hover:text-red-400 p-1 rounded hover:bg-slate-700/50 transition-colors" title="Remove Board">
+                            <button onclick="event.stopPropagation(); window.deviceHud.deleteBoard('${board.ip}')" class="text-slate-500 hover:text-red-400 p-1 rounded hover:bg-slate-700/50 transition-colors shrink-0" title="Remove Board">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
                         </div>
@@ -256,20 +257,21 @@ class DeviceHUD {
             } else {
                 div.className = `board-item p-3 rounded-lg border border-slate-700/70 bg-slate-800/40 hover:bg-slate-800/80 hover:border-slate-600 transition-all flex items-center justify-between cursor-pointer`;
                 div.innerHTML = `
-                    <div class="flex items-center justify-between w-full">
-                        <div class="flex-1 cursor-pointer" onclick="window.deviceHud.updateTargetIp('${board.ip}')">
+                    <div class="flex items-center justify-between w-full gap-3">
+                        <div class="flex-1 min-w-0 cursor-pointer" onclick="window.deviceHud.updateTargetIp('${board.ip}')">
                             <div class="board-name font-medium text-slate-300 flex items-center gap-2">
-                                <i data-lucide="hard-drive" class="w-4 h-4 text-slate-400"></i> <span>${board.id}</span>
+                                <i data-lucide="hard-drive" class="w-4 h-4 text-slate-400 shrink-0"></i>
+                                <span class="whitespace-nowrap font-mono tracking-tight">${board.id}</span>
                             </div>
-                            <div class="board-ip text-xs text-slate-400 font-mono mt-1">${board.ip}</div>
+                            <div class="board-ip text-xs text-slate-400 font-mono mt-0.5 whitespace-nowrap">${board.ip}</div>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <button onclick="event.stopPropagation(); window.deviceHud.openLiveMonitor('${board.ip}', '${board.id}')" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-700/60 hover:bg-indigo-600/50 border border-slate-600/70 text-slate-300 hover:text-white text-xs font-medium transition-all shadow-sm" title="Open Live Monitor">
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button onclick="event.stopPropagation(); window.deviceHud.openLiveMonitor('${board.ip}', '${board.id}')" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-700/60 hover:bg-indigo-600/50 border border-slate-600/70 text-slate-300 hover:text-white text-xs font-medium transition-all shadow-sm whitespace-nowrap" title="Open Live Monitor">
                                 <i data-lucide="tv" class="w-3.5 h-3.5 text-slate-400"></i>
                                 <span>Live Monitor</span>
                             </button>
-                            <div class="w-2 h-2 rounded-full ${statusColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]"></div>
-                            <button onclick="event.stopPropagation(); window.deviceHud.deleteBoard('${board.ip}')" class="text-slate-500 hover:text-red-400 p-1 rounded hover:bg-slate-700/50 transition-colors" title="Remove Board">
+                            <div class="w-2 h-2 rounded-full ${statusColor} shadow-[0_0_6px_rgba(0,0,0,0.5)] shrink-0"></div>
+                            <button onclick="event.stopPropagation(); window.deviceHud.deleteBoard('${board.ip}')" class="text-slate-500 hover:text-red-400 p-1 rounded hover:bg-slate-700/50 transition-colors shrink-0" title="Remove Board">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
                         </div>
