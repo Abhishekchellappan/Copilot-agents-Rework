@@ -2737,17 +2737,52 @@ class DeviceTextInput(BaseModel):
     text: str
 
 
+def _get_device_mcp_urls():
+    primary = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://gpos-muralidhar-device-service:8000').rstrip('/')
+    urls = [primary]
+    if "device-service-dev" in primary:
+        fallback = primary.replace("device-service-dev", "device-service")
+        if fallback not in urls:
+            urls.append(fallback)
+    else:
+        fallback = primary.replace("device-service", "device-service-dev")
+        if fallback not in urls:
+            urls.append(fallback)
+    return urls
+
+
 @app.get("/api/device/screen/frame")
 def get_device_screen_frame(ip: str):
-    import subprocess
     clean_ip = ip.strip()
     if not clean_ip or clean_ip.lower() == "none":
         raise HTTPException(status_code=400, detail="Valid target IP is required")
 
-    ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
-    target_snap = "/tmp/snapshots/default/live_snap.jpg"
+    # 1. Primary path: Query Device Agent custom route (which holds the SSH key secret)
+    for base_url in _get_device_mcp_urls():
+        try:
+            resp = requests.get(f"{base_url}/screen/frame", params={"ip": clean_ip}, timeout=12)
+            if resp.status_code == 200 and len(resp.content) > 64:
+                media_type = resp.headers.get("content-type", "image/jpeg")
+                if "svg" not in media_type:
+                    return Response(
+                        content=resp.content,
+                        media_type=media_type,
+                        headers={
+                            "Cache-Control": "no-cache, no-store, must-revalidate",
+                            "Pragma": "no-cache",
+                            "Expires": "0"
+                        }
+                    )
+        except Exception as e:
+            logger.debug(f"Device Agent /screen/frame fetch via {base_url} failed: {e}")
 
-    # Capture command script executed on target board
+    # 2. Secondary path: Direct SSH (if portal container has SSH key mounted)
+    import subprocess
+    ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    if os.path.isfile("/root/.ssh/id_rsa"):
+        ssh_opts += " -i /root/.ssh/id_rsa"
+
+    target_snap = "/tmp/snapshots/default/live_snap.jpg"
     capture_script = (
         "mkdir -p /tmp/snapshots/default; rm -f /tmp/snapshots/default/live_snap.jpg; "
         "H=$(luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/createHandle '{}' 2>/dev/null | grep -o '\"handle\":[0-9]*' | cut -d: -f2); "
@@ -2806,11 +2841,24 @@ def get_device_screen_frame(ip: str):
 
 @app.post("/api/device/input/click")
 def device_input_click(req: DeviceClickInput):
-    import subprocess
     ip = req.ip.strip()
     x = int(req.x)
     y = int(req.y)
+
+    # 1. Primary: Forward to Device Agent
+    for base_url in _get_device_mcp_urls():
+        try:
+            resp = requests.post(f"{base_url}/input/click", json={"ip": ip, "x": x, "y": y}, timeout=6)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.debug(f"Device Agent /input/click forward via {base_url} failed: {e}")
+
+    # 2. Secondary fallback: Direct SSH
+    import subprocess
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    if os.path.isfile("/root/.ssh/id_rsa"):
+        ssh_opts += " -i /root/.ssh/id_rsa"
     cmd = (
         f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"down\"}}' 2>/dev/null; "
         f"luna-send -n 1 luna://com.webos.service.input/sendPointer '{{\"x\": {x}, \"y\": {y}, \"type\": \"up\"}}' 2>/dev/null || "
@@ -2829,7 +2877,6 @@ def device_input_click(req: DeviceClickInput):
 
 @app.post("/api/device/input/key")
 def device_input_key(req: DeviceKeyInput):
-    import subprocess
     ip = req.ip.strip()
     key = req.key.strip().upper()
     key_map = {
@@ -2840,7 +2887,21 @@ def device_input_key(req: DeviceKeyInput):
         "CH_DOWN": "CHANNEL_DOWN"
     }
     target_key = key_map.get(key, key)
+
+    # 1. Primary: Forward to Device Agent
+    for base_url in _get_device_mcp_urls():
+        try:
+            resp = requests.post(f"{base_url}/input/key", json={"ip": ip, "key": target_key}, timeout=6)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.debug(f"Device Agent /input/key forward via {base_url} failed: {e}")
+
+    # 2. Secondary fallback: Direct SSH
+    import subprocess
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    if os.path.isfile("/root/.ssh/id_rsa"):
+        ssh_opts += " -i /root/.ssh/id_rsa"
     cmd = (
         f"luna-send -n 1 luna://com.webos.service.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null || "
         f"luna-send -n 1 luna://com.webos.service.tv.input/sendKey '{{\"key\": \"{target_key}\"}}' 2>/dev/null"
@@ -2858,13 +2919,26 @@ def device_input_key(req: DeviceKeyInput):
 
 @app.post("/api/device/input/text")
 def device_input_text(req: DeviceTextInput):
-    import subprocess
     ip = req.ip.strip()
     text = req.text
     if not text:
         return {"status": "ok", "detail": "Empty text"}
+
+    # 1. Primary: Forward to Device Agent
+    for base_url in _get_device_mcp_urls():
+        try:
+            resp = requests.post(f"{base_url}/input/text", json={"ip": ip, "text": text}, timeout=6)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.debug(f"Device Agent /input/text forward via {base_url} failed: {e}")
+
+    # 2. Secondary fallback: Direct SSH
+    import subprocess
     escaped = text.replace("'", "'\\''")
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
+    if os.path.isfile("/root/.ssh/id_rsa"):
+        ssh_opts += " -i /root/.ssh/id_rsa"
     cmd = (
         f"luna-send -n 1 luna://com.webos.service.ime/insertText '{{\"text\": \"{escaped}\"}}' 2>/dev/null || "
         f"luna-send -n 1 luna://com.webos.service.ime/sendText '{{\"text\": \"{escaped}\"}}' 2>/dev/null"

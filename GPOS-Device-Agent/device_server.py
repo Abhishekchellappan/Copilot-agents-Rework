@@ -3432,6 +3432,78 @@ def archive_system_logs(target_ip: str = "", log_types: list = None) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Direct REST endpoints for Live Monitor & Remote Display
+# ---------------------------------------------------------------------------
+from starlette.requests import Request
+from starlette.responses import Response, JSONResponse
+
+@mcp.custom_route("/screen/frame", methods=["GET"])
+async def device_screen_frame_endpoint(request: Request) -> Response:
+    """Return raw JPEG/PNG image bytes of target device display."""
+    target_ip = request.query_params.get("ip", "").strip()
+    if not target_ip:
+        return Response(content=b"Target IP parameter required", status_code=400, media_type="text/plain")
+    
+    try:
+        snap_res = take_screenshot(target_ip=target_ip)
+        if "SNAPSHOT_BASE64:" in snap_res:
+            import base64
+            b64_data = snap_res.split("SNAPSHOT_BASE64:")[1].strip()
+            b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
+            raw_bytes = base64.b64decode(b64_clean)
+            if len(raw_bytes) > 64:
+                return Response(
+                    content=raw_bytes,
+                    media_type="image/jpeg",
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0"
+                    }
+                )
+        return Response(content=f"Snapshot error: {snap_res[:200]}".encode('utf-8'), status_code=502, media_type="text/plain")
+    except Exception as e:
+        return Response(content=f"Server error: {str(e)}".encode('utf-8'), status_code=500, media_type="text/plain")
+
+
+@mcp.custom_route("/input/click", methods=["POST"])
+async def device_click_endpoint(request: Request) -> Response:
+    try:
+        body = await request.json()
+        target_ip = body.get("ip", "")
+        x = int(body.get("x", 0))
+        y = int(body.get("y", 0))
+        res = device_mouse_click(target_ip=target_ip, x=x, y=y)
+        return JSONResponse({"status": "ok", "detail": res})
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/input/key", methods=["POST"])
+async def device_key_endpoint(request: Request) -> Response:
+    try:
+        body = await request.json()
+        target_ip = body.get("ip", "")
+        key = str(body.get("key", "ENTER"))
+        res = device_send_key(target_ip=target_ip, key=key)
+        return JSONResponse({"status": "ok", "detail": res})
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/input/text", methods=["POST"])
+async def device_text_endpoint(request: Request) -> Response:
+    try:
+        body = await request.json()
+        target_ip = body.get("ip", "")
+        text = str(body.get("text", ""))
+        res = device_type_text(target_ip=target_ip, text=text)
+        return JSONResponse({"status": "ok", "detail": res})
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
 if __name__ == '__main__':
     mcp.run(transport='sse', host='0.0.0.0', port=8000)
 

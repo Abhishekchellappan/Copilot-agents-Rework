@@ -38,7 +38,7 @@ spec:
         - name: MCP_SERVER_URL
           value: "http://gpos-muralidhar-jira-service:8000"
         - name: DEVICE_MCP_SERVER_URL
-          value: "http://gpos-muralidhar-device-service:8000"
+          value: "http://gpos-muralidhar-device-service-dev:8000"
         - name: JIRA_BASE_URL
           value: "http://jira.lge.com/issue"
         - name: DB_PATH
@@ -46,10 +46,18 @@ spec:
         volumeMounts:
         - name: data-volume
           mountPath: /app/data
+        - name: ssh-key-volume
+          mountPath: /root/.ssh
+          readOnly: true
       volumes:
       - name: data-volume
         persistentVolumeClaim:
           claimName: gpos-ax-portal-pvc-dev
+      - name: ssh-key-volume
+        secret:
+          secretName: gpos-device-agent-ssh-key
+          defaultMode: 0400
+          optional: true
 ---
 apiVersion: v1
 kind: Service
