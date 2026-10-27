@@ -286,7 +286,10 @@ def get_current_user(request: Request) -> str:
 
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
-    if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/artifacts") and request.url.path not in ["/api/login", "/api/auth/verify", "/api/device/info", "/api/device/screen/frame"]:
+    if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/artifacts") and request.url.path not in [
+        "/api/login", "/api/auth/verify", "/api/device/info", "/api/device/screen/frame",
+        "/api/device/webrtc/offer", "/api/device/webrtc/close", "/api/device/screen/stream"
+    ]:
         if request.method != "OPTIONS":  # Skip auth check for CORS preflight
             try:
                 get_current_user(request)
@@ -2837,6 +2840,76 @@ def get_device_screen_frame(ip: str):
         media_type="image/svg+xml",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
     )
+
+
+@app.post("/api/device/webrtc/offer")
+async def device_webrtc_offer(request: Request):
+    """Forward WebRTC SDP Offer to Device Agent and return SDP Answer."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    ip = body.get("ip", "").strip()
+    if not ip or ip.lower() == "none":
+        raise HTTPException(status_code=400, detail="Valid target IP is required")
+
+    for base_url in _get_device_mcp_urls():
+        try:
+            resp = requests.post(f"{base_url}/webrtc/offer", json=body, timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
+            else:
+                logger.warning(f"Device Agent /webrtc/offer returned {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logger.debug(f"Device Agent /webrtc/offer forward via {base_url} failed: {e}")
+
+    raise HTTPException(status_code=502, detail="Failed to establish WebRTC session with Device Agent")
+
+
+@app.post("/api/device/webrtc/close")
+async def device_webrtc_close(request: Request):
+    """Notify Device Agent to close WebRTC peer connection."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    for base_url in _get_device_mcp_urls():
+        try:
+            resp = requests.post(f"{base_url}/webrtc/close", json=body, timeout=5)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.debug(f"Device Agent /webrtc/close forward via {base_url} failed: {e}")
+
+    return {"status": "ok"}
+
+
+@app.get("/api/device/screen/stream")
+def get_device_screen_stream(ip: str):
+    """Stream continuous MJPEG video stream from Device Agent."""
+    clean_ip = ip.strip()
+    if not clean_ip or clean_ip.lower() == "none":
+        raise HTTPException(status_code=400, detail="Valid target IP is required")
+
+    from fastapi.responses import StreamingResponse
+    for base_url in _get_device_mcp_urls():
+        try:
+            req_stream = requests.get(f"{base_url}/screen/stream", params={"ip": clean_ip}, stream=True, timeout=10)
+            if req_stream.status_code == 200:
+                def iter_stream():
+                    for chunk in req_stream.iter_content(chunk_size=4096):
+                        yield chunk
+                return StreamingResponse(
+                    iter_stream(),
+                    media_type="multipart/x-mixed-replace; boundary=frame",
+                    headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+                )
+        except Exception as e:
+            logger.debug(f"Device Agent /screen/stream via {base_url} failed: {e}")
+
+    raise HTTPException(status_code=502, detail="MJPEG stream unavailable from Device Agent")
 
 
 @app.post("/api/device/input/click")

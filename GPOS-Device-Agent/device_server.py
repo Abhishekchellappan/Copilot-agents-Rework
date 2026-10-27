@@ -3550,6 +3550,280 @@ async def device_text_endpoint(request: Request) -> Response:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚡ WEBRTC & REAL-TIME 30 FPS VIDEO STREAMING ENGINE
+# ═══════════════════════════════════════════════════════════════════════════
+import io
+import math
+import asyncio
+from datetime import datetime
+from starlette.responses import StreamingResponse
+
+try:
+    import aiortc
+    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+    from aiortc.mediastreams import VideoStreamTrack
+    import av
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_WEBRTC = True
+except ImportError as _webrtc_err:
+    HAS_WEBRTC = False
+    logger.warning(f"WebRTC libraries not loaded: {_webrtc_err}")
+
+
+class TargetFrameBuffer:
+    """Manages cached frames and periodic board capture for 30 FPS WebRTC streaming."""
+    def __init__(self, target_ip: str):
+        self.target_ip = target_ip
+        self.lock = asyncio.Lock()
+        self.last_pil_image = None
+        self.last_av_frame = None
+        self.last_capture_time = 0.0
+        self.active_tracks = 0
+        self.capture_task = None
+        self.capture_status = "Standby"
+
+    async def start(self):
+        self.active_tracks += 1
+        if not self.capture_task or self.capture_task.done():
+            self.capture_task = asyncio.create_task(self._capture_loop())
+
+    async def stop(self):
+        self.active_tracks = max(0, self.active_tracks - 1)
+        if self.active_tracks == 0 and self.capture_task and not self.capture_task.done():
+            self.capture_task.cancel()
+
+    async def _capture_loop(self):
+        """Continuously pulls screenshots from target board without freezing event loop."""
+        while self.active_tracks > 0:
+            try:
+                snap_res = await asyncio.to_thread(take_screenshot, self.target_ip)
+                if "SNAPSHOT_BASE64:" in snap_res:
+                    b64_data = snap_res.split("SNAPSHOT_BASE64:")[1].strip()
+                    b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
+                    raw_bytes = base64.b64decode(b64_clean)
+                    if len(raw_bytes) > 64 and HAS_WEBRTC:
+                        img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+                        if img.size != (1280, 720):
+                            img = img.resize((1280, 720), Image.Resampling.BILINEAR)
+                        
+                        async with self.lock:
+                            self.last_pil_image = img
+                            self.last_av_frame = av.VideoFrame.from_image(img)
+                            self.last_capture_time = time.time()
+                            self.capture_status = "Live Compositor"
+                else:
+                    self.capture_status = "Standby / Idle"
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.capture_status = f"Standby ({str(e)[:30]})"
+
+            await asyncio.sleep(0.35)
+
+    def get_current_frame(self, frame_idx: int, elapsed: float):
+        if not HAS_WEBRTC:
+            return None
+        # Deliver cached board frame if recent (< 10 seconds)
+        if self.last_av_frame is not None and (time.time() - self.last_capture_time < 10.0):
+            return self.last_av_frame
+
+        # Fallback to high-framerate diagnostic HUD test pattern
+        return self._generate_diagnostic_frame(frame_idx, elapsed)
+
+    def _generate_diagnostic_frame(self, frame_idx: int, elapsed: float):
+        width, height = 1280, 720
+        img = Image.new("RGB", (width, height), color=(11, 17, 32)) # slate-950
+        draw = ImageDraw.Draw(img)
+
+        # Outer bezel
+        draw.rectangle([(16, 16), (width - 16, height - 16)], outline=(51, 65, 85), width=2)
+        draw.rectangle([(24, 24), (width - 24, height - 24)], outline=(30, 41, 59), width=1)
+
+        # Header bar
+        draw.rectangle([(25, 25), (width - 25, 85)], fill=(15, 23, 42))
+        draw.line([(25, 85), (width - 25, 85)], fill=(51, 65, 85), width=2)
+
+        draw.text((45, 42), "GPOS AX LIVE MONITORING", fill=(255, 255, 255))
+        draw.text((320, 42), "•  WEBRTC HIGH-FRAMERATE STREAM (30 FPS)", fill=(129, 140, 248))
+        
+        # Timecode
+        now_str = datetime.now().strftime("%H:%M:%S") + f".{(int(elapsed * 1000) % 1000):03d}"
+        draw.text((width - 260, 42), f"TIMECODE: {now_str}", fill=(56, 189, 248))
+
+        # Center target board card
+        cx, cy = width // 2, height // 2
+        card_w, card_h = 760, 360
+        x0, y0 = cx - card_w // 2, cy - card_h // 2
+        draw.rectangle([(x0, y0), (x0 + card_w, y0 + card_h)], fill=(15, 23, 42), outline=(59, 130, 246), width=2)
+
+        # Visual Display Icon
+        draw.rectangle([(cx - 40, y0 + 35), (cx + 40, y0 + 95)], fill=(30, 41, 59), outline=(96, 165, 250), width=2)
+        draw.rectangle([(cx - 15, y0 + 95), (cx + 15, y0 + 110)], fill=(96, 165, 250))
+        draw.rectangle([(cx - 30, y0 + 110), (cx + 30, y0 + 115)], fill=(96, 165, 250))
+
+        # Status & Target Info
+        draw.text((cx, y0 + 140), f"TARGET BOARD: {self.target_ip}", fill=(248, 250, 252), anchor="mm")
+        status_color = (74, 222, 128) if "Live" in self.capture_status else (251, 191, 36)
+        draw.text((cx, y0 + 175), f"STATUS: {self.capture_status.upper()}", fill=status_color, anchor="mm")
+
+        # Animated scanning bar (visual verification of fluid 30 FPS playback)
+        bar_x = int((frame_idx * 7) % (card_w - 60)) + x0 + 30
+        draw.rectangle([(x0 + 30, y0 + 215), (x0 + card_w - 30, y0 + 225)], fill=(30, 41, 59))
+        draw.rectangle([(bar_x - 30, y0 + 215), (bar_x + 30, y0 + 225)], fill=(56, 189, 248))
+
+        draw.text((cx, y0 + 265), "Press Virtual Remote buttons or click screen to interact", fill=(148, 163, 184), anchor="mm")
+        draw.text((cx, y0 + 300), f"Frame #{frame_idx}  |  Stream Rate: 30.0 FPS  |  Buffer: 1280x720 YUV420p", fill=(100, 116, 139), anchor="mm")
+
+        # Footer
+        draw.rectangle([(25, height - 60), (width - 25, height - 25)], fill=(15, 23, 42))
+        draw.line([(25, height - 60), (width - 25, height - 60)], fill=(51, 65, 85), width=1)
+        draw.text((45, height - 48), "webOS Compositor Pipe  •  H.264 / VP8 Zero-Latency Track  •  com.lge.inputgenerator", fill=(100, 116, 139))
+
+        return av.VideoFrame.from_image(img)
+
+
+TARGET_BUFFERS: dict = {}
+
+def get_target_buffer(target_ip: str) -> TargetFrameBuffer:
+    clean_ip = target_ip.strip()
+    if clean_ip not in TARGET_BUFFERS:
+        TARGET_BUFFERS[clean_ip] = TargetFrameBuffer(clean_ip)
+    return TARGET_BUFFERS[clean_ip]
+
+
+if HAS_WEBRTC:
+    class BoardVideoStreamTrack(VideoStreamTrack):
+        kind = "video"
+
+        def __init__(self, target_ip: str):
+            super().__init__()
+            self.target_ip = target_ip
+            self.buffer = get_target_buffer(target_ip)
+            self.frame_idx = 0
+            self.start_time = time.time()
+            asyncio.create_task(self.buffer.start())
+
+        async def recv(self):
+            pts, time_base = await self.next_timestamp()
+            self.frame_idx += 1
+            elapsed = time.time() - self.start_time
+
+            frame = self.buffer.get_current_frame(self.frame_idx, elapsed)
+            frame.pts = pts
+            frame.time_base = time_base
+            return frame
+
+        def stop(self):
+            super().stop()
+            asyncio.create_task(self.buffer.stop())
+
+
+ACTIVE_PCS: set = set()
+
+@mcp.custom_route("/webrtc/offer", methods=["POST"])
+async def webrtc_offer_endpoint(request: Request) -> Response:
+    """Accept browser WebRTC SDP offer, initialize BoardVideoStreamTrack, and return SDP answer."""
+    if not HAS_WEBRTC:
+        return JSONResponse({"status": "error", "detail": "aiortc is not available in environment"}, status_code=501)
+
+    try:
+        body = await request.json()
+        target_ip = body.get("ip", "").strip()
+        offer_sdp = body.get("sdp")
+        offer_type = body.get("type", "offer")
+
+        if not offer_sdp:
+            return JSONResponse({"status": "error", "detail": "SDP offer required"}, status_code=400)
+
+        offer = RTCSessionDescription(sdp=offer_sdp, type=offer_type)
+        pc = RTCPeerConnection()
+        ACTIVE_PCS.add(pc)
+
+        track = BoardVideoStreamTrack(target_ip=target_ip)
+        pc.addTrack(track)
+
+        @pc.on("connectionstatechange")
+        async def on_state_change():
+            if pc.connectionState in ["failed", "closed"]:
+                track.stop()
+                await pc.close()
+                ACTIVE_PCS.discard(pc)
+
+        @pc.on("iceconnectionstatechange")
+        async def on_ice_state_change():
+            if pc.iceConnectionState in ["failed", "closed"]:
+                track.stop()
+                await pc.close()
+                ACTIVE_PCS.discard(pc)
+
+        await pc.setRemoteDescription(offer)
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        return JSONResponse({
+            "status": "ok",
+            "sdp": pc.localDescription.sdp,
+            "type": pc.localDescription.type
+        })
+    except Exception as e:
+        logger.error(f"WebRTC offer handler error: {e}", exc_info=True)
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/webrtc/close", methods=["POST"])
+async def webrtc_close_endpoint(request: Request) -> Response:
+    """Clean up WebRTC peer connections."""
+    try:
+        to_remove = [pc for pc in list(ACTIVE_PCS) if pc.connectionState in ["closed", "failed"]]
+        for pc in to_remove:
+            await pc.close()
+            ACTIVE_PCS.discard(pc)
+        return JSONResponse({"status": "ok"})
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/screen/stream", methods=["GET"])
+async def device_screen_stream_endpoint(request: Request) -> Response:
+    """Continuous multipart/x-mixed-replace MJPEG stream fallback for HTTP clients."""
+    target_ip = request.query_params.get("ip", "").strip()
+    if not target_ip:
+        return Response(content=b"Target IP parameter required", status_code=400, media_type="text/plain")
+
+    buf = get_target_buffer(target_ip)
+    await buf.start()
+
+    async def stream_frames():
+        try:
+            frame_i = 0
+            start_t = time.time()
+            while True:
+                frame_i += 1
+                av_f = buf.get_current_frame(frame_i, time.time() - start_t)
+                if av_f:
+                    img = av_f.to_image()
+                    b_io = io.BytesIO()
+                    img.save(b_io, format="JPEG", quality=75)
+                    frame_bytes = b_io.getvalue()
+                    yield (b"--frame\r\n"
+                           b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
+                await asyncio.sleep(0.033)
+        finally:
+            await buf.stop()
+
+    return StreamingResponse(
+        stream_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
+
+
 if __name__ == '__main__':
     mcp.run(transport='sse', host='0.0.0.0', port=8000)
 

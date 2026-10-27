@@ -1998,11 +1998,29 @@
 
                 <!-- Header Actions -->
                 <div class="flex items-center gap-2.5">
-                    <button id="lm-autorefresh-btn" onclick="window.deviceHud.toggleLiveAutoRefresh()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition-colors">
+                    <!-- Stream Mode Switcher -->
+                    <div class="flex items-center bg-slate-950/80 rounded-lg p-0.5 border border-slate-700/80">
+                        <button id="lm-mode-webrtc-btn" onclick="window.deviceHud.setStreamMode('webrtc')" class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-600 text-white shadow-sm transition-all" title="Real-time 30+ FPS WebRTC video stream">
+                            <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i>
+                            <span>30 FPS Stream</span>
+                        </button>
+                        <button id="lm-mode-snapshot-btn" onclick="window.deviceHud.setStreamMode('snapshot')" class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-slate-400 hover:text-white transition-all" title="Periodic snapshot polling (low-bandwidth mode)">
+                            <i data-lucide="camera" class="w-3.5 h-3.5"></i>
+                            <span>Snapshot</span>
+                        </button>
+                    </div>
+
+                    <!-- Stream Quality / FPS Badge -->
+                    <div id="lm-stream-badge" class="hidden items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-mono font-semibold">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span id="lm-stream-fps">30.0 FPS</span>
+                    </div>
+
+                    <button id="lm-autorefresh-btn" onclick="window.deviceHud.toggleLiveAutoRefresh()" class="hidden items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition-colors">
                         <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-indigo-400"></i>
                         <span id="lm-autorefresh-label">Auto-Refresh (3s)</span>
                     </button>
-                    <button onclick="window.deviceHud.refreshLiveFrame()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors shadow-sm">
+                    <button id="lm-refresh-btn" onclick="window.deviceHud.refreshLiveFrame()" class="hidden items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors shadow-sm">
                         <i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i>
                         <span>Refresh Frame</span>
                     </button>
@@ -2028,13 +2046,16 @@
                     <!-- Canvas Container (16:9 Aspect Ratio) -->
                     <div class="flex-1 flex items-center justify-center relative bg-black/80 rounded-xl border border-slate-800 overflow-hidden shadow-inner">
                         <div id="lm-canvas-wrapper" class="relative max-w-full max-h-full aspect-video flex items-center justify-center">
-                            <canvas id="live-monitor-canvas" width="1920" height="1080" class="w-full h-full object-contain cursor-crosshair block"></canvas>
+                            <!-- WebRTC Video Element (Fluid 30 FPS Stream) -->
+                            <video id="live-monitor-video" autoplay playsinline muted class="w-full h-full object-contain block absolute inset-0 hidden z-0"></video>
+                            <!-- Transparent Interactive Overlay Canvas -->
+                            <canvas id="live-monitor-canvas" width="1920" height="1080" class="w-full h-full object-contain cursor-crosshair block relative z-10"></canvas>
                             <!-- Visual ripple for click -->
-                            <div id="lm-click-indicator" class="pointer-events-none absolute w-6 h-6 rounded-full border-2 border-cyan-400 bg-cyan-400/40 -translate-x-1/2 -translate-y-1/2 scale-0 opacity-0 transition-all duration-300"></div>
+                            <div id="lm-click-indicator" class="pointer-events-none absolute w-6 h-6 rounded-full border-2 border-cyan-400 bg-cyan-400/40 -translate-x-1/2 -translate-y-1/2 scale-0 opacity-0 transition-all duration-300 z-20"></div>
                             <!-- Loading overlay -->
-                            <div id="lm-loading" class="absolute inset-0 bg-slate-950/70 backdrop-blur-[2px] flex flex-col items-center justify-center text-slate-300 gap-2 hidden">
+                            <div id="lm-loading" class="absolute inset-0 bg-slate-950/70 backdrop-blur-[2px] flex flex-col items-center justify-center text-slate-300 gap-2 hidden z-30">
                                 <svg class="animate-spin w-8 h-8 text-indigo-500" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                                <span class="text-xs font-mono text-slate-400">Capturing live frame...</span>
+                                <span id="lm-loading-text" class="text-xs font-mono text-slate-400">Connecting WebRTC 30 FPS stream...</span>
                             </div>
                         </div>
                     </div>

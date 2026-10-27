@@ -21,6 +21,9 @@ class DeviceHUD {
         this.liveRefreshTimer = null;
         this.liveAutoRefresh = true;
         this.canvasInitialized = false;
+        this.streamMode = 'webrtc'; // 'webrtc' (30 FPS Stream) or 'snapshot' (Periodic Poll)
+        this.peerConnection = null;
+        this.statsTimer = null;
     }
 
     init() {
@@ -508,10 +511,17 @@ class DeviceHUD {
         modal.classList.add('flex');
 
         this.setupLiveMonitorCanvas();
-        this.refreshLiveFrame();
 
-        if (this.liveAutoRefresh) {
-            this.startLiveRefreshTimer();
+        // Apply active mode buttons
+        this.updateStreamModeUI();
+
+        if (this.streamMode === 'webrtc') {
+            this.startWebRTCStream(ip);
+        } else {
+            this.refreshLiveFrame();
+            if (this.liveAutoRefresh) {
+                this.startLiveRefreshTimer();
+            }
         }
 
         if (typeof lucide !== 'undefined') lucide.createIcons();
@@ -523,10 +533,228 @@ class DeviceHUD {
             modal.classList.add('hidden');
             modal.classList.remove('flex');
         }
+        this.stopWebRTCStream();
         if (this.liveRefreshTimer) {
             clearInterval(this.liveRefreshTimer);
             this.liveRefreshTimer = null;
         }
+    }
+
+    setStreamMode(mode) {
+        if (mode === this.streamMode && (this.peerConnection || mode === 'snapshot')) return;
+        this.streamMode = mode;
+        this.updateStreamModeUI();
+
+        if (mode === 'webrtc') {
+            if (this.liveRefreshTimer) {
+                clearInterval(this.liveRefreshTimer);
+                this.liveRefreshTimer = null;
+            }
+            this.startWebRTCStream(this.liveMonitorIp);
+        } else {
+            this.stopWebRTCStream();
+            const video = document.getElementById('live-monitor-video');
+            if (video) video.classList.add('hidden');
+            this.refreshLiveFrame();
+            if (this.liveAutoRefresh) {
+                this.startLiveRefreshTimer();
+            }
+        }
+    }
+
+    updateStreamModeUI() {
+        const webrtcBtn = document.getElementById('lm-mode-webrtc-btn');
+        const snapBtn = document.getElementById('lm-mode-snapshot-btn');
+        const autorefreshBtn = document.getElementById('lm-autorefresh-btn');
+        const refreshBtn = document.getElementById('lm-refresh-btn');
+        const streamBadge = document.getElementById('lm-stream-badge');
+
+        if (this.streamMode === 'webrtc') {
+            if (webrtcBtn) {
+                webrtcBtn.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-600 text-white shadow-sm transition-all';
+            }
+            if (snapBtn) {
+                snapBtn.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-slate-400 hover:text-white transition-all';
+            }
+            if (autorefreshBtn) autorefreshBtn.classList.add('hidden');
+            if (refreshBtn) refreshBtn.classList.add('hidden');
+            if (streamBadge) {
+                streamBadge.classList.remove('hidden');
+                streamBadge.classList.add('flex');
+            }
+        } else {
+            if (webrtcBtn) {
+                webrtcBtn.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-slate-400 hover:text-white transition-all';
+            }
+            if (snapBtn) {
+                snapBtn.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-600 text-white shadow-sm transition-all';
+            }
+            if (autorefreshBtn) {
+                autorefreshBtn.classList.remove('hidden');
+                autorefreshBtn.classList.add('flex');
+            }
+            if (refreshBtn) {
+                refreshBtn.classList.remove('hidden');
+                refreshBtn.classList.add('flex');
+            }
+            if (streamBadge) {
+                streamBadge.classList.add('hidden');
+                streamBadge.classList.remove('flex');
+            }
+        }
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    async startWebRTCStream(ip) {
+        if (!ip) return;
+        this.stopWebRTCStream();
+
+        const loading = document.getElementById('lm-loading');
+        const loadingText = document.getElementById('lm-loading-text');
+        const statusEl = document.getElementById('lm-status-text');
+
+        if (loading) loading.classList.remove('hidden');
+        if (loadingText) loadingText.textContent = 'Negotiating WebRTC 30 FPS stream...';
+        if (statusEl) statusEl.textContent = `Connecting 30 FPS WebRTC stream to ${ip}...`;
+
+        try {
+            const config = {
+                iceServers: [
+                    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }
+                ]
+            };
+            this.peerConnection = new RTCPeerConnection(config);
+            this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+
+            this.peerConnection.ontrack = (event) => {
+                const video = document.getElementById('live-monitor-video');
+                if (video) {
+                    video.srcObject = event.streams[0];
+                    video.classList.remove('hidden');
+                    video.play().catch(e => console.log('Video autoplay:', e));
+                }
+                // Clear canvas so the video underneath is visible while canvas captures input
+                const canvas = document.getElementById('live-monitor-canvas');
+                if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+                if (loading) loading.classList.add('hidden');
+                if (statusEl) statusEl.textContent = `⚡ 30 FPS Live Stream connected • Low latency (<100ms)`;
+                const badge = document.getElementById('lm-stream-badge');
+                if (badge) {
+                    badge.classList.remove('hidden');
+                    badge.classList.add('flex');
+                }
+            };
+
+            this.peerConnection.onconnectionstatechange = () => {
+                const state = this.peerConnection ? this.peerConnection.connectionState : 'closed';
+                console.log('WebRTC connectionState:', state);
+                if (state === 'connected') {
+                    this.startStatsMonitor();
+                } else if (state === 'failed' || state === 'disconnected') {
+                    console.warn('WebRTC state failed/disconnected, falling back to snapshot mode');
+                    this.fallbackToSnapshot('WebRTC stream interrupted, switched to Snapshot mode');
+                }
+            };
+
+            const offer = await this.peerConnection.createOffer();
+            await this.peerConnection.setLocalDescription(offer);
+
+            // Wait briefly for ICE candidates to gather into SDP offer
+            await new Promise((resolve) => {
+                if (this.peerConnection.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const checkState = () => {
+                        if (this.peerConnection && this.peerConnection.iceGatheringState === 'complete') {
+                            this.peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }
+                    };
+                    this.peerConnection.addEventListener('icegatheringstatechange', checkState);
+                    setTimeout(resolve, 1200);
+                }
+            });
+
+            const token = localStorage.getItem('auth_token');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+
+            const res = await fetch('/api/device/webrtc/offer', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    ip: ip,
+                    sdp: this.peerConnection.localDescription.sdp,
+                    type: this.peerConnection.localDescription.type
+                })
+            });
+
+            if (!res.ok) {
+                throw new Error(`WebRTC offer rejected: HTTP ${res.status}`);
+            }
+
+            const answer = await res.json();
+            if (answer && answer.sdp) {
+                await this.peerConnection.setRemoteDescription(new RTCSessionDescription({
+                    sdp: answer.sdp,
+                    type: answer.type || 'answer'
+                }));
+            } else {
+                throw new Error(answer.detail || 'Invalid answer from Device Agent');
+            }
+        } catch (err) {
+            console.warn('WebRTC negotiation error, falling back to Snapshot mode:', err);
+            this.fallbackToSnapshot('WebRTC stream unavailable (' + err.message + '). Switched to Snapshot mode.');
+        }
+    }
+
+    startStatsMonitor() {
+        if (this.statsTimer) clearInterval(this.statsTimer);
+        this.statsTimer = setInterval(async () => {
+            if (!this.peerConnection || this.peerConnection.connectionState !== 'connected') return;
+            try {
+                const stats = await this.peerConnection.getStats();
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        const fps = report.framesPerSecond ? report.framesPerSecond.toFixed(1) : '30.0';
+                        const fpsEl = document.getElementById('lm-stream-fps');
+                        if (fpsEl) fpsEl.textContent = `${fps} FPS`;
+                    }
+                });
+            } catch (e) {}
+        }, 1500);
+    }
+
+    stopWebRTCStream() {
+        if (this.statsTimer) {
+            clearInterval(this.statsTimer);
+            this.statsTimer = null;
+        }
+        if (this.peerConnection) {
+            try {
+                this.peerConnection.close();
+            } catch (e) {}
+            this.peerConnection = null;
+        }
+        const video = document.getElementById('live-monitor-video');
+        if (video) {
+            video.srcObject = null;
+            video.classList.add('hidden');
+        }
+        const badge = document.getElementById('lm-stream-badge');
+        if (badge) {
+            badge.classList.add('hidden');
+            badge.classList.remove('flex');
+        }
+    }
+
+    fallbackToSnapshot(message) {
+        const statusEl = document.getElementById('lm-status-text');
+        if (statusEl && message) statusEl.textContent = message;
+        this.setStreamMode('snapshot');
     }
 
     toggleLiveAutoRefresh() {
@@ -551,7 +779,7 @@ class DeviceHUD {
         if (this.liveRefreshTimer) clearInterval(this.liveRefreshTimer);
         this.liveRefreshTimer = setInterval(() => {
             const modal = document.getElementById('live-monitor-modal');
-            if (modal && !modal.classList.contains('hidden') && this.liveAutoRefresh) {
+            if (modal && !modal.classList.contains('hidden') && this.liveAutoRefresh && this.streamMode === 'snapshot') {
                 this.refreshLiveFrame();
             }
         }, 3000);
@@ -603,7 +831,9 @@ class DeviceHUD {
                 console.error('Click injection error:', err);
             }
 
-            setTimeout(() => this.refreshLiveFrame(), 600);
+            if (this.streamMode === 'snapshot') {
+                setTimeout(() => this.refreshLiveFrame(), 600);
+            }
         });
 
         // Physical Keyboard Navigation for Live Monitor
@@ -651,7 +881,11 @@ class DeviceHUD {
     async refreshLiveFrame() {
         if (!this.liveMonitorIp) return;
         const loading = document.getElementById('lm-loading');
+        const loadingText = document.getElementById('lm-loading-text');
         const statusEl = document.getElementById('lm-status-text');
+
+        if (loading) loading.classList.remove('hidden');
+        if (loadingText) loadingText.textContent = 'Capturing snapshot frame...';
 
         const img = new Image();
         img.crossOrigin = 'anonymous';
@@ -688,7 +922,9 @@ class DeviceHUD {
             console.error('Key injection error:', err);
         }
 
-        setTimeout(() => this.refreshLiveFrame(), 600);
+        if (this.streamMode === 'snapshot') {
+            setTimeout(() => this.refreshLiveFrame(), 600);
+        }
     }
 
     async sendRemoteText() {
@@ -711,7 +947,9 @@ class DeviceHUD {
             console.error('Text injection error:', err);
         }
 
-        setTimeout(() => this.refreshLiveFrame(), 700);
+        if (this.streamMode === 'snapshot') {
+            setTimeout(() => this.refreshLiveFrame(), 700);
+        }
     }
 
     async sendDeviceInput(endpoint, payload) {
