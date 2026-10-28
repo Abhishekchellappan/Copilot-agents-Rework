@@ -24,6 +24,7 @@ class DeviceHUD {
         this.streamMode = 'webrtc'; // 'webrtc' (30 FPS Stream) or 'snapshot' (Periodic Poll)
         this.peerConnection = null;
         this.statsTimer = null;
+        this.hasInitialSnapshot = false;
     }
 
     init() {
@@ -518,6 +519,12 @@ class DeviceHUD {
         if (this.streamMode === 'webrtc') {
             this.startWebRTCStream(ip);
         } else {
+            const loading = document.getElementById('lm-loading');
+            const loadingText = document.getElementById('lm-loading-text');
+            if (loading && !this.hasInitialSnapshot) {
+                loading.classList.remove('hidden');
+                if (loadingText) loadingText.textContent = 'Connecting to board display...';
+            }
             this.refreshLiveFrame();
             if (this.liveAutoRefresh) {
                 this.startLiveRefreshTimer();
@@ -534,6 +541,9 @@ class DeviceHUD {
             modal.classList.remove('flex');
         }
         this.stopWebRTCStream();
+        this.hasInitialSnapshot = false;
+        const loading = document.getElementById('lm-loading');
+        if (loading) loading.classList.add('hidden');
         if (this.liveRefreshTimer) {
             clearInterval(this.liveRefreshTimer);
             this.liveRefreshTimer = null;
@@ -881,17 +891,14 @@ class DeviceHUD {
     async refreshLiveFrame() {
         if (!this.liveMonitorIp) return;
         const loading = document.getElementById('lm-loading');
-        const loadingText = document.getElementById('lm-loading-text');
         const statusEl = document.getElementById('lm-status-text');
-
-        if (loading) loading.classList.remove('hidden');
-        if (loadingText) loadingText.textContent = 'Capturing snapshot frame...';
 
         const img = new Image();
         img.crossOrigin = 'anonymous';
         const frameUrl = `/api/device/screen/frame?ip=${encodeURIComponent(this.liveMonitorIp)}&t=${Date.now()}`;
 
         img.onload = () => {
+            this.hasInitialSnapshot = true;
             const canvas = document.getElementById('live-monitor-canvas');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
