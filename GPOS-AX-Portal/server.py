@@ -2894,7 +2894,7 @@ async def device_webrtc_close(request: Request):
 
 @app.get("/api/device/screen/stream")
 def get_device_screen_stream(ip: str):
-    """Stream continuous MJPEG video stream from Device Agent."""
+    """Stream continuous MJPEG video stream from Device Agent or directly from target board."""
     clean_ip = ip.strip()
     if not clean_ip or clean_ip.lower() == "none":
         raise HTTPException(status_code=400, detail="Valid target IP is required")
@@ -2902,10 +2902,10 @@ def get_device_screen_stream(ip: str):
     from fastapi.responses import StreamingResponse
     for base_url in _get_device_mcp_urls():
         try:
-            req_stream = requests.get(f"{base_url}/screen/stream", params={"ip": clean_ip}, stream=True, timeout=10)
+            req_stream = requests.get(f"{base_url}/screen/stream", params={"ip": clean_ip}, stream=True, timeout=5)
             if req_stream.status_code == 200:
                 def iter_stream():
-                    for chunk in req_stream.iter_content(chunk_size=4096):
+                    for chunk in req_stream.iter_content(chunk_size=8192):
                         yield chunk
                 return StreamingResponse(
                     iter_stream(),
@@ -2914,6 +2914,21 @@ def get_device_screen_stream(ip: str):
                 )
         except Exception as e:
             logger.debug(f"Device Agent /screen/stream via {base_url} failed: {e}")
+
+    # Direct fallback to board streamer port 9876 if agent is unavailable
+    try:
+        board_req = requests.get(f"http://{clean_ip}:9876/stream.mjpeg", stream=True, timeout=3)
+        if board_req.status_code == 200:
+            def iter_board():
+                for chunk in board_req.iter_content(chunk_size=8192):
+                    yield chunk
+            return StreamingResponse(
+                iter_board(),
+                media_type="multipart/x-mixed-replace; boundary=frame",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+            )
+    except Exception:
+        pass
 
     raise HTTPException(status_code=502, detail="MJPEG stream unavailable from Device Agent")
 

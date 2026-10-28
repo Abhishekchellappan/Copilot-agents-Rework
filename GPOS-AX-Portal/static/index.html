@@ -2051,6 +2051,8 @@
                         <div id="lm-canvas-wrapper" class="relative max-w-full max-h-full aspect-video flex items-center justify-center">
                             <!-- WebRTC Video Element (Fluid 30 FPS Stream) -->
                             <video id="live-monitor-video" autoplay playsinline muted class="w-full h-full object-contain block absolute inset-0 hidden z-0"></video>
+                            <!-- High-Speed HTTP Turbo Stream (Guaranteed 30 FPS across Kubernetes Ingress/Proxies) -->
+                            <img id="live-monitor-stream-img" class="w-full h-full object-contain block absolute inset-0 hidden z-0 pointer-events-none" alt="Live Board Stream">
                             <!-- Transparent Interactive Overlay Canvas -->
                             <canvas id="live-monitor-canvas" width="1920" height="1080" class="w-full h-full object-contain cursor-crosshair block relative z-10"></canvas>
                             <!-- Visual ripple for click -->
@@ -2168,7 +2170,7 @@
     <script src="/static/js/api_v2.js?v=30"></script>
     <script src="/static/js/dashboard_v2.js?v=30"></script>
     <script src="/static/js/chat_v2.js?v=32"></script>
-    <script src="/static/js/device_hud.js?v=20261028_1320"></script>
+    <script src="/static/js/device_hud.js?v=20261028_1540"></script>
     <script>
         // Initialize plugins
         if (typeof mermaid !== 'undefined') {

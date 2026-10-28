@@ -3771,10 +3771,11 @@ if __name__ == '__main__':
 class TargetFrameBuffer:
     """Manages cached frames and live board capture for 30 FPS WebRTC streaming."""
     def __init__(self, target_ip: str):
-        self.target_ip = target_ip
+        self.target_ip = _resolve_target_alias(target_ip.strip())
         self.lock = asyncio.Lock()
         self.last_pil_image = None
         self.last_av_frame = None
+        self.last_jpeg_bytes = None
         self.last_capture_time = 0.0
         self.active_tracks = 0
         self.capture_task = None
@@ -3782,39 +3783,41 @@ class TargetFrameBuffer:
 
     def _deploy_and_start_streamer(self) -> bool:
         """Deploy and start native streaming daemon on target board via clean stdin pipe."""
+        real_ip = _resolve_target_alias(self.target_ip)
         # 1. Pipe script via clean stdin (no PTY line length limit!)
         cmd_deploy = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
         if os.path.isfile(SSH_KEY_PATH):
             cmd_deploy.extend(["-i", SSH_KEY_PATH])
-        cmd_deploy.extend([f"root@{self.target_ip}", "cat > /tmp/board_streamer.py"])
+        cmd_deploy.extend([f"root@{real_ip}", "cat > /tmp/board_streamer.py"])
         try:
             res1 = subprocess.run(cmd_deploy, input=BOARD_STREAMER_SCRIPT.encode('utf-8'), capture_output=True, timeout=5)
             if res1.returncode != 0:
-                logger.warning(f"Failed to deploy board_streamer.py to {self.target_ip}: {res1.stderr.decode()[:100]}")
+                logger.warning(f"Failed to deploy board_streamer.py to {real_ip}: {res1.stderr.decode()[:100]}")
                 return False
         except Exception as e:
-            logger.warning(f"Deploy error on {self.target_ip}: {e}")
+            logger.warning(f"Deploy error on {real_ip}: {e}")
             return False
 
         # 2. Launch in background without blocking SSH
         cmd_launch = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
         if os.path.isfile(SSH_KEY_PATH):
             cmd_launch.extend(["-i", SSH_KEY_PATH])
-        cmd_launch.extend([f"root@{self.target_ip}", "python3 /tmp/board_streamer.py </dev/null >/tmp/streamer.log 2>&1 &"])
+        cmd_launch.extend([f"root@{real_ip}", "python3 /tmp/board_streamer.py </dev/null >/tmp/streamer.log 2>&1 &"])
         try:
             subprocess.run(cmd_launch, capture_output=True, timeout=5)
         except Exception as e:
-            logger.warning(f"Launch error on {self.target_ip}: {e}")
+            logger.warning(f"Launch error on {real_ip}: {e}")
             return False
 
         return True
 
     async def _ensure_board_streamer(self) -> bool:
         """Ensure native board streaming engine is running on target board."""
+        real_ip = _resolve_target_alias(self.target_ip)
         # 1. Quick probe to see if already responding
         try:
             import urllib.request
-            req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg", method="HEAD")
+            req = urllib.request.Request(f"http://{real_ip}:9876/frame.jpg", method="HEAD")
             def probe():
                 with urllib.request.urlopen(req, timeout=0.3) as resp:
                     return resp.status == 200
@@ -3833,12 +3836,12 @@ class TargetFrameBuffer:
             await asyncio.sleep(0.25)
             try:
                 import urllib.request
-                req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg", method="HEAD")
+                req = urllib.request.Request(f"http://{real_ip}:9876/frame.jpg", method="HEAD")
                 def check():
                     with urllib.request.urlopen(req, timeout=0.3) as resp:
                         return resp.status == 200
                 if await asyncio.to_thread(check):
-                    logger.info(f"Native board streamer successfully verified on {self.target_ip}:9876")
+                    logger.info(f"Native board streamer successfully verified on {real_ip}:9876")
                     return True
             except Exception:
                 pass
@@ -3857,9 +3860,10 @@ class TargetFrameBuffer:
             # Send stop command to board streamer to immediately release capture handle
             try:
                 import urllib.request
+                real_ip = _resolve_target_alias(self.target_ip)
                 def stop_streamer():
                     try:
-                        req = urllib.request.Request(f"http://{self.target_ip}:9876/stop")
+                        req = urllib.request.Request(f"http://{real_ip}:9876/stop")
                         with urllib.request.urlopen(req, timeout=0.5): pass
                     except Exception: pass
                 asyncio.create_task(asyncio.to_thread(stop_streamer))
@@ -3867,6 +3871,7 @@ class TargetFrameBuffer:
 
     async def _capture_loop(self):
         """Continuously pulls blended compositor frames directly from target board without freezing event loop."""
+        real_ip = _resolve_target_alias(self.target_ip)
         streamer_ready = await self._ensure_board_streamer()
 
         while self.active_tracks > 0:
@@ -3876,7 +3881,7 @@ class TargetFrameBuffer:
             if streamer_ready:
                 try:
                     import urllib.request
-                    req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg")
+                    req = urllib.request.Request(f"http://{real_ip}:9876/frame.jpg")
                     def fetch_frame():
                         with urllib.request.urlopen(req, timeout=0.8) as resp:
                             if resp.status == 200:
@@ -3893,9 +3898,11 @@ class TargetFrameBuffer:
                     img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
                     if img.size != (1280, 720):
                         img = img.resize((1280, 720), Image.Resampling.BILINEAR)
+                    yuv_frame = av.VideoFrame.from_image(img).reformat(format="yuv420p")
                     async with self.lock:
                         self.last_pil_image = img
-                        self.last_av_frame = av.VideoFrame.from_image(img)
+                        self.last_av_frame = yuv_frame
+                        self.last_jpeg_bytes = frame_bytes
                         self.last_capture_time = time.time()
                         self.capture_status = "Live Hardware Blended"
                 except Exception as e:
@@ -3903,7 +3910,7 @@ class TargetFrameBuffer:
             elif not streamer_ready:
                 # 3. Fallback path: Traditional take_screenshot if board streamer is unavailable
                 try:
-                    snap_res = await asyncio.to_thread(take_screenshot, self.target_ip)
+                    snap_res = await asyncio.to_thread(take_screenshot, real_ip)
                     if "SNAPSHOT_BASE64:" in snap_res:
                         b64_data = snap_res.split("SNAPSHOT_BASE64:")[1].strip()
                         b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
@@ -3912,9 +3919,11 @@ class TargetFrameBuffer:
                             img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
                             if img.size != (1280, 720):
                                 img = img.resize((1280, 720), Image.Resampling.BILINEAR)
+                            yuv_frame = av.VideoFrame.from_image(img).reformat(format="yuv420p")
                             async with self.lock:
                                 self.last_pil_image = img
-                                self.last_av_frame = av.VideoFrame.from_image(img)
+                                self.last_av_frame = yuv_frame
+                                self.last_jpeg_bytes = raw_bytes
                                 self.last_capture_time = time.time()
                                 self.capture_status = "Live Compositor"
                     else:
@@ -3924,7 +3933,7 @@ class TargetFrameBuffer:
                 except Exception as e:
                     self.capture_status = f"Standby ({str(e)[:30]})"
 
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(0.05)
 
     def get_current_frame(self, frame_idx: int, elapsed: float):
         if not HAS_WEBRTC:
@@ -3985,13 +3994,13 @@ class TargetFrameBuffer:
         draw.line([(25, height - 60), (width - 25, height - 60)], fill=(51, 65, 85), width=1)
         draw.text((45, height - 48), "webOS Compositor Pipe  •  H.264 / VP8 Zero-Latency Track  •  com.lge.inputgenerator", fill=(100, 116, 139))
 
-        return av.VideoFrame.from_image(img)
+        return av.VideoFrame.from_image(img).reformat(format="yuv420p")
 
 
 TARGET_BUFFERS: dict = {}
 
 def get_target_buffer(target_ip: str) -> TargetFrameBuffer:
-    clean_ip = target_ip.strip()
+    clean_ip = _resolve_target_alias(target_ip.strip())
     if clean_ip not in TARGET_BUFFERS:
         TARGET_BUFFERS[clean_ip] = TargetFrameBuffer(clean_ip)
     return TARGET_BUFFERS[clean_ip]
@@ -4003,8 +4012,8 @@ if HAS_WEBRTC:
 
         def __init__(self, target_ip: str):
             super().__init__()
-            self.target_ip = target_ip
-            self.buffer = get_target_buffer(target_ip)
+            self.target_ip = _resolve_target_alias(target_ip.strip())
+            self.buffer = get_target_buffer(self.target_ip)
             self.frame_idx = 0
             self.start_time = time.time()
             asyncio.create_task(self.buffer.start())
@@ -4034,7 +4043,7 @@ async def webrtc_offer_endpoint(request: Request) -> Response:
 
     try:
         body = await request.json()
-        target_ip = body.get("ip", "").strip()
+        target_ip = _resolve_target_alias(body.get("ip", "").strip())
         offer_sdp = body.get("sdp")
         offer_type = body.get("type", "offer")
 
@@ -4091,8 +4100,9 @@ async def webrtc_close_endpoint(request: Request) -> Response:
 
 @mcp.custom_route("/screen/stream", methods=["GET"])
 async def device_screen_stream_endpoint(request: Request) -> Response:
-    """Continuous multipart/x-mixed-replace MJPEG stream fallback for HTTP clients."""
-    target_ip = request.query_params.get("ip", "").strip()
+    """Continuous high-framerate multipart/x-mixed-replace MJPEG stream for HTTP clients."""
+    raw_ip = request.query_params.get("ip", "").strip()
+    target_ip = _resolve_target_alias(raw_ip)
     if not target_ip:
         return Response(content=b"Target IP parameter required", status_code=400, media_type="text/plain")
 
@@ -4101,19 +4111,20 @@ async def device_screen_stream_endpoint(request: Request) -> Response:
 
     async def stream_frames():
         try:
-            frame_i = 0
-            start_t = time.time()
+            last_sent = None
             while True:
-                frame_i += 1
-                av_f = buf.get_current_frame(frame_i, time.time() - start_t)
-                if av_f:
-                    img = av_f.to_image()
-                    b_io = io.BytesIO()
-                    img.save(b_io, format="JPEG", quality=75)
-                    frame_bytes = b_io.getvalue()
+                jpeg = None
+                async with buf.lock:
+                    if buf.last_jpeg_bytes and buf.last_jpeg_bytes != last_sent:
+                        jpeg = buf.last_jpeg_bytes
+                        last_sent = jpeg
+                if jpeg:
                     yield (b"--frame\r\n"
-                           b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-                await asyncio.sleep(0.033)
+                           b"Content-Type: image/jpeg\r\n"
+                           b"Content-Length: " + str(len(jpeg)).encode('ascii') + b"\r\n\r\n" +
+                           jpeg + b"\r\n")
+                else:
+                    await asyncio.sleep(0.02)
         finally:
             await buf.stop()
 

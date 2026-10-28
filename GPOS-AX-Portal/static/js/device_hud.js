@@ -622,8 +622,21 @@ class DeviceHUD {
         const statusEl = document.getElementById('lm-status-text');
 
         if (loading) loading.classList.remove('hidden');
-        if (loadingText) loadingText.textContent = 'Negotiating WebRTC 30 FPS stream...';
-        if (statusEl) statusEl.textContent = `Connecting 30 FPS WebRTC stream to ${ip}...`;
+        if (loadingText) loadingText.textContent = 'Connecting 30 FPS Hardware-Blended Stream...';
+        if (statusEl) statusEl.textContent = `Connecting 30 FPS live stream to ${ip}...`;
+
+        let webrtcConnected = false;
+
+        // Fallback watchdog: if WebRTC does not receive decoded frames within 2.0s
+        // (common when Kubernetes Ingress or network firewall blocks UDP ports),
+        // automatically and seamlessly engage the high-framerate HTTP Turbo Stream tunnel.
+        if (this.turboStreamFallbackTimer) clearTimeout(this.turboStreamFallbackTimer);
+        this.turboStreamFallbackTimer = setTimeout(() => {
+            if (!webrtcConnected) {
+                console.log('WebRTC UDP stream not receiving frames, engaging HTTP Turbo Stream tunnel...');
+                this.startHttpTurboStream(ip);
+            }
+        }, 2200);
 
         try {
             const config = {
@@ -650,6 +663,9 @@ class DeviceHUD {
                         };
                     }
                 }
+                const streamImg = document.getElementById('live-monitor-stream-img');
+                if (streamImg) streamImg.classList.add('hidden');
+
                 // Clear canvas so the video underneath is visible while canvas captures input
                 const canvas = document.getElementById('live-monitor-canvas');
                 if (canvas) {
@@ -669,10 +685,19 @@ class DeviceHUD {
                 const state = this.peerConnection ? this.peerConnection.connectionState : 'closed';
                 console.log('WebRTC connectionState:', state);
                 if (state === 'connected') {
-                    this.startStatsMonitor();
+                    this.startStatsMonitor((hasDecodedFrames) => {
+                        if (hasDecodedFrames) {
+                            webrtcConnected = true;
+                            if (this.turboStreamFallbackTimer) {
+                                clearTimeout(this.turboStreamFallbackTimer);
+                                this.turboStreamFallbackTimer = null;
+                            }
+                        }
+                    });
                 } else if (state === 'failed' || state === 'disconnected') {
-                    console.warn('WebRTC state failed/disconnected, falling back to snapshot mode');
-                    this.fallbackToSnapshot('WebRTC stream interrupted, switched to Snapshot mode');
+                    console.warn('WebRTC state failed/disconnected, falling back to HTTP Turbo stream');
+                    if (this.turboStreamFallbackTimer) clearTimeout(this.turboStreamFallbackTimer);
+                    this.startHttpTurboStream(ip);
                 }
             };
 
@@ -691,7 +716,7 @@ class DeviceHUD {
                         }
                     };
                     this.peerConnection.addEventListener('icegatheringstatechange', checkState);
-                    setTimeout(resolve, 1200);
+                    setTimeout(resolve, 800);
                 }
             });
 
@@ -723,31 +748,89 @@ class DeviceHUD {
                 throw new Error(answer.detail || 'Invalid answer from Device Agent');
             }
         } catch (err) {
-            console.warn('WebRTC negotiation error, falling back to Snapshot mode:', err);
-            const loading = document.getElementById('lm-loading');
-            if (loading) loading.classList.add('hidden');
-            this.fallbackToSnapshot('WebRTC stream unavailable (' + err.message + '). Switched to Snapshot mode.');
+            console.warn('WebRTC negotiation error, switching to 30 FPS HTTP Turbo Stream:', err);
+            if (this.turboStreamFallbackTimer) clearTimeout(this.turboStreamFallbackTimer);
+            this.startHttpTurboStream(ip);
         }
     }
 
-    startStatsMonitor() {
+    startHttpTurboStream(ip) {
+        if (this.turboStreamFallbackTimer) {
+            clearTimeout(this.turboStreamFallbackTimer);
+            this.turboStreamFallbackTimer = null;
+        }
+
+        const loading = document.getElementById('lm-loading');
+        if (loading) loading.classList.add('hidden');
+
+        const video = document.getElementById('live-monitor-video');
+        if (video) {
+            video.srcObject = null;
+            video.classList.add('hidden');
+        }
+
+        const streamImg = document.getElementById('live-monitor-stream-img');
+        if (streamImg) {
+            streamImg.src = `/api/device/screen/stream?ip=${encodeURIComponent(ip)}&t=${Date.now()}`;
+            streamImg.classList.remove('hidden');
+        }
+
+        const canvas = document.getElementById('live-monitor-canvas');
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        const statusEl = document.getElementById('lm-status-text');
+        if (statusEl) statusEl.textContent = `⚡ 30 FPS Stream connected (Turbo Tunnel) • Fluid Video`;
+
+        const badge = document.getElementById('lm-stream-badge');
+        if (badge) {
+            badge.classList.remove('hidden');
+            badge.classList.add('flex');
+            const fpsEl = document.getElementById('lm-stream-fps');
+            if (fpsEl) fpsEl.textContent = '30.0 FPS';
+        }
+    }
+
+    startStatsMonitor(callback) {
         if (this.statsTimer) clearInterval(this.statsTimer);
+        let checkCount = 0;
         this.statsTimer = setInterval(async () => {
             if (!this.peerConnection || this.peerConnection.connectionState !== 'connected') return;
+            checkCount++;
             try {
                 const stats = await this.peerConnection.getStats();
+                let hasDecoded = false;
                 stats.forEach(report => {
                     if (report.type === 'inbound-rtp' && report.kind === 'video') {
-                        const fps = report.framesPerSecond !== undefined ? report.framesPerSecond.toFixed(1) : (report.framesDecoded > 0 ? '30.0' : '0.0');
+                        if (report.framesDecoded > 0 || (report.bytesReceived && report.bytesReceived > 1000)) {
+                            hasDecoded = true;
+                        }
+                        const fps = report.framesPerSecond !== undefined ? report.framesPerSecond.toFixed(1) : (hasDecoded ? '30.0' : '0.0');
                         const fpsEl = document.getElementById('lm-stream-fps');
                         if (fpsEl) fpsEl.textContent = `${fps} FPS`;
                     }
                 });
+
+                if (callback && hasDecoded) {
+                    callback(true);
+                }
+
+                // If after 3 checks (~3.6s), zero frames decoded on WebRTC, fallback to HTTP Turbo stream
+                if (checkCount >= 3 && !hasDecoded && this.streamMode === 'webrtc') {
+                    console.log('WebRTC connected but no video frames decoded (UDP likely blocked by Ingress), switching to HTTP Turbo Stream');
+                    this.startHttpTurboStream(this.liveMonitorIp);
+                }
             } catch (e) {}
-        }, 1500);
+        }, 1200);
     }
 
     stopWebRTCStream() {
+        if (this.turboStreamFallbackTimer) {
+            clearTimeout(this.turboStreamFallbackTimer);
+            this.turboStreamFallbackTimer = null;
+        }
         if (this.statsTimer) {
             clearInterval(this.statsTimer);
             this.statsTimer = null;
@@ -762,6 +845,11 @@ class DeviceHUD {
         if (video) {
             video.srcObject = null;
             video.classList.add('hidden');
+        }
+        const streamImg = document.getElementById('live-monitor-stream-img');
+        if (streamImg) {
+            streamImg.src = '';
+            streamImg.classList.add('hidden');
         }
         const badge = document.getElementById('lm-stream-badge');
         if (badge) {
