@@ -2936,8 +2936,8 @@ def get_device_screen_stream(ip: str):
 @app.post("/api/device/input/click")
 def device_input_click(req: DeviceClickInput):
     ip = req.ip.strip()
-    x = int(req.x)
-    y = int(req.y)
+    x = max(0, min(1920, int(req.x)))
+    y = max(0, min(1080, int(req.y)))
 
     # 1. Primary: Forward to Device Agent
     for base_url in _get_device_mcp_urls():
@@ -2955,21 +2955,16 @@ def device_input_click(req: DeviceClickInput):
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
 
-    mouse_payload = json.dumps({"eventtype": "click", "x": x, "y": y})
-    b64_mouse = base64.b64encode(mouse_payload.encode('utf-8')).decode('ascii')
-    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushMouseEvent "$(echo {b64_mouse} | base64 -d)" 2>&1'
-
-    combo_payload = json.dumps({
+    # Atomic pointer sequence: position cursor first, press left button down, then release up.
+    click_payload = json.dumps({
         "events": [
             {"eventtype": "setpos", "x": x, "y": y},
-            {"eventtype": "click"},
-            {"eventtype": "touch_down", "x": x, "y": y},
-            {"eventtype": "touch_up", "x": x, "y": y}
+            {"eventtype": "down"},
+            {"eventtype": "up"}
         ]
     })
-    b64_combo = base64.b64encode(combo_payload.encode('utf-8')).decode('ascii')
-    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_combo} | base64 -d)" 2>&1'
-    cmd = f"{cmd1}; {cmd2}"
+    b64_click = base64.b64encode(click_payload.encode('utf-8')).decode('ascii')
+    cmd = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_click} | base64 -d)" 2>&1'
     try:
         res = subprocess.run(
             f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
@@ -2985,39 +2980,6 @@ def device_input_click(req: DeviceClickInput):
 def device_input_key(req: DeviceKeyInput):
     ip = req.ip.strip()
     key = req.key.strip().upper()
-    key_codes_map = {
-        "UP": [103],
-        "DOWN": [108],
-        "LEFT": [105],
-        "RIGHT": [106],
-        "ENTER": [28, 352],
-        "OK": [28, 352],
-        "BACK": [412, 158, 1],
-        "ESC": [1],
-        "HOME": [172, 102],
-        "MENU": [139, 141],
-        "SETTINGS": [141, 139],
-        "POWER": [116],
-        "VOL_UP": [115],
-        "VOLUME_UP": [115],
-        "VOL_DOWN": [114],
-        "VOLUME_DOWN": [114],
-        "MUTE": [113],
-        "CH_UP": [402],
-        "CHANNEL_UP": [402],
-        "CH_DOWN": [403],
-        "CHANNEL_DOWN": [403],
-        "RED": [398],
-        "GREEN": [399],
-        "YELLOW": [400],
-        "BLUE": [401],
-        "PLAY": [207],
-        "PAUSE": [201],
-        "STOP": [128],
-        "REWIND": [168],
-        "FAST_FORWARD": [208]
-    }
-    codes = key_codes_map.get(key, [28])
 
     # 1. Primary: Forward to Device Agent
     for base_url in _get_device_mcp_urls():
@@ -3030,23 +2992,107 @@ def device_input_key(req: DeviceKeyInput):
 
     # 2. Secondary fallback: Direct SSH
     import subprocess
-    import base64
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
-    primary_code = codes[0]
-    key_payload = json.dumps({"eventtype": "keypress", "keycodenum": primary_code})
-    b64_key = base64.b64encode(key_payload.encode('utf-8')).decode('ascii')
-    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushKeyEvent "$(echo {b64_key} | base64 -d)" 2>&1'
 
-    events = []
-    for c in codes:
-        events.append({"eventtype": "keydown", "keycodenum": c})
-        events.append({"eventtype": "keyup", "keycodenum": c})
-    events_payload = json.dumps({"events": events})
-    b64_events = base64.b64encode(events_payload.encode('utf-8')).decode('ascii')
-    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_events} | base64 -d)" 2>&1'
-    cmd = f"{cmd1}; {cmd2}"
+    rcu_key_map = {
+        "UP": "UP",
+        "DOWN": "DOWN",
+        "LEFT": "LEFT",
+        "RIGHT": "RIGHT",
+        "ENTER": "ENTER",
+        "OK": "ENTER",
+        "SELECT": "ENTER",
+        "BACK": "BACK",
+        "ESC": "BACK",
+        "ESCAPE": "BACK",
+        "HOME": "HOME",
+        "MENU": "QMENU",
+        "SETTINGS": "QMENU",
+        "POWER": "POWER",
+        "VOL_UP": "VOLUMEUP",
+        "VOLUME_UP": "VOLUMEUP",
+        "VOL_DOWN": "VOLUMEDOWN",
+        "VOLUME_DOWN": "VOLUMEDOWN",
+        "MUTE": "MUTE",
+        "CH_UP": "CHANNELUP",
+        "CHANNEL_UP": "CHANNELUP",
+        "CH_DOWN": "CHANNELDOWN",
+        "CHANNEL_DOWN": "CHANNELDOWN",
+        "RED": "RED",
+        "GREEN": "GREEN",
+        "YELLOW": "YELLOW",
+        "BLUE": "BLUE",
+        "PLAY": "PLAY",
+        "PAUSE": "PAUSE",
+        "STOP": "STOP",
+        "REWIND": "REWIND",
+        "FAST_FORWARD": "FASTFORWARD",
+        "FASTFORWARD": "FASTFORWARD",
+        "INFO": "INFO",
+        "GUIDE": "GUIDE",
+        "RECENT": "RECENT",
+        "SEARCH": "SEARCH"
+    }
+
+    linux_key_map = {
+        "UP": 103,
+        "DOWN": 108,
+        "LEFT": 105,
+        "RIGHT": 106,
+        "ENTER": 28,
+        "OK": 28,
+        "SELECT": 28,
+        "BACK": 158,
+        "ESC": 1,
+        "ESCAPE": 1,
+        "BACKSPACE": 14,
+        "TAB": 15,
+        "SPACE": 57,
+        "HOME": 172,
+        "MENU": 139,
+        "SETTINGS": 141,
+        "POWER": 116,
+        "VOL_UP": 115,
+        "VOLUME_UP": 115,
+        "VOL_DOWN": 114,
+        "VOLUME_DOWN": 114,
+        "MUTE": 113,
+        "CH_UP": 402,
+        "CHANNEL_UP": 402,
+        "CH_DOWN": 403,
+        "CHANNEL_DOWN": 403,
+        "RED": 398,
+        "GREEN": 399,
+        "YELLOW": 400,
+        "BLUE": 401,
+        "PLAY": 207,
+        "PAUSE": 201,
+        "STOP": 128,
+        "REWIND": 168,
+        "FAST_FORWARD": 208,
+        "FASTFORWARD": 208
+    }
+
+    rcu_key = rcu_key_map.get(key)
+    linux_code = linux_key_map.get(key)
+
+    commands = []
+    if rcu_key:
+        if rcu_key == "POWER":
+            commands.append('luna-send -n 1 -f luna://com.webos.service.networkinput/controls/power "{}" 2>&1')
+            commands.append('luna-send -n 1 -f luna://com.webos.service.networkinput/sendSpecialKey "{\\"key\\":\\"POWERONLY\\"}" 2>&1')
+        else:
+            commands.append(f'luna-send -n 1 -f luna://com.webos.service.networkinput/sendSpecialKey "{{\\"key\\":\\"{rcu_key}\\"}}" 2>&1')
+
+    if linux_code:
+        commands.append(f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushKeyEvent "{{\\"eventtype\\":\\"keypress\\",\\"keycodenum\\":{linux_code}}}" 2>&1')
+
+    if not commands:
+        return {"status": "error", "detail": f"Unknown key {key}"}
+
+    cmd = "; ".join(commands)
     try:
         res = subprocess.run(
             f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
@@ -3076,31 +3122,53 @@ def device_input_text(req: DeviceTextInput):
 
     # 2. Secondary fallback: Direct SSH
     import subprocess
+    import base64
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
-    char_map = {
+
+    base_char_map = {
         'a': 30, 'b': 48, 'c': 46, 'd': 32, 'e': 18, 'f': 33, 'g': 34, 'h': 35,
         'i': 23, 'j': 36, 'k': 37, 'l': 38, 'm': 50, 'n': 49, 'o': 24, 'p': 25,
         'q': 16, 'r': 19, 's': 31, 't': 20, 'u': 22, 'v': 47, 'w': 17, 'x': 45,
         'y': 21, 'z': 44,
         '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10, '0': 11,
-        ' ': 57, '-': 12, '=': 13, '.': 52, '/': 53, '\n': 28, '\t': 15, '\b': 14
+        ' ': 57, '-': 12, '=': 13, '.': 52, '/': 53, ';': 39, '\'': 40, ',': 51,
+        '`': 41, '[': 26, ']': 27, '\\': 43,
+        '\n': 28, '\r': 28, '\t': 15, '\b': 14
     }
+
+    shifted_char_map = {
+        'A': 30, 'B': 48, 'C': 46, 'D': 32, 'E': 18, 'F': 33, 'G': 34, 'H': 35,
+        'I': 23, 'J': 36, 'K': 37, 'L': 38, 'M': 50, 'N': 49, 'O': 24, 'P': 25,
+        'Q': 16, 'R': 19, 'S': 31, 'T': 20, 'U': 22, 'V': 47, 'W': 17, 'X': 45,
+        'Y': 21, 'Z': 44,
+        '!': 2, '@': 3, '#': 4, '$': 5, '%': 6, '^': 7, '&': 8, '*': 9, '(': 10, ')': 11,
+        '_': 12, '+': 13, ':': 39, '"': 40, '<': 51, '>': 52, '?': 53,
+        '~': 41, '{': 26, '}': 27, '|': 43
+    }
+
     events = []
-    for ch in text.lower()[:50]:
-        code = char_map.get(ch)
-        if code:
+    for ch in text[:80]:
+        if ch in base_char_map:
+            code = base_char_map[ch]
             events.append({"eventtype": "keydown", "keycodenum": code})
             events.append({"eventtype": "keyup", "keycodenum": code})
+        elif ch in shifted_char_map:
+            code = shifted_char_map[ch]
+            events.append({"eventtype": "keydown", "keycodenum": 42})
+            events.append({"eventtype": "keydown", "keycodenum": code})
+            events.append({"eventtype": "keyup", "keycodenum": code})
+            events.append({"eventtype": "keyup", "keycodenum": 42})
 
     if events:
         payload = json.dumps({"events": events})
-        cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
+        b64_events = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+        cmd = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_events} | base64 -d)" 2>&1'
         try:
             res = subprocess.run(
                 f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
-                shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=5
+                shell=True, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=6
             )
             return {"status": "ok", "text": text, "target_ip": ip, "detail": res.stdout.strip()[:100]}
         except Exception as e:

@@ -996,7 +996,9 @@ class DeviceHUD {
                 'ArrowRight': 'RIGHT',
                 'Enter': 'OK',
                 'Escape': 'BACK',
-                'Backspace': 'BACK'
+                'Backspace': 'BACKSPACE',
+                'Tab': 'TAB',
+                ' ': 'SPACE'
             };
 
             const remoteKey = keyMap[e.key];

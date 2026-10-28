@@ -3290,7 +3290,7 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
 def device_mouse_click(target_ip: str = "", x: int = 0, y: int = 0) -> str:
     """
     Inject an interactive pointer/mouse click event at coordinates (x, y) on the target board display.
-    Dispatches coordinates and clicks via webOS input generator subsystem (supporting both pointer and touch).
+    Dispatches coordinates and clicks via webOS input generator subsystem atomically (setpos -> down -> up).
 
     :param target_ip: IP address of the target device.
     :param x: Horizontal pixel coordinate (0-1920).
@@ -3301,103 +3301,153 @@ def device_mouse_click(target_ip: str = "", x: int = 0, y: int = 0) -> str:
         return "ERROR: No target IP specified."
 
     import base64
-    x_val = int(x)
-    y_val = int(y)
+    x_val = max(0, min(1920, int(x)))
+    y_val = max(0, min(1080, int(y)))
 
-    # Method 1: pushMouseEvent with eventtype 'click' at (x, y)
-    mouse_payload = json.dumps({"eventtype": "click", "x": x_val, "y": y_val})
-    b64_mouse = base64.b64encode(mouse_payload.encode('utf-8')).decode('ascii')
-    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushMouseEvent "$(echo {b64_mouse} | base64 -d)" 2>&1'
-    res1 = _run_ssh(ip, cmd1, timeout=5)
-
-    # Method 2: pushEvents with setpos + click and touch_down + touch_up for touch-based surfaces
-    combo_payload = json.dumps({
+    # Atomic pointer sequence: position cursor first, press left button down, then release up.
+    # Note: Avoid separate pre-clicks or touch events which prematurely dismiss dropdown menus / context popups.
+    click_payload = json.dumps({
         "events": [
             {"eventtype": "setpos", "x": x_val, "y": y_val},
-            {"eventtype": "click"},
-            {"eventtype": "touch_down", "x": x_val, "y": y_val},
-            {"eventtype": "touch_up", "x": x_val, "y": y_val}
+            {"eventtype": "down"},
+            {"eventtype": "up"}
         ]
     })
-    b64_combo = base64.b64encode(combo_payload.encode('utf-8')).decode('ascii')
-    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_combo} | base64 -d)" 2>&1'
-    res2 = _run_ssh(ip, cmd2, timeout=5)
+    b64_click = base64.b64encode(click_payload.encode('utf-8')).decode('ascii')
+    cmd = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_click} | base64 -d)" 2>&1'
+    res = _run_ssh(ip, cmd, timeout=5)
 
-    return f"CLICK_EXECUTED at ({x_val}, {y_val}) on `{ip}`. Detail: {res1.strip()[:60]} | {res2.strip()[:60]}"
+    return f"CLICK_EXECUTED at ({x_val}, {y_val}) on `{ip}`. Detail: {res.strip()[:80]}"
 
 
 @mcp.tool()
 def device_send_key(target_ip: str = "", key: str = "ENTER") -> str:
     """
-    Inject a remote control or keyboard key event on the target board (UP, DOWN, LEFT, RIGHT, ENTER, BACK, HOME, POWER, SETTINGS, etc.).
+    Inject a remote control or keyboard key event on the target board.
+    Supports native webOS RCU commands (com.webos.service.networkinput/sendSpecialKey)
+    with dual-dispatch to tellurium inputgenerator for active DOM/keyboard contexts.
 
     :param target_ip: IP address of the target device.
-    :param key: Key name to inject (e.g. 'ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SETTINGS', 'POWER', 'VOL_UP', 'VOL_DOWN').
+    :param key: Key name to inject (e.g. 'UP', 'DOWN', 'LEFT', 'RIGHT', 'OK', 'ENTER', 'BACK', 'HOME', 'SETTINGS', 'POWER', 'VOL_UP', 'VOL_DOWN', 'BACKSPACE', 'TAB', 'SPACE', 'ESCAPE').
     """
     ip = _resolve_target_alias(target_ip)
     if not ip:
         return "ERROR: No target IP specified."
 
     key_clean = key.strip().upper()
-    key_codes_map = {
-        "UP": [103],
-        "DOWN": [108],
-        "LEFT": [105],
-        "RIGHT": [106],
-        "ENTER": [28, 352],
-        "OK": [28, 352],
-        "BACK": [412, 158, 1],
-        "ESC": [1],
-        "HOME": [172, 102],
-        "MENU": [139, 141],
-        "SETTINGS": [141, 139],
-        "POWER": [116],
-        "VOL_UP": [115],
-        "VOLUME_UP": [115],
-        "VOL_DOWN": [114],
-        "VOLUME_DOWN": [114],
-        "MUTE": [113],
-        "CH_UP": [402],
-        "CHANNEL_UP": [402],
-        "CH_DOWN": [403],
-        "CHANNEL_DOWN": [403],
-        "RED": [398],
-        "GREEN": [399],
-        "YELLOW": [400],
-        "BLUE": [401],
-        "PLAY": [207],
-        "PAUSE": [201],
-        "STOP": [128],
-        "REWIND": [168],
-        "FAST_FORWARD": [208]
+
+    # Native webOS Remote Control (RCU) key mapping
+    rcu_key_map = {
+        "UP": "UP",
+        "DOWN": "DOWN",
+        "LEFT": "LEFT",
+        "RIGHT": "RIGHT",
+        "ENTER": "ENTER",
+        "OK": "ENTER",
+        "SELECT": "ENTER",
+        "BACK": "BACK",
+        "ESC": "BACK",
+        "ESCAPE": "BACK",
+        "HOME": "HOME",
+        "MENU": "QMENU",
+        "SETTINGS": "QMENU",
+        "POWER": "POWER",
+        "VOL_UP": "VOLUMEUP",
+        "VOLUME_UP": "VOLUMEUP",
+        "VOL_DOWN": "VOLUMEDOWN",
+        "VOLUME_DOWN": "VOLUMEDOWN",
+        "MUTE": "MUTE",
+        "CH_UP": "CHANNELUP",
+        "CHANNEL_UP": "CHANNELUP",
+        "CH_DOWN": "CHANNELDOWN",
+        "CHANNEL_DOWN": "CHANNELDOWN",
+        "RED": "RED",
+        "GREEN": "GREEN",
+        "YELLOW": "YELLOW",
+        "BLUE": "BLUE",
+        "PLAY": "PLAY",
+        "PAUSE": "PAUSE",
+        "STOP": "STOP",
+        "REWIND": "REWIND",
+        "FAST_FORWARD": "FASTFORWARD",
+        "FASTFORWARD": "FASTFORWARD",
+        "INFO": "INFO",
+        "GUIDE": "GUIDE",
+        "RECENT": "RECENT",
+        "SEARCH": "SEARCH"
     }
-    codes = key_codes_map.get(key_clean, [28])
 
-    import base64
-    # Primary method: pushKeyEvent with keypress
-    primary_code = codes[0]
-    key_payload = json.dumps({"eventtype": "keypress", "keycodenum": primary_code})
-    b64_key = base64.b64encode(key_payload.encode('utf-8')).decode('ascii')
-    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushKeyEvent "$(echo {b64_key} | base64 -d)" 2>&1'
-    res1 = _run_ssh(ip, cmd1, timeout=5)
+    # Linux evdev keycode mapping for desktop/WebAppMgr keyboard focus
+    linux_key_map = {
+        "UP": 103,
+        "DOWN": 108,
+        "LEFT": 105,
+        "RIGHT": 106,
+        "ENTER": 28,
+        "OK": 28,
+        "SELECT": 28,
+        "BACK": 158,
+        "ESC": 1,
+        "ESCAPE": 1,
+        "BACKSPACE": 14,
+        "TAB": 15,
+        "SPACE": 57,
+        "HOME": 172,
+        "MENU": 139,
+        "SETTINGS": 141,
+        "POWER": 116,
+        "VOL_UP": 115,
+        "VOLUME_UP": 115,
+        "VOL_DOWN": 114,
+        "VOLUME_DOWN": 114,
+        "MUTE": 113,
+        "CH_UP": 402,
+        "CHANNEL_UP": 402,
+        "CH_DOWN": 403,
+        "CHANNEL_DOWN": 403,
+        "RED": 398,
+        "GREEN": 399,
+        "YELLOW": 400,
+        "BLUE": 401,
+        "PLAY": 207,
+        "PAUSE": 201,
+        "STOP": 128,
+        "REWIND": 168,
+        "FAST_FORWARD": 208,
+        "FASTFORWARD": 208
+    }
 
-    # Fallback/complementary: pushEvents with keydown + keyup
-    events = []
-    for c in codes:
-        events.append({"eventtype": "keydown", "keycodenum": c})
-        events.append({"eventtype": "keyup", "keycodenum": c})
-    events_payload = json.dumps({"events": events})
-    b64_events = base64.b64encode(events_payload.encode('utf-8')).decode('ascii')
-    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_events} | base64 -d)" 2>&1'
-    res2 = _run_ssh(ip, cmd2, timeout=5)
+    rcu_key = rcu_key_map.get(key_clean)
+    linux_code = linux_key_map.get(key_clean)
 
-    return f"KEY_EXECUTED `{key_clean}` on `{ip}`. Detail: {res1.strip()[:60]} | {res2.strip()[:60]}"
+    commands = []
+
+    # 1. Native webOS RCU Remote execution
+    if rcu_key:
+        if rcu_key == "POWER":
+            commands.append('luna-send -n 1 -f luna://com.webos.service.networkinput/controls/power "{}" 2>&1')
+            commands.append('luna-send -n 1 -f luna://com.webos.service.networkinput/sendSpecialKey "{\\"key\\":\\"POWERONLY\\"}" 2>&1')
+        else:
+            commands.append(f'luna-send -n 1 -f luna://com.webos.service.networkinput/sendSpecialKey "{{\\"key\\":\\"{rcu_key}\\"}}" 2>&1')
+
+    # 2. Dual-dispatch via tellurium inputgenerator pushKeyEvent for active keyboard-focused WebAppMgr inputs
+    if linux_code:
+        commands.append(f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushKeyEvent "{{\\"eventtype\\":\\"keypress\\",\\"keycodenum\\":{linux_code}}}" 2>&1')
+
+    if not commands:
+        return f"ERROR: Unknown key `{key_clean}`"
+
+    full_cmd = "; ".join(commands)
+    res = _run_ssh(ip, full_cmd, timeout=5)
+
+    return f"KEY_EXECUTED `{key_clean}` (RCU: {rcu_key}, Linux: {linux_code}) on `{ip}`. Detail: {res.strip()[:80]}"
 
 
 @mcp.tool()
 def device_type_text(target_ip: str = "", text: str = "") -> str:
     """
     Type a string of text into the active focused input field on the target board display.
+    Supports lowercase, uppercase (Shift-wrapped), numbers, and common symbols/punctuation.
 
     :param target_ip: IP address of the target device.
     :param text: String of text or URL to inject.
@@ -3409,28 +3459,51 @@ def device_type_text(target_ip: str = "", text: str = "") -> str:
     if not text:
         return "ERROR: No text provided."
 
-    char_map = {
+    import base64
+
+    # Linux evdev keycodes
+    base_char_map = {
         'a': 30, 'b': 48, 'c': 46, 'd': 32, 'e': 18, 'f': 33, 'g': 34, 'h': 35,
         'i': 23, 'j': 36, 'k': 37, 'l': 38, 'm': 50, 'n': 49, 'o': 24, 'p': 25,
         'q': 16, 'r': 19, 's': 31, 't': 20, 'u': 22, 'v': 47, 'w': 17, 'x': 45,
         'y': 21, 'z': 44,
         '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10, '0': 11,
-        ' ': 57, '-': 12, '=': 13, '.': 52, '/': 53, '\n': 28, '\t': 15, '\b': 14
+        ' ': 57, '-': 12, '=': 13, '.': 52, '/': 53, ';': 39, '\'': 40, ',': 51,
+        '`': 41, '[': 26, ']': 27, '\\': 43,
+        '\n': 28, '\r': 28, '\t': 15, '\b': 14
     }
+
+    # Shifted characters (require KEY_LEFTSHIFT 42)
+    shifted_char_map = {
+        'A': 30, 'B': 48, 'C': 46, 'D': 32, 'E': 18, 'F': 33, 'G': 34, 'H': 35,
+        'I': 23, 'J': 36, 'K': 37, 'L': 38, 'M': 50, 'N': 49, 'O': 24, 'P': 25,
+        'Q': 16, 'R': 19, 'S': 31, 'T': 20, 'U': 22, 'V': 47, 'W': 17, 'X': 45,
+        'Y': 21, 'Z': 44,
+        '!': 2, '@': 3, '#': 4, '$': 5, '%': 6, '^': 7, '&': 8, '*': 9, '(': 10, ')': 11,
+        '_': 12, '+': 13, ':': 39, '"': 40, '<': 51, '>': 52, '?': 53,
+        '~': 41, '{': 26, '}': 27, '|': 43
+    }
+
     events = []
-    for ch in text.lower()[:50]:
-        code = char_map.get(ch)
-        if code:
+    for ch in text[:80]:
+        if ch in base_char_map:
+            code = base_char_map[ch]
             events.append({"eventtype": "keydown", "keycodenum": code})
             events.append({"eventtype": "keyup", "keycodenum": code})
+        elif ch in shifted_char_map:
+            code = shifted_char_map[ch]
+            events.append({"eventtype": "keydown", "keycodenum": 42})  # Shift down
+            events.append({"eventtype": "keydown", "keycodenum": code})
+            events.append({"eventtype": "keyup", "keycodenum": code})
+            events.append({"eventtype": "keyup", "keycodenum": 42})    # Shift up
 
     if events:
-        import base64
         payload = json.dumps({"events": events})
         b64_events = base64.b64encode(payload.encode('utf-8')).decode('ascii')
         cmd = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_events} | base64 -d)" 2>&1'
-        res = _run_ssh(ip, cmd, timeout=5)
+        res = _run_ssh(ip, cmd, timeout=6)
         return f"TEXT_INJECTED `{text}` on `{ip}`. Detail: {res.strip()[:100]}"
+
     return f"TEXT_SKIPPED (no supported characters) on `{ip}`."
 
 
