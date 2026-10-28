@@ -3193,7 +3193,11 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 def read_root():
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        })
     return {"message": "GPOS AX Portal Backend Running."}
 @app.post('/api/weekly_status')
 async def weekly_status(req: ChatRequest, request: Request):

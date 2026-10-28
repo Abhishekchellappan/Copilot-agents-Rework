@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>GPOS AX Portal</title><link rel="icon" type="image/png" href="/static/img/favicon.png">
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -2053,7 +2056,7 @@
                             <!-- Visual ripple for click -->
                             <div id="lm-click-indicator" class="pointer-events-none absolute w-6 h-6 rounded-full border-2 border-cyan-400 bg-cyan-400/40 -translate-x-1/2 -translate-y-1/2 scale-0 opacity-0 transition-all duration-300 z-20"></div>
                             <!-- Loading overlay -->
-                            <div id="lm-loading" class="absolute inset-0 bg-slate-950/70 backdrop-blur-[2px] flex flex-col items-center justify-center text-slate-300 gap-2 hidden z-30">
+                            <div id="lm-loading" class="absolute inset-0 bg-slate-950/70 backdrop-blur-[2px] flex flex-col items-center justify-center text-slate-300 gap-2 hidden pointer-events-none z-30">
                                 <svg class="animate-spin w-8 h-8 text-indigo-500" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                                 <span id="lm-loading-text" class="text-xs font-mono text-slate-400">Connecting WebRTC 30 FPS stream...</span>
                             </div>
@@ -2165,7 +2168,7 @@
     <script src="/static/js/api_v2.js?v=30"></script>
     <script src="/static/js/dashboard_v2.js?v=30"></script>
     <script src="/static/js/chat_v2.js?v=32"></script>
-    <script src="/static/js/device_hud.js?v=31"></script>
+    <script src="/static/js/device_hud.js?v=20261028_1150"></script>
     <script>
         // Initialize plugins
         if (typeof mermaid !== 'undefined') {

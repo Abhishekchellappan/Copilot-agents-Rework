@@ -520,11 +520,7 @@ class DeviceHUD {
             this.startWebRTCStream(ip);
         } else {
             const loading = document.getElementById('lm-loading');
-            const loadingText = document.getElementById('lm-loading-text');
-            if (loading && !this.hasInitialSnapshot) {
-                loading.classList.remove('hidden');
-                if (loadingText) loadingText.textContent = 'Connecting to board display...';
-            }
+            if (loading) loading.classList.add('hidden');
             this.refreshLiveFrame();
             if (this.liveAutoRefresh) {
                 this.startLiveRefreshTimer();
@@ -563,6 +559,8 @@ class DeviceHUD {
             this.startWebRTCStream(this.liveMonitorIp);
         } else {
             this.stopWebRTCStream();
+            const loading = document.getElementById('lm-loading');
+            if (loading) loading.classList.add('hidden');
             const video = document.getElementById('live-monitor-video');
             if (video) video.classList.add('hidden');
             this.refreshLiveFrame();
@@ -717,6 +715,8 @@ class DeviceHUD {
             }
         } catch (err) {
             console.warn('WebRTC negotiation error, falling back to Snapshot mode:', err);
+            const loading = document.getElementById('lm-loading');
+            if (loading) loading.classList.add('hidden');
             this.fallbackToSnapshot('WebRTC stream unavailable (' + err.message + '). Switched to Snapshot mode.');
         }
     }
@@ -762,6 +762,8 @@ class DeviceHUD {
     }
 
     fallbackToSnapshot(message) {
+        const loading = document.getElementById('lm-loading');
+        if (loading) loading.classList.add('hidden');
         const statusEl = document.getElementById('lm-status-text');
         if (statusEl && message) statusEl.textContent = message;
         this.setStreamMode('snapshot');
@@ -891,6 +893,7 @@ class DeviceHUD {
     async refreshLiveFrame() {
         if (!this.liveMonitorIp) return;
         const loading = document.getElementById('lm-loading');
+        if (loading) loading.classList.add('hidden');
         const statusEl = document.getElementById('lm-status-text');
 
         const img = new Image();
