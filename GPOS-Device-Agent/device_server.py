@@ -3517,16 +3517,20 @@ from starlette.responses import Response, JSONResponse
 @mcp.custom_route("/screen/frame", methods=["GET"])
 async def device_screen_frame_endpoint(request: Request) -> Response:
     """Return raw JPEG/PNG image bytes of target device display."""
-    target_ip = request.query_params.get("ip", "").strip()
+    raw_ip = request.query_params.get("ip", "").strip()
+    target_ip = _resolve_target_alias(raw_ip)
     if not target_ip:
         return Response(content=b"Target IP parameter required", status_code=400, media_type="text/plain")
     
     try:
         # Check if live board streamer is active for instant 30ms response
         try:
+            buf = get_target_buffer(target_ip)
+            if not buf.capture_task or buf.capture_task.done():
+                asyncio.create_task(buf.start())
             import urllib.request
             req = urllib.request.Request(f"http://{target_ip}:9876/frame.jpg")
-            with urllib.request.urlopen(req, timeout=0.4) as resp:
+            with urllib.request.urlopen(req, timeout=0.6) as resp:
                 if resp.status == 200:
                     stream_bytes = resp.read()
                     if len(stream_bytes) > 64:
@@ -3635,7 +3639,7 @@ CURRENT_FRAME = None
 FRAME_LOCK = threading.Lock()
 RUNNING = True
 LAST_CLIENT_SEEN = time.time()
-INACTIVITY_TIMEOUT = 30.0
+INACTIVITY_TIMEOUT = 60.0
 
 def get_handle():
     cmd = 'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/createHandle "{}"'
@@ -3644,35 +3648,41 @@ def get_handle():
 
 def capture_worker():
     global CURRENT_FRAME, HANDLE, RUNNING
-    try:
-        HANDLE = get_handle()
-    except Exception as e:
-        RUNNING = False
-        return
-
     path = "/tmp/stream_frame.jpg"
-    payload = json.dumps({
-        "handle": HANDLE,
-        "path": path,
-        "method": "blended",
-        "format": "jpeg",
-        "width": 1280,
-        "height": 720
-    })
-    cmd = f'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/executeOneShot \'{payload}\''
-    
+
     while RUNNING:
         if time.time() - LAST_CLIENT_SEEN > INACTIVITY_TIMEOUT:
-            RUNNING = False
             break
+
+        if HANDLE is None:
+            try:
+                HANDLE = get_handle()
+            except Exception:
+                time.sleep(0.3)
+                continue
+
+        payload = json.dumps({
+            "handle": HANDLE,
+            "path": path,
+            "method": "blended",
+            "format": "jpeg",
+            "width": 1280,
+            "height": 720
+        })
+        cmd = f'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/executeOneShot \'{payload}\''
+        
         try:
             res = subprocess.check_output(cmd, shell=True).decode()
-            if os.path.exists(path):
+            if os.path.exists(path) and os.path.getsize(path) > 64:
                 with open(path, "rb") as f:
                     data = f.read()
                 with FRAME_LOCK:
                     CURRENT_FRAME = data
+            else:
+                HANDLE = None
+                time.sleep(0.05)
         except Exception:
+            HANDLE = None
             time.sleep(0.05)
 
     if os.path.exists(path):
@@ -3682,6 +3692,7 @@ def capture_worker():
         try:
             subprocess.run(f'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/destroyHandle \'{{"handle":{HANDLE}}}\'', shell=True)
         except Exception: pass
+    os._exit(0)
 
 class StreamHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
@@ -3717,7 +3728,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                 pass
         elif self.path == '/frame.jpg':
             t_wait = 0
-            while CURRENT_FRAME is None and t_wait < 16 and RUNNING:
+            while CURRENT_FRAME is None and t_wait < 20 and RUNNING:
                 time.sleep(0.05)
                 t_wait += 1
             with FRAME_LOCK:
@@ -3734,11 +3745,10 @@ class StreamHandler(BaseHTTPRequestHandler):
                 self.send_response(503)
                 self.end_headers()
         elif self.path == '/stop':
-            RUNNING = False
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'stopped')
-            threading.Thread(target=lambda: (time.sleep(0.5), sys.exit(0))).start()
+            threading.Thread(target=lambda: (time.sleep(0.2), os._exit(0))).start()
         else:
             self.send_response(404)
             self.end_headers()
@@ -3751,20 +3761,12 @@ if __name__ == '__main__':
     t_cap = threading.Thread(target=capture_worker, daemon=True)
     t_cap.start()
     server = ThreadingHTTPServer(('0.0.0.0', port), StreamHandler)
-    def watchdog():
-        while RUNNING:
-            if time.time() - LAST_CLIENT_SEEN > INACTIVITY_TIMEOUT:
-                server.shutdown()
-                break
-            time.sleep(2)
-    threading.Thread(target=watchdog, daemon=True).start()
     try:
         server.serve_forever()
     except Exception:
         pass
     finally:
-        RUNNING = False
-        server.server_close()
+        os._exit(0)
 '''
 
 

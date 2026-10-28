@@ -2902,10 +2902,10 @@ def get_device_screen_stream(ip: str):
     from fastapi.responses import StreamingResponse
     for base_url in _get_device_mcp_urls():
         try:
-            req_stream = requests.get(f"{base_url}/screen/stream", params={"ip": clean_ip}, stream=True, timeout=5)
+            req_stream = requests.get(f"{base_url}/screen/stream", params={"ip": clean_ip}, stream=True, timeout=(3.0, None))
             if req_stream.status_code == 200:
                 def iter_stream():
-                    for chunk in req_stream.iter_content(chunk_size=8192):
+                    for chunk in req_stream.iter_content(chunk_size=1024):
                         yield chunk
                 return StreamingResponse(
                     iter_stream(),

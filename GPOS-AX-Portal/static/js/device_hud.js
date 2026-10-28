@@ -770,27 +770,60 @@ class DeviceHUD {
         }
 
         const streamImg = document.getElementById('live-monitor-stream-img');
-        if (streamImg) {
-            streamImg.src = `/api/device/screen/stream?ip=${encodeURIComponent(ip)}&t=${Date.now()}`;
-            streamImg.classList.remove('hidden');
-        }
+        if (streamImg) streamImg.classList.add('hidden');
 
         const canvas = document.getElementById('live-monitor-canvas');
-        if (canvas) {
-            const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
 
         const statusEl = document.getElementById('lm-status-text');
-        if (statusEl) statusEl.textContent = `⚡ 30 FPS Stream connected (Turbo Tunnel) • Fluid Video`;
+        if (statusEl) statusEl.textContent = `⚡ 30 FPS Live Stream connected • Hardware Blended`;
 
         const badge = document.getElementById('lm-stream-badge');
         if (badge) {
             badge.classList.remove('hidden');
             badge.classList.add('flex');
-            const fpsEl = document.getElementById('lm-stream-fps');
-            if (fpsEl) fpsEl.textContent = '30.0 FPS';
         }
+
+        this.isTurboStreaming = true;
+
+        // Continuous high-framerate image stream loop:
+        // Directly draws hardware-blended frames to canvas with zero multipart buffering lag
+        let frameCount = 0;
+        let lastFpsUpdate = Date.now();
+        let inFlight = false;
+
+        const nextTurboFrame = () => {
+            if (!this.isTurboStreaming || this.streamMode !== 'webrtc') return;
+            if (inFlight) return;
+            inFlight = true;
+
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                if (this.isTurboStreaming && this.streamMode === 'webrtc') {
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    frameCount++;
+                    const now = Date.now();
+                    if (now - lastFpsUpdate >= 1000) {
+                        const actualFps = ((frameCount * 1000) / (now - lastFpsUpdate)).toFixed(1);
+                        const fpsEl = document.getElementById('lm-stream-fps');
+                        if (fpsEl) fpsEl.textContent = `${actualFps} FPS`;
+                        frameCount = 0;
+                        lastFpsUpdate = now;
+                    }
+                }
+                inFlight = false;
+                requestAnimationFrame(nextTurboFrame);
+            };
+            img.onerror = () => {
+                inFlight = false;
+                setTimeout(nextTurboFrame, 50);
+            };
+            img.src = `/api/device/screen/frame?ip=${encodeURIComponent(ip)}&t=${Date.now()}`;
+        };
+
+        nextTurboFrame();
     }
 
     startStatsMonitor(callback) {
@@ -827,6 +860,7 @@ class DeviceHUD {
     }
 
     stopWebRTCStream() {
+        this.isTurboStreaming = false;
         if (this.turboStreamFallbackTimer) {
             clearTimeout(this.turboStreamFallbackTimer);
             this.turboStreamFallbackTimer = null;
