@@ -12,6 +12,7 @@ Framework : FastMCP 2.x
 """
 
 import os
+import base64
 import re
 import json
 import time
@@ -20,6 +21,8 @@ import tempfile
 from pathlib import Path
 from fastmcp import FastMCP, Context
 import hashlib
+import logging
+logger = logging.getLogger("device_server")
 try:
     from bs4 import BeautifulSoup
     HAS_BS4 = True
@@ -3146,10 +3149,10 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
 
     # Step 4a: createHandle from capture service
     handle_res = _run_ssh(ip, "luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/createHandle '{}'", timeout=4)
-    m_h = re.search(r'"handle"\s*:\s*(\d+)', handle_res)
+    m_h = re.search(r'"handle"\s*:\s*(-?\d+)', handle_res)
     if m_h:
         handle_id = int(m_h.group(1))
-        # Step 4b: executeOneShot with handle
+        # Step 4b: executeOneShot with handle (base64 encoded to preserve quotes over SSH)
         oneshot_payload = json.dumps({
             "handle": handle_id,
             "path": target_snap,
@@ -3158,7 +3161,8 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
             "width": 1920,
             "height": 1080
         })
-        oneshot_res = _run_ssh(ip, f"luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/executeOneShot '{oneshot_payload}'", timeout=8)
+        b64_oneshot = base64.b64encode(oneshot_payload.encode('utf-8')).decode('ascii')
+        oneshot_res = _run_ssh(ip, f'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/executeOneShot "$(echo {b64_oneshot} | base64 -d)"', timeout=8)
         if '"returnValue": true' in oneshot_res or '"returnValue":true' in oneshot_res or '"writtenBytes"' in oneshot_res:
             success = True
             resolved_file_path = target_snap
@@ -3182,7 +3186,8 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
         ]
         for app_id, method, payload in capture_commands:
             app_flag = f"-a {app_id}" if app_id else ""
-            cmd = f"luna-send -n 1 {app_flag} {method} '{payload}'".replace("  ", " ")
+            b64_p = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+            cmd = f'luna-send -n 1 {app_flag} {method} "$(echo {b64_p} | base64 -d)"'.replace("  ", " ")
             res = _run_ssh(ip, cmd, timeout=5)
             if '"returnValue": true' in res or '"returnValue":true' in res:
                 success = True
@@ -3257,7 +3262,6 @@ def take_screenshot(target_ip: str = "", destination_path: str = "/tmp/snapshots
         )
 
     # 8. Primary extraction: Stream pure binary bytes over clean non-interactive SSH (NO PTY corruption!)
-    import base64
     raw_bytes = _fetch_remote_binary(ip, candidate_path, timeout=25)
     if raw_bytes and len(raw_bytes) > 64:
         b64_clean = base64.b64encode(raw_bytes).decode("ascii")
@@ -3518,6 +3522,26 @@ async def device_screen_frame_endpoint(request: Request) -> Response:
         return Response(content=b"Target IP parameter required", status_code=400, media_type="text/plain")
     
     try:
+        # Check if live board streamer is active for instant 30ms response
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"http://{target_ip}:9876/frame.jpg")
+            with urllib.request.urlopen(req, timeout=0.4) as resp:
+                if resp.status == 200:
+                    stream_bytes = resp.read()
+                    if len(stream_bytes) > 64:
+                        return Response(
+                            content=stream_bytes,
+                            media_type="image/jpeg",
+                            headers={
+                                "Cache-Control": "no-cache, no-store, must-revalidate",
+                                "Pragma": "no-cache",
+                                "Expires": "0"
+                            }
+                        )
+        except Exception:
+            pass
+
         snap_res = take_screenshot(target_ip=target_ip)
         if "SNAPSHOT_BASE64:" in snap_res:
             import base64
@@ -3598,8 +3622,150 @@ except ImportError as _webrtc_err:
     logger.warning(f"WebRTC libraries not loaded: {_webrtc_err}")
 
 
+BOARD_STREAMER_SCRIPT = r'''import os, sys, time, json, subprocess, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+HANDLE = None
+CURRENT_FRAME = None
+FRAME_LOCK = threading.Lock()
+RUNNING = True
+LAST_CLIENT_SEEN = time.time()
+INACTIVITY_TIMEOUT = 30.0
+
+def get_handle():
+    cmd = 'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/createHandle "{}"'
+    out = subprocess.check_output(cmd, shell=True).decode()
+    return json.loads(out)["handle"]
+
+def capture_worker():
+    global CURRENT_FRAME, HANDLE, RUNNING
+    try:
+        HANDLE = get_handle()
+    except Exception as e:
+        RUNNING = False
+        return
+
+    path = "/tmp/stream_frame.jpg"
+    payload = json.dumps({
+        "handle": HANDLE,
+        "path": path,
+        "method": "blended",
+        "format": "jpeg",
+        "width": 1280,
+        "height": 720
+    })
+    cmd = f'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/executeOneShot \'{payload}\''
+    
+    while RUNNING:
+        if time.time() - LAST_CLIENT_SEEN > INACTIVITY_TIMEOUT:
+            RUNNING = False
+            break
+        try:
+            res = subprocess.check_output(cmd, shell=True).decode()
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    data = f.read()
+                with FRAME_LOCK:
+                    CURRENT_FRAME = data
+        except Exception:
+            time.sleep(0.05)
+
+    if os.path.exists(path):
+        try: os.remove(path)
+        except Exception: pass
+    if HANDLE is not None:
+        try:
+            subprocess.run(f'luna-send -n 1 -a com.webos.surfacemanager luna://com.webos.service.capture/destroyHandle \'{{"handle":{HANDLE}}}\'', shell=True)
+        except Exception: pass
+
+class StreamHandler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        global LAST_CLIENT_SEEN
+        LAST_CLIENT_SEEN = time.time()
+        self.send_response(200)
+        self.send_header('Content-Type', 'image/jpeg')
+        self.end_headers()
+
+    def do_GET(self):
+        global RUNNING, LAST_CLIENT_SEEN
+        LAST_CLIENT_SEEN = time.time()
+        
+        if self.path == '/stream.mjpeg':
+            self.send_response(200)
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            last_sent = None
+            try:
+                while RUNNING:
+                    LAST_CLIENT_SEEN = time.time()
+                    with FRAME_LOCK:
+                        frame = CURRENT_FRAME
+                    if frame and frame is not last_sent:
+                        last_sent = frame
+                        self.wfile.write(b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' + str(len(frame)).encode('ascii') + b'\r\n\r\n' + frame + b'\r\n')
+                        self.wfile.flush()
+                    else:
+                        time.sleep(0.02)
+            except Exception:
+                pass
+        elif self.path == '/frame.jpg':
+            with FRAME_LOCK:
+                frame = CURRENT_FRAME
+            if frame:
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(frame)))
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(frame)
+            else:
+                self.send_response(503)
+                self.end_headers()
+        elif self.path == '/stop':
+            RUNNING = False
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'stopped')
+            threading.Thread(target=lambda: (time.sleep(0.5), sys.exit(0))).start()
+        else:
+            self.send_response(404)
+            self.end_headers()
+            
+    def log_message(self, format, *args):
+        pass
+
+if __name__ == '__main__':
+    port = 9876
+    t_cap = threading.Thread(target=capture_worker, daemon=True)
+    t_cap.start()
+    server = ThreadingHTTPServer(('0.0.0.0', port), StreamHandler)
+    def watchdog():
+        while RUNNING:
+            if time.time() - LAST_CLIENT_SEEN > INACTIVITY_TIMEOUT:
+                server.shutdown()
+                break
+            time.sleep(2)
+    threading.Thread(target=watchdog, daemon=True).start()
+    try:
+        server.serve_forever()
+    except Exception:
+        pass
+    finally:
+        RUNNING = False
+        server.server_close()
+'''
+
+
 class TargetFrameBuffer:
-    """Manages cached frames and periodic board capture for 30 FPS WebRTC streaming."""
+    """Manages cached frames and live board capture for 30 FPS WebRTC streaming."""
     def __init__(self, target_ip: str):
         self.target_ip = target_ip
         self.lock = asyncio.Lock()
@@ -3610,6 +3776,46 @@ class TargetFrameBuffer:
         self.capture_task = None
         self.capture_status = "Standby"
 
+    async def _ensure_board_streamer(self) -> bool:
+        """Ensure native board streaming engine is running on target board."""
+        # 1. Quick probe to see if already responding
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg", method="HEAD")
+            def probe():
+                with urllib.request.urlopen(req, timeout=0.3) as resp:
+                    return resp.status == 200
+            if await asyncio.to_thread(probe):
+                return True
+        except Exception:
+            pass
+
+        # 2. Deploy and start streamer via SSH (base64 encoded script)
+        try:
+            b64_script = base64.b64encode(BOARD_STREAMER_SCRIPT.encode('utf-8')).decode('ascii')
+            deploy_cmd = (
+                f'echo "{b64_script}" | base64 -d > /tmp/board_streamer.py && '
+                f'nohup python3 /tmp/board_streamer.py > /tmp/streamer.log 2>&1 &'
+            )
+            await asyncio.to_thread(_run_ssh, self.target_ip, deploy_cmd, timeout=5)
+            # Wait briefly for startup
+            for _ in range(6):
+                await asyncio.sleep(0.25)
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg", method="HEAD")
+                    def check():
+                        with urllib.request.urlopen(req, timeout=0.3) as resp:
+                            return resp.status == 200
+                    if await asyncio.to_thread(check):
+                        logger.info(f"Native board streamer successfully verified on {self.target_ip}:9876")
+                        return True
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Failed to launch board streamer on {self.target_ip}: {e}")
+        return False
+
     async def start(self):
         self.active_tracks += 1
         if not self.capture_task or self.capture_task.done():
@@ -3617,36 +3823,80 @@ class TargetFrameBuffer:
 
     async def stop(self):
         self.active_tracks = max(0, self.active_tracks - 1)
-        if self.active_tracks == 0 and self.capture_task and not self.capture_task.done():
-            self.capture_task.cancel()
+        if self.active_tracks == 0:
+            if self.capture_task and not self.capture_task.done():
+                self.capture_task.cancel()
+            # Send stop command to board streamer to immediately release capture handle
+            try:
+                import urllib.request
+                def stop_streamer():
+                    try:
+                        req = urllib.request.Request(f"http://{self.target_ip}:9876/stop")
+                        with urllib.request.urlopen(req, timeout=0.5): pass
+                    except Exception: pass
+                asyncio.create_task(asyncio.to_thread(stop_streamer))
+            except Exception: pass
 
     async def _capture_loop(self):
-        """Continuously pulls screenshots from target board without freezing event loop."""
-        while self.active_tracks > 0:
-            try:
-                snap_res = await asyncio.to_thread(take_screenshot, self.target_ip)
-                if "SNAPSHOT_BASE64:" in snap_res:
-                    b64_data = snap_res.split("SNAPSHOT_BASE64:")[1].strip()
-                    b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
-                    raw_bytes = base64.b64decode(b64_clean)
-                    if len(raw_bytes) > 64 and HAS_WEBRTC:
-                        img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-                        if img.size != (1280, 720):
-                            img = img.resize((1280, 720), Image.Resampling.BILINEAR)
-                        
-                        async with self.lock:
-                            self.last_pil_image = img
-                            self.last_av_frame = av.VideoFrame.from_image(img)
-                            self.last_capture_time = time.time()
-                            self.capture_status = "Live Compositor"
-                else:
-                    self.capture_status = "Standby / Idle"
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self.capture_status = f"Standby ({str(e)[:30]})"
+        """Continuously pulls blended compositor frames directly from target board without freezing event loop."""
+        streamer_ready = await self._ensure_board_streamer()
 
-            await asyncio.sleep(0.35)
+        while self.active_tracks > 0:
+            frame_bytes = None
+
+            # 1. Primary high-speed path: Direct HTTP frame from native board streamer (20-30ms)
+            if streamer_ready:
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg")
+                    def fetch_frame():
+                        with urllib.request.urlopen(req, timeout=0.8) as resp:
+                            if resp.status == 200:
+                                return resp.read()
+                        return None
+                    frame_bytes = await asyncio.to_thread(fetch_frame)
+                except Exception:
+                    # Streamer may have exited, re-verify or restart
+                    streamer_ready = await self._ensure_board_streamer()
+
+            # 2. Process fetched frame
+            if frame_bytes and len(frame_bytes) > 64 and HAS_WEBRTC:
+                try:
+                    img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+                    if img.size != (1280, 720):
+                        img = img.resize((1280, 720), Image.Resampling.BILINEAR)
+                    async with self.lock:
+                        self.last_pil_image = img
+                        self.last_av_frame = av.VideoFrame.from_image(img)
+                        self.last_capture_time = time.time()
+                        self.capture_status = "Live Hardware Blended"
+                except Exception as e:
+                    logger.debug(f"Frame decode error: {e}")
+            elif not streamer_ready:
+                # 3. Fallback path: Traditional take_screenshot if board streamer is unavailable
+                try:
+                    snap_res = await asyncio.to_thread(take_screenshot, self.target_ip)
+                    if "SNAPSHOT_BASE64:" in snap_res:
+                        b64_data = snap_res.split("SNAPSHOT_BASE64:")[1].strip()
+                        b64_clean = re.sub(r'[^A-Za-z0-9+/=]', '', b64_data)
+                        raw_bytes = base64.b64decode(b64_clean)
+                        if len(raw_bytes) > 64 and HAS_WEBRTC:
+                            img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+                            if img.size != (1280, 720):
+                                img = img.resize((1280, 720), Image.Resampling.BILINEAR)
+                            async with self.lock:
+                                self.last_pil_image = img
+                                self.last_av_frame = av.VideoFrame.from_image(img)
+                                self.last_capture_time = time.time()
+                                self.capture_status = "Live Compositor"
+                    else:
+                        self.capture_status = "Standby / Idle"
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    self.capture_status = f"Standby ({str(e)[:30]})"
+
+            await asyncio.sleep(0.08)
 
     def get_current_frame(self, frame_idx: int, elapsed: float):
         if not HAS_WEBRTC:
