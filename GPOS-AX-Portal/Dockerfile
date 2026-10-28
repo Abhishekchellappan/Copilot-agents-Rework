@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y openssh-client && rm -rf /var/lib/apt/l
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
+COPY bug_watchdog.py .
 COPY static/ static/
 
 EXPOSE 8080
