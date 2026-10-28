@@ -844,7 +844,8 @@ class DeviceHUD {
             }
 
             if (this.streamMode === 'snapshot') {
-                setTimeout(() => this.refreshLiveFrame(), 600);
+                setTimeout(() => this.refreshLiveFrame(), 500);
+                setTimeout(() => this.refreshLiveFrame(), 1300);
             }
         });
 
@@ -933,7 +934,8 @@ class DeviceHUD {
         }
 
         if (this.streamMode === 'snapshot') {
-            setTimeout(() => this.refreshLiveFrame(), 600);
+            setTimeout(() => this.refreshLiveFrame(), 500);
+            setTimeout(() => this.refreshLiveFrame(), 1300);
         }
     }
 
@@ -958,7 +960,8 @@ class DeviceHUD {
         }
 
         if (this.streamMode === 'snapshot') {
-            setTimeout(() => this.refreshLiveFrame(), 700);
+            setTimeout(() => this.refreshLiveFrame(), 500);
+            setTimeout(() => this.refreshLiveFrame(), 1300);
         }
     }
 

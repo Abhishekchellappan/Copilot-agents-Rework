@@ -3296,16 +3296,30 @@ def device_mouse_click(target_ip: str = "", x: int = 0, y: int = 0) -> str:
     if not ip:
         return "ERROR: No target IP specified."
 
-    payload = json.dumps({
+    import base64
+    x_val = int(x)
+    y_val = int(y)
+
+    # Method 1: pushMouseEvent with eventtype 'click' at (x, y)
+    mouse_payload = json.dumps({"eventtype": "click", "x": x_val, "y": y_val})
+    b64_mouse = base64.b64encode(mouse_payload.encode('utf-8')).decode('ascii')
+    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushMouseEvent "$(echo {b64_mouse} | base64 -d)" 2>&1'
+    res1 = _run_ssh(ip, cmd1, timeout=5)
+
+    # Method 2: pushEvents with setpos + click and touch_down + touch_up for touch-based surfaces
+    combo_payload = json.dumps({
         "events": [
-            {"eventtype": "setpos", "x": x, "y": y},
+            {"eventtype": "setpos", "x": x_val, "y": y_val},
             {"eventtype": "click"},
-            {"eventtype": "touch_tap", "x": x, "y": y}
+            {"eventtype": "touch_down", "x": x_val, "y": y_val},
+            {"eventtype": "touch_up", "x": x_val, "y": y_val}
         ]
     })
-    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
-    res = _run_ssh(ip, cmd, timeout=5)
-    return f"CLICK_EXECUTED at ({x}, {y}) on `{ip}`. Detail: {res.strip()[:100]}"
+    b64_combo = base64.b64encode(combo_payload.encode('utf-8')).decode('ascii')
+    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_combo} | base64 -d)" 2>&1'
+    res2 = _run_ssh(ip, cmd2, timeout=5)
+
+    return f"CLICK_EXECUTED at ({x_val}, {y_val}) on `{ip}`. Detail: {res1.strip()[:60]} | {res2.strip()[:60]}"
 
 
 @mcp.tool()
@@ -3328,7 +3342,7 @@ def device_send_key(target_ip: str = "", key: str = "ENTER") -> str:
         "RIGHT": [106],
         "ENTER": [28, 352],
         "OK": [28, 352],
-        "BACK": [158, 412, 174, 1],
+        "BACK": [412, 158, 1],
         "ESC": [1],
         "HOME": [172, 102],
         "MENU": [139, 141],
@@ -3354,16 +3368,26 @@ def device_send_key(target_ip: str = "", key: str = "ENTER") -> str:
         "FAST_FORWARD": [208]
     }
     codes = key_codes_map.get(key_clean, [28])
+
+    import base64
+    # Primary method: pushKeyEvent with keypress
+    primary_code = codes[0]
+    key_payload = json.dumps({"eventtype": "keypress", "keycodenum": primary_code})
+    b64_key = base64.b64encode(key_payload.encode('utf-8')).decode('ascii')
+    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushKeyEvent "$(echo {b64_key} | base64 -d)" 2>&1'
+    res1 = _run_ssh(ip, cmd1, timeout=5)
+
+    # Fallback/complementary: pushEvents with keydown + keyup
     events = []
     for c in codes:
         events.append({"eventtype": "keydown", "keycodenum": c})
-    for c in codes:
         events.append({"eventtype": "keyup", "keycodenum": c})
+    events_payload = json.dumps({"events": events})
+    b64_events = base64.b64encode(events_payload.encode('utf-8')).decode('ascii')
+    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_events} | base64 -d)" 2>&1'
+    res2 = _run_ssh(ip, cmd2, timeout=5)
 
-    payload = json.dumps({"events": events})
-    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
-    res = _run_ssh(ip, cmd, timeout=5)
-    return f"KEY_EXECUTED `{key_clean}` on `{ip}`. Detail: {res.strip()[:100]}"
+    return f"KEY_EXECUTED `{key_clean}` on `{ip}`. Detail: {res1.strip()[:60]} | {res2.strip()[:60]}"
 
 
 @mcp.tool()
@@ -3397,8 +3421,10 @@ def device_type_text(target_ip: str = "", text: str = "") -> str:
             events.append({"eventtype": "keyup", "keycodenum": code})
 
     if events:
+        import base64
         payload = json.dumps({"events": events})
-        cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
+        b64_events = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+        cmd = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_events} | base64 -d)" 2>&1'
         res = _run_ssh(ip, cmd, timeout=5)
         return f"TEXT_INJECTED `{text}` on `{ip}`. Detail: {res.strip()[:100]}"
     return f"TEXT_SKIPPED (no supported characters) on `{ip}`."

@@ -1637,6 +1637,12 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
             return {"intent": "chat", "message": f"⚠️ Supervisor Error: {err_msg}"}
 
 
+@app.on_event("startup")
+async def _launch_bug_watchdog():
+    from bug_watchdog import start_bug_watchdog
+    start_bug_watchdog(MCP_SERVER_URL)
+
+
 @app.post("/api/chat")
 async def llm_chat(req: ChatRequest, request: Request):
     if not req.llm_url or not req.llm_key:
@@ -2929,17 +2935,26 @@ def device_input_click(req: DeviceClickInput):
 
     # 2. Secondary fallback: Direct SSH
     import subprocess
+    import base64
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
-    payload = json.dumps({
+
+    mouse_payload = json.dumps({"eventtype": "click", "x": x, "y": y})
+    b64_mouse = base64.b64encode(mouse_payload.encode('utf-8')).decode('ascii')
+    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushMouseEvent "$(echo {b64_mouse} | base64 -d)" 2>&1'
+
+    combo_payload = json.dumps({
         "events": [
             {"eventtype": "setpos", "x": x, "y": y},
             {"eventtype": "click"},
-            {"eventtype": "touch_tap", "x": x, "y": y}
+            {"eventtype": "touch_down", "x": x, "y": y},
+            {"eventtype": "touch_up", "x": x, "y": y}
         ]
     })
-    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
+    b64_combo = base64.b64encode(combo_payload.encode('utf-8')).decode('ascii')
+    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_combo} | base64 -d)" 2>&1'
+    cmd = f"{cmd1}; {cmd2}"
     try:
         res = subprocess.run(
             f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
@@ -2962,7 +2977,7 @@ def device_input_key(req: DeviceKeyInput):
         "RIGHT": [106],
         "ENTER": [28, 352],
         "OK": [28, 352],
-        "BACK": [158, 412, 174, 1],
+        "BACK": [412, 158, 1],
         "ESC": [1],
         "HOME": [172, 102],
         "MENU": [139, 141],
@@ -3000,16 +3015,23 @@ def device_input_key(req: DeviceKeyInput):
 
     # 2. Secondary fallback: Direct SSH
     import subprocess
+    import base64
     ssh_opts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3"
     if os.path.isfile("/root/.ssh/id_rsa"):
         ssh_opts += " -i /root/.ssh/id_rsa"
+    primary_code = codes[0]
+    key_payload = json.dumps({"eventtype": "keypress", "keycodenum": primary_code})
+    b64_key = base64.b64encode(key_payload.encode('utf-8')).decode('ascii')
+    cmd1 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushKeyEvent "$(echo {b64_key} | base64 -d)" 2>&1'
+
     events = []
     for c in codes:
         events.append({"eventtype": "keydown", "keycodenum": c})
-    for c in codes:
         events.append({"eventtype": "keyup", "keycodenum": c})
-    payload = json.dumps({"events": events})
-    cmd = f"luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents '{payload}' 2>&1"
+    events_payload = json.dumps({"events": events})
+    b64_events = base64.b64encode(events_payload.encode('utf-8')).decode('ascii')
+    cmd2 = f'luna-send -n 1 -f luna://com.lge.inputgenerator/pushEvents "$(echo {b64_events} | base64 -d)" 2>&1'
+    cmd = f"{cmd1}; {cmd2}"
     try:
         res = subprocess.run(
             f"ssh -tt {ssh_opts} root@{ip} '{cmd}'",
