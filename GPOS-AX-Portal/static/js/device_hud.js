@@ -637,9 +637,18 @@ class DeviceHUD {
             this.peerConnection.ontrack = (event) => {
                 const video = document.getElementById('live-monitor-video');
                 if (video) {
-                    video.srcObject = event.streams[0];
+                    const stream = (event.streams && event.streams.length > 0) ? event.streams[0] : new MediaStream([event.track]);
+                    video.srcObject = stream;
                     video.classList.remove('hidden');
-                    video.play().catch(e => console.log('Video autoplay:', e));
+                    const playPromise = video.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(e => console.log('Video autoplay error:', e));
+                    }
+                    if (event.track) {
+                        event.track.onunmute = () => {
+                            video.play().catch(() => {});
+                        };
+                    }
                 }
                 // Clear canvas so the video underneath is visible while canvas captures input
                 const canvas = document.getElementById('live-monitor-canvas');
@@ -729,7 +738,7 @@ class DeviceHUD {
                 const stats = await this.peerConnection.getStats();
                 stats.forEach(report => {
                     if (report.type === 'inbound-rtp' && report.kind === 'video') {
-                        const fps = report.framesPerSecond ? report.framesPerSecond.toFixed(1) : '30.0';
+                        const fps = report.framesPerSecond !== undefined ? report.framesPerSecond.toFixed(1) : (report.framesDecoded > 0 ? '30.0' : '0.0');
                         const fpsEl = document.getElementById('lm-stream-fps');
                         if (fpsEl) fpsEl.textContent = `${fps} FPS`;
                     }

@@ -3716,6 +3716,10 @@ class StreamHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         elif self.path == '/frame.jpg':
+            t_wait = 0
+            while CURRENT_FRAME is None and t_wait < 16 and RUNNING:
+                time.sleep(0.05)
+                t_wait += 1
             with FRAME_LOCK:
                 frame = CURRENT_FRAME
             if frame:
@@ -3776,6 +3780,35 @@ class TargetFrameBuffer:
         self.capture_task = None
         self.capture_status = "Standby"
 
+    def _deploy_and_start_streamer(self) -> bool:
+        """Deploy and start native streaming daemon on target board via clean stdin pipe."""
+        # 1. Pipe script via clean stdin (no PTY line length limit!)
+        cmd_deploy = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+        if os.path.isfile(SSH_KEY_PATH):
+            cmd_deploy.extend(["-i", SSH_KEY_PATH])
+        cmd_deploy.extend([f"root@{self.target_ip}", "cat > /tmp/board_streamer.py"])
+        try:
+            res1 = subprocess.run(cmd_deploy, input=BOARD_STREAMER_SCRIPT.encode('utf-8'), capture_output=True, timeout=5)
+            if res1.returncode != 0:
+                logger.warning(f"Failed to deploy board_streamer.py to {self.target_ip}: {res1.stderr.decode()[:100]}")
+                return False
+        except Exception as e:
+            logger.warning(f"Deploy error on {self.target_ip}: {e}")
+            return False
+
+        # 2. Launch in background without blocking SSH
+        cmd_launch = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+        if os.path.isfile(SSH_KEY_PATH):
+            cmd_launch.extend(["-i", SSH_KEY_PATH])
+        cmd_launch.extend([f"root@{self.target_ip}", "python3 /tmp/board_streamer.py </dev/null >/tmp/streamer.log 2>&1 &"])
+        try:
+            subprocess.run(cmd_launch, capture_output=True, timeout=5)
+        except Exception as e:
+            logger.warning(f"Launch error on {self.target_ip}: {e}")
+            return False
+
+        return True
+
     async def _ensure_board_streamer(self) -> bool:
         """Ensure native board streaming engine is running on target board."""
         # 1. Quick probe to see if already responding
@@ -3790,30 +3823,25 @@ class TargetFrameBuffer:
         except Exception:
             pass
 
-        # 2. Deploy and start streamer via SSH (base64 encoded script)
-        try:
-            b64_script = base64.b64encode(BOARD_STREAMER_SCRIPT.encode('utf-8')).decode('ascii')
-            deploy_cmd = (
-                f'echo "{b64_script}" | base64 -d > /tmp/board_streamer.py && '
-                f'nohup python3 /tmp/board_streamer.py > /tmp/streamer.log 2>&1 &'
-            )
-            await asyncio.to_thread(_run_ssh, self.target_ip, deploy_cmd, timeout=5)
-            # Wait briefly for startup
-            for _ in range(6):
-                await asyncio.sleep(0.25)
-                try:
-                    import urllib.request
-                    req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg", method="HEAD")
-                    def check():
-                        with urllib.request.urlopen(req, timeout=0.3) as resp:
-                            return resp.status == 200
-                    if await asyncio.to_thread(check):
-                        logger.info(f"Native board streamer successfully verified on {self.target_ip}:9876")
-                        return True
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"Failed to launch board streamer on {self.target_ip}: {e}")
+        # 2. Deploy and start streamer via clean stdin pipe
+        deployed = await asyncio.to_thread(self._deploy_and_start_streamer)
+        if not deployed:
+            return False
+
+        # 3. Wait up to 2.5 seconds for startup and verify
+        for _ in range(10):
+            await asyncio.sleep(0.25)
+            try:
+                import urllib.request
+                req = urllib.request.Request(f"http://{self.target_ip}:9876/frame.jpg", method="HEAD")
+                def check():
+                    with urllib.request.urlopen(req, timeout=0.3) as resp:
+                        return resp.status == 200
+                if await asyncio.to_thread(check):
+                    logger.info(f"Native board streamer successfully verified on {self.target_ip}:9876")
+                    return True
+            except Exception:
+                pass
         return False
 
     async def start(self):
