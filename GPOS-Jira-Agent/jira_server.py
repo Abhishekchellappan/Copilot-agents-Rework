@@ -1149,7 +1149,7 @@ async def _proxy(request: Request):
             url=url,
             headers=_headers(request=request),
             data=body or None,
-            timeout=15,
+            timeout=30,
             verify=False,
         )
         return Response(

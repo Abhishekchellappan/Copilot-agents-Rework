@@ -442,7 +442,7 @@ def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "G
     # 1. Try MCP Server REST Proxy (primary path - always used inside K8s)
     try:
         mcp_url = f"{MCP_SERVER_URL}/rest/{clean_endpoint}"
-        resp = requests.request(method, mcp_url, headers=headers, params=params, json=json_body, timeout=15)
+        resp = requests.request(method, mcp_url, headers=headers, params=params, json=json_body, timeout=30)
         if resp.status_code == 200:
             return resp.json()
         elif resp.status_code in (401, 403):
@@ -486,14 +486,18 @@ def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "G
     raise HTTPException(status_code=503, detail="Jira service unavailable. Please try again in a few moments.")
 
 
+field_names_cache = TTLCache(maxsize=10, ttl=600)
+
+@cached(cache=field_names_cache, key=lambda project_key, pat: (project_key, pat))
 def _get_field_names(project_key: str, pat: str) -> dict:
     try:
         data = fetch_jira("api/2/search", {"jql": f'project = {project_key}', "maxResults": 1, "expand": "names"}, pat)
         return data.get("names", {})
-    except:
+    except Exception as e:
+        logger.warning(f"Failed to fetch field names for {project_key}: {e}")
         return {}
 
-sprint_cache = TTLCache(maxsize=100, ttl=10)
+sprint_cache = TTLCache(maxsize=100, ttl=15)
 
 @cached(cache=sprint_cache, key=lambda project_key, sprint_name, pat: (project_key, sprint_name, pat))
 def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[List[dict], str, dict]:
@@ -503,28 +507,28 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
     """
     field_names = _get_field_names(project_key, pat)
     
-    # Map fields to fetch
+    # Lightweight field list — include description for compliance, omit heavy 'comment' body
     required_fields = {
         "duedate", STORY_POINTS_FIELD, "components", "labels", "description",
-        "summary", "status", "assignee", "issuetype", "priority", "comment",
+        "summary", "status", "assignee", "issuetype", "priority",
         "resolutiondate", "updated"
     }
     for k, v in field_names.items():
         if v:
             vl = v.lower()
-            if "sprint" in vl or "ax_phase" in vl or "ax_save" in vl or "original story points" in vl or "start date_alm" in vl or "comment" in vl:
+            if "sprint" in vl or "ax_phase" in vl or "ax_save" in vl or "original story points" in vl or "start date_alm" in vl:
                 required_fields.add(k)
                 
     fields_str = ",".join(required_fields)
 
     # 1. Try JQL with openSprints()
-    if not sprint_name or sprint_name.lower() == "active":
+    if not sprint_name or sprint_name.lower() in ("active", "active sprint", "current sprint"):
         jql = f'project = {project_key} AND sprint in openSprints()'
     else:
         jql = f'project = {project_key} AND sprint = "{sprint_name}"'
         
     try:
-        data = fetch_jira("api/2/search", {"jql": jql, "maxResults": 500, "fields": fields_str}, pat)
+        data = fetch_jira("api/2/search", {"jql": jql, "maxResults": 200, "fields": fields_str}, pat)
         issues = data.get("issues", [])
         if issues:
             resolved_name = None
@@ -558,22 +562,28 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
     except Exception as e:
         logger.warning(f"openSprints JQL failed: {e}")
 
-    # 2. Try Agile Board API to resolve active sprint
+    # 2. Try Agile Board API across all project boards to resolve active sprint
     try:
         boards_data = fetch_jira("agile/1.0/board", {"projectKeyOrId": project_key}, pat)
         boards = boards_data.get("values", [])
-        if boards:
-            board_id = boards[0]["id"]
-            sprints_data = fetch_jira(f"agile/1.0/board/{board_id}/sprint", {"state": "active"}, pat)
-            sprints = sprints_data.get("values", [])
-            if sprints:
-                sprint_id = sprints[0]["id"]
-                sprint_title = sprints[0].get("name", f"Sprint {sprint_id}")
-                sprint_jql = f"project = {project_key} AND sprint = {sprint_id}"
-                data = fetch_jira("api/2/search", {"jql": sprint_jql, "maxResults": 500, "fields": fields_str}, pat)
-                issues = data.get("issues", [])
-                if issues:
-                    return issues, sprint_title, field_names
+        for b in boards:
+            board_id = b.get("id")
+            if not board_id:
+                continue
+            try:
+                sprints_data = fetch_jira(f"agile/1.0/board/{board_id}/sprint", {"state": "active"}, pat)
+                sprints = sprints_data.get("values", [])
+                if sprints:
+                    sprint_id = sprints[0]["id"]
+                    sprint_title = sprints[0].get("name", f"Sprint {sprint_id}")
+                    sprint_jql = f"project = {project_key} AND sprint = {sprint_id}"
+                    data = fetch_jira("api/2/search", {"jql": sprint_jql, "maxResults": 200, "fields": fields_str}, pat)
+                    issues = data.get("issues", [])
+                    if issues:
+                        return issues, sprint_title, field_names
+            except Exception as e:
+                logger.debug(f"Board {board_id} sprint query skipped: {e}")
+                continue
     except Exception as e:
         logger.warning(f"Agile Board sprint query failed: {e}")
 
@@ -2285,14 +2295,12 @@ def get_agents():
 def get_mentions(request: Request):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(
-            status_code=403, detail="Missing Jira PAT. Please click Settings in the top-right corner to enter your Personal Access Token."
-        )
+        return {"mentions": []}
 
-    jql = "text ~ currentUser() AND updated >= startOfDay() ORDER BY updated DESC"
+    jql = "assignee = currentUser() ORDER BY updated DESC"
     payload = {
         "jql": jql,
-        "maxResults": 20,
+        "maxResults": 15,
         "fields": ["summary", "status", "updated", "assignee"]
     }
     try:
@@ -2321,9 +2329,26 @@ def get_mentions(request: Request):
 def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_name: str = ""):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(
-            status_code=403, detail="Missing Jira PAT. Please click Settings in the top-right corner to enter your Personal Access Token."
-        )
+        return {
+            "sprint_name": "Please configure Jira PAT in Settings",
+            "project_key": project_key,
+            "overview": {
+                "total_tickets": 0,
+                "total_points": 0.0,
+                "done": {"tickets": 0, "points": 0.0},
+                "in_progress": {"tickets": 0, "points": 0.0},
+                "todo": {"tickets": 0, "points": 0.0},
+                "completion_pct_points": 0,
+                "completion_pct_tickets": 0
+            },
+            "developers": [],
+            "issue_types": {},
+            "at_risk": {
+                "unassigned": [],
+                "overdue_tickets": [],
+                "blocked": []
+            }
+        }
 
     try:
         issues, resolved_sprint_name, field_names = _get_sprint_issues(project_key, sprint_name, pat)
@@ -2452,6 +2477,8 @@ def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_n
                             required_fields[display_name] = k
             
             for display_name, field_key in required_fields.items():
+                if display_name == "Comment" and field_key not in fields:
+                    continue  # Comment field was omitted from fetch to keep payload fast
                 val = fields.get(field_key)
                 # Specialized checks
                 if display_name == "Story Points":
@@ -2679,9 +2706,14 @@ async def toggle_user_access(request: Request):
 def get_sprint_burndown(request: Request, project_key: str = "SIGPOSDEV", sprint_name: str = ""):
     pat = get_jira_pat(request)
     if not pat:
-        raise HTTPException(
-            status_code=403, detail="Missing Jira PAT. Please set your Personal Access Token in Settings."
-        )
+        return {
+            "sprint_name": "No Active Sprint",
+            "total_points": 0.0,
+            "done_points": 0.0,
+            "days": [f"Day {i+1}" for i in range(10)],
+            "ideal": [0.0] * 10,
+            "actual": [0.0] * 10
+        }
     
     try:
         issues, resolved_sprint_name, field_names = _get_sprint_issues(project_key, sprint_name, pat)

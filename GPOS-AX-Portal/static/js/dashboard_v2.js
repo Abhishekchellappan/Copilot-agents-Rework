@@ -15,35 +15,112 @@ const dashboard = {
   async loadData() {
     this.showSkeletonLoading();
     try {
-      const [reportRaw, burndownRaw, mentionsRaw] = await Promise.all([
+      const [reportResult, burndownResult, mentionsResult] = await Promise.allSettled([
         API.getSprintReport(),
         API.getSprintBurndown(),
         API.getMentions()
       ]);
-      const report = this.normalizeReport(reportRaw);
-      const burndown = this.normalizeBurndown(burndownRaw);
+
       this.hideSkeletonLoading();
-      this.renderKPICards(report);
-      this.renderBurndownChart(burndown);
-      this.renderStatusChart(report);
-      this.renderDeveloperTable(report);
-      this.renderAtRiskPanel(report);
-      const sName = report.sprint_name || 'Active Sprint';
-      const sprintEl = document.getElementById('sprint-indicator');
-      if (sprintEl) {
-        sprintEl.textContent = sName;
-        sprintEl.title = "Active Sprint: " + sName;
+
+      // 1. Process Sprint Report
+      if (reportResult.status === 'fulfilled' && reportResult.value) {
+        const report = this.normalizeReport(reportResult.value);
+        this.renderKPICards(report);
+        this.renderStatusChart(report);
+        this.renderDeveloperTable(report);
+        this.renderAtRiskPanel(report);
+
+        const sName = report.sprint_name || 'Active Sprint';
+        const sprintEl = document.getElementById('sprint-indicator');
+        if (sprintEl) {
+          sprintEl.textContent = sName;
+          sprintEl.title = "Active Sprint: " + sName;
+        }
+
+        const connEl = document.getElementById('connection-status');
+        if (connEl) {
+          connEl.classList.remove('bg-red-500');
+          connEl.classList.add('bg-green-500');
+        }
+      } else {
+        const errReason = reportResult.status === 'rejected' ? reportResult.reason : null;
+        console.warn("Sprint report request failed or returned empty:", errReason);
+        this.renderEmptyReport(errReason ? (errReason.message || String(errReason)) : null);
       }
-      document.getElementById('connection-status').classList.remove('bg-red-500');
-      document.getElementById('connection-status').classList.add('bg-green-500');
+
+      // 2. Process Burndown Chart
+      if (burndownResult.status === 'fulfilled' && burndownResult.value) {
+        const burndown = this.normalizeBurndown(burndownResult.value);
+        this.renderBurndownChart(burndown);
+      } else {
+        console.warn("Burndown request failed:", burndownResult.reason);
+        this.renderEmptyBurndown();
+      }
+
+      // 3. Process Activity / Mentions
+      if (mentionsResult.status === 'fulfilled' && mentionsResult.value) {
+        this.renderMentions(mentionsResult.value);
+      } else {
+        console.warn("Mentions request failed:", mentionsResult.reason);
+        this.renderMentions({ mentions: [] });
+      }
+
     } catch (error) {
-      console.error("Failed to load dashboard data", error);
-      document.getElementById('connection-status').classList.remove('bg-green-500');
-      document.getElementById('connection-status').classList.add('bg-red-500');
+      console.error("Critical failure in dashboard loadData:", error);
+      this.hideSkeletonLoading();
+      this.renderEmptyReport("Dashboard load failed. Please refresh or check Settings.");
+      const connEl = document.getElementById('connection-status');
+      if (connEl) {
+        connEl.classList.remove('bg-green-500');
+        connEl.classList.add('bg-red-500');
+      }
     }
   },
 
+  renderEmptyReport(errorMessage) {
+    this.renderKPICards({
+      total_issues: 0,
+      total_points: 0,
+      completed_points: 0,
+      completion_percentage: 0,
+      at_risk: { total: 0 }
+    });
+    const sprintEl = document.getElementById('sprint-indicator');
+    if (sprintEl) {
+      sprintEl.textContent = 'No Active Sprint';
+      sprintEl.title = errorMessage || 'No active sprint data found';
+    }
+    const tbody = document.getElementById('workload-table-body');
+    if (tbody) {
+      const msg = errorMessage && errorMessage.includes('PAT')
+        ? 'Please configure your Jira PAT in Settings (top-right) to view sprint workload.'
+        : (errorMessage || 'No sprint issues found for this project.');
+      tbody.innerHTML = `<tr><td colspan="8" class="px-5 py-8 text-center text-slate-400">
+        <div class="flex flex-col items-center justify-center gap-2">
+          <i data-lucide="info" class="w-5 h-5 text-blue-400"></i>
+          <span>${msg}</span>
+        </div>
+      </td></tr>`;
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+    const container = document.getElementById('at-risk-container');
+    if (container) {
+      container.innerHTML = '<div class="text-center text-slate-500 py-8 text-xs">No active risk items found.</div>';
+    }
+    this.renderStatusChart({ status_distribution: { 'Done': 0, 'In Progress': 0, 'To Do': 0 } });
+  },
+
+  renderEmptyBurndown() {
+    this.renderBurndownChart({
+      labels: ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Day 7', 'Day 8', 'Day 9', 'Day 10'],
+      ideal: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      actual: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    });
+  },
+
   normalizeReport(raw) {
+    if (!raw) return { total_issues: 0, total_points: 0, completed_points: 0, completion_percentage: 0, status_distribution: {}, at_risk: { total: 0 }, workload: [] };
     if (raw.overview) {
       const o = raw.overview;
       const doneTickets = (o.done && o.done.tickets) || 0;
@@ -54,8 +131,8 @@ const dashboard = {
         return {
           developer: d.name,
           username: d.username || '',
-          tickets: d.tickets,
-          points: d.points,
+          tickets: d.tickets || 0,
+          points: d.points || 0,
           done: d.done || 0,
           in_progress: d.in_progress || 0,
           to_do: d.todo || 0,
@@ -65,7 +142,7 @@ const dashboard = {
       });
       const atRisk = raw.at_risk || {};
       const unassigned = atRisk.unassigned || [];
-      const overdueTickets = atRisk.overdue_tickets || atRisk.overdue_tickets || [];
+      const overdueTickets = atRisk.overdue_tickets || [];
       const blocked = atRisk.blocked || [];
       function mapItem(i) {
         return {
@@ -76,8 +153,8 @@ const dashboard = {
       }
       return {
         sprint_name: raw.sprint_name || 'Active Sprint',
-        total_issues: o.total_tickets,
-        total_points: o.total_points,
+        total_issues: o.total_tickets || 0,
+        total_points: o.total_points || 0,
         completed_points: donePoints,
         completion_percentage: Math.round(o.completion_pct_points || 0),
         status_distribution: { 'Done': doneTickets, 'In Progress': ipTickets, 'To Do': todoTickets },
@@ -94,8 +171,9 @@ const dashboard = {
   },
 
   normalizeBurndown(raw) {
+    if (!raw) return { labels: [], ideal: [], actual: [] };
     if (raw.days && !raw.labels) {
-      return { labels: raw.days, ideal: raw.ideal, actual: raw.actual };
+      return { labels: raw.days, ideal: raw.ideal || [], actual: raw.actual || [] };
     }
     return raw;
   },
@@ -108,23 +186,45 @@ const dashboard = {
   },
 
   renderKPICards(data) {
-    this.animateValue('kpi-total', 0, data.total_issues, 1000);
-    this.animateValue('kpi-points', 0, data.completed_points, 1000);
-    this.animateValue('kpi-completion', 0, data.completion_percentage, 1000);
-    this.animateValue('kpi-risk', 0, (data.at_risk && data.at_risk.total) || 0, 1000);
+    const total = (data && data.total_issues) || 0;
+    const pts = (data && data.completed_points) || 0;
+    const comp = (data && data.completion_percentage) || 0;
+    const risk = (data && data.at_risk && data.at_risk.total) || 0;
+    
+    this.animateValue('kpi-total', 0, total, 600);
+    this.animateValue('kpi-points', 0, pts, 600);
+    this.animateValue('kpi-completion', 0, comp, 600, '%');
+    this.animateValue('kpi-risk', 0, risk, 600);
+    
     var circle = document.getElementById('kpi-completion-circle');
-    if (circle) { circle.style.strokeDasharray = data.completion_percentage + ', 100'; }
+    if (circle) { 
+      circle.style.strokeDasharray = comp + ', 100'; 
+    }
+
+    var ptsEl = document.getElementById('kpi-points');
+    if (ptsEl && ptsEl.nextElementSibling) {
+      ptsEl.nextElementSibling.textContent = `/ ${(data && data.total_points) || 0} total`;
+    }
   },
 
-  animateValue(id, start, end, duration) {
+  animateValue(id, start, end, duration, suffix = '') {
     var obj = document.getElementById(id);
     if (!obj) return;
+    var target = (typeof end === 'number' && !isNaN(end)) ? end : 0;
+    if (target === 0) {
+      obj.textContent = '0' + suffix;
+      return;
+    }
     var startTimestamp = null;
     function step(timestamp) {
       if (!startTimestamp) startTimestamp = timestamp;
       var progress = Math.min((timestamp - startTimestamp) / duration, 1);
-      obj.innerHTML = Math.floor(progress * (end - start) + start);
-      if (progress < 1) window.requestAnimationFrame(step);
+      obj.textContent = Math.floor(progress * (target - start) + start) + suffix;
+      if (progress < 1) {
+        window.requestAnimationFrame(step);
+      } else {
+        obj.textContent = target + suffix;
+      }
     }
     window.requestAnimationFrame(step);
   },
@@ -138,11 +238,11 @@ const dashboard = {
     this.charts.burndown = new Chart(ctx, {
       type: 'line',
       data: {
-        labels: data.labels,
+        labels: data.labels || [],
         datasets: [
           {
             label: 'Actual Remaining',
-            data: data.actual,
+            data: data.actual || [],
             borderColor: '#22c55e',
             backgroundColor: 'rgba(34, 197, 94, 0.08)',
             fill: true, tension: 0.3, borderWidth: 2.5,
@@ -151,7 +251,7 @@ const dashboard = {
           },
           {
             label: 'Ideal Remaining',
-            data: data.ideal,
+            data: data.ideal || [],
             borderColor: '#3b82f6',
             borderDash: [6, 4],
             fill: false, tension: 0, borderWidth: 2,
@@ -179,33 +279,57 @@ const dashboard = {
     var ctx = document.getElementById('statusChart');
     if (!ctx) return;
     if (this.charts.status) this.charts.status.destroy();
-    var dist = data.status_distribution;
+    var dist = (data && data.status_distribution) || {};
     
     // Register datalabels globally if available
     if (typeof ChartDataLabels !== 'undefined') {
         Chart.register(ChartDataLabels);
     }
+
+    const doneCount = dist['Done'] || 0;
+    const ipCount = dist['In Progress'] || 0;
+    const todoCount = dist['To Do'] || 0;
+    const totalCount = doneCount + ipCount + todoCount;
+
+    const chartLabels = totalCount === 0 ? ['No Tickets'] : ['Done', 'In Progress', 'To Do'];
+    const chartData = totalCount === 0 ? [1] : [doneCount, ipCount, todoCount];
+    const chartColors = totalCount === 0 ? ['#334155'] : ['#22c55e', '#f59e0b', '#475569'];
     
     this.charts.status = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels: ['Done', 'In Progress', 'To Do'],
-        datasets: [{ data: [dist['Done'] || 0, dist['In Progress'] || 0, dist['To Do'] || 0], backgroundColor: ['#22c55e', '#f59e0b', '#475569'], borderColor: '#1e293b', borderWidth: 3, hoverOffset: 6 }]
+        labels: chartLabels,
+        datasets: [{ 
+          data: chartData, 
+          backgroundColor: chartColors, 
+          borderColor: '#1e293b', 
+          borderWidth: 3, 
+          hoverOffset: 6 
+        }]
       },
       options: {
         responsive: true, maintainAspectRatio: false, cutout: '72%',
         plugins: {
-          legend: { position: 'bottom', labels: { usePointStyle: true, padding: 16, font: { size: 12 } } },
-          tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 12, cornerRadius: 8 },
+          legend: { 
+            position: 'bottom', 
+            labels: { usePointStyle: true, padding: 16, font: { size: 12 } } 
+          },
+          tooltip: { 
+            backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, 
+            titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 12, cornerRadius: 8,
+            callbacks: {
+              label: function(context) {
+                if (totalCount === 0) return ' No tickets found';
+                return ` ${context.label}: ${context.raw}`;
+              }
+            }
+          },
           datalabels: {
             color: '#ffffff',
             font: { weight: 'bold', size: 14 },
             formatter: (value, ctx) => {
-              if (value === 0) return '';
-              let sum = 0;
-              let dataArr = ctx.chart.data.datasets[0].data;
-              dataArr.map(data => { sum += data; });
-              let percentage = (value * 100 / sum).toFixed(0) + "%";
+              if (totalCount === 0 || value === 0) return '';
+              let percentage = (value * 100 / totalCount).toFixed(0) + "%";
               return percentage;
             }
           }
@@ -218,7 +342,12 @@ const dashboard = {
     var tbody = document.getElementById('workload-table-body');
     if (!tbody) return;
     tbody.innerHTML = '';
-    (data.workload || []).forEach(function(dev) {
+    const workload = (data && data.workload) || [];
+    if (workload.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="px-5 py-8 text-center text-slate-400">No developer workload data found for this sprint.</td></tr>';
+      return;
+    }
+    workload.forEach(function(dev) {
       var row = document.createElement('tr');
       row.className = 'hover:bg-slate-800/50 transition-colors';
       var barColor = dev.progress >= 80 ? 'bg-green-500' : (dev.progress >= 40 ? 'bg-blue-500' : 'bg-amber-500');
@@ -227,7 +356,7 @@ const dashboard = {
       var ncHtml = '-';
       if (dev.non_compliant && dev.non_compliant.length > 0) {
         var tooltipItems = dev.non_compliant.map(function(nc) {
-           return nc.key + ' (' + nc.missing.join(', ') + ')';
+           return nc.key + ' (' + (nc.missing || []).join(', ') + ')';
         }).join('&#10;');
         ncHtml = '<div class="inline-flex items-center justify-center min-w-[1.5rem] text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded cursor-help border border-red-500/30 font-bold whitespace-nowrap" title="' + tooltipItems + '">' + dev.non_compliant.length + '</div>';
       }
@@ -292,7 +421,7 @@ const dashboard = {
     const mentions = data.mentions || [];
     
     if (mentions.length === 0) {
-      container.innerHTML = '<div class="text-center text-slate-500 py-8 text-sm">No mentions found today.</div>';
+      container.innerHTML = '<div class="text-center text-slate-500 py-8 text-sm">No recent mentions or assigned tickets found.</div>';
       return;
     }
     
