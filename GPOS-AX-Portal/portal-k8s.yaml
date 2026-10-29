@@ -57,7 +57,7 @@ spec:
               key: llm-key
               optional: true
         - name: SMTP_HOST
-          value: ""
+          value: "lgesmtp.lge.com"
         - name: SMTP_PORT
           value: "25"
         - name: SMTP_FROM
