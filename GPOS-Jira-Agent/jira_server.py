@@ -72,7 +72,9 @@ print(f"📚 Loaded {_knowledge_file_count} markdown knowledge files into agent 
 
 # ─── Server & Config ──────────────────────────────────────────────
 mcp = FastMCP("GPOS Jira Agent", instructions=AGENT_KNOWLEDGE if AGENT_KNOWLEDGE else None)
-JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "http://jira.lge.com").rstrip("/")
+JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "http://jira.lge.com/issue").rstrip("/")
+if not JIRA_BASE_URL.endswith("/issue") and "jira.lge.com" in JIRA_BASE_URL:
+    JIRA_BASE_URL += "/issue"
 DEFAULT_PAT = os.environ.get("JIRA_PAT", "")
 
 import urllib3
@@ -86,10 +88,18 @@ def _headers(ctx: Context = None, request: Request = None) -> dict:
     pat = DEFAULT_PAT
     if ctx and hasattr(ctx, "request_context") and ctx.request_context:
         req = getattr(ctx.request_context, "request", None)
-        if req and "x-jira-pat" in req.headers:
-            pat = req.headers["x-jira-pat"]
-    elif request and "x-jira-pat" in request.headers:
-        pat = request.headers["x-jira-pat"]
+        if req:
+            if "x-jira-pat" in req.headers:
+                pat = req.headers["x-jira-pat"]
+            elif "authorization" in req.headers and req.headers["authorization"].startswith("Bearer "):
+                pat = req.headers["authorization"][7:]
+    elif request:
+        if "x-jira-pat" in request.headers:
+            pat = request.headers["x-jira-pat"]
+        elif "authorization" in request.headers and request.headers["authorization"].startswith("Bearer "):
+            pat = request.headers["authorization"][7:]
+    if pat:
+        pat = pat.strip()
     if not pat:
         raise ValueError(
             "Missing Jira PAT. Set 'X-Jira-PAT' header in mcp.json or 'JIRA_PAT' env var."
@@ -1127,7 +1137,10 @@ async def _proxy(request: Request):
         path = request.path_params.get("path", "")
         # Normalize API v3 to v2 for Jira Data Center compatibility
         target = path.replace("api/3/", "api/2/", 1) if path.startswith("api/3/") else path
-        url = f"{JIRA_BASE_URL}/rest/{target}"
+        clean_target = target.lstrip('/')
+        if clean_target.startswith('rest/'):
+            clean_target = clean_target[5:]
+        url = f"{JIRA_BASE_URL}/rest/{clean_target}"
         if request.query_params:
             url += f"?{request.query_params}"
         body = await request.body()

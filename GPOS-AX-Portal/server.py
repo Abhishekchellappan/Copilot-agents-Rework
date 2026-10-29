@@ -49,7 +49,9 @@ app.add_middleware(
 # Configuration
 MCP_SERVER_URL = os.environ.get('MCP_SERVER_URL', 'http://10.221.31.25:31983').rstrip('/')
 DEVICE_MCP_SERVER_URL = os.environ.get('DEVICE_MCP_SERVER_URL', 'http://gpos-muralidhar-device-service:8000').rstrip('/')
-JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'http://jira.lge.com').rstrip('/')
+JIRA_BASE_URL = os.environ.get('JIRA_BASE_URL', 'http://jira.lge.com/issue').rstrip('/')
+if not JIRA_BASE_URL.endswith('/issue') and 'jira.lge.com' in JIRA_BASE_URL:
+    JIRA_BASE_URL += '/issue'
 COLLAB_BASE_URL = os.environ.get('COLLAB_BASE_URL', 'http://collab.lge.com/main/spaces/WEBOSDOCS/pages/1473985612/API+Docs').rstrip('/')
 
 # Constants
@@ -345,6 +347,8 @@ def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "G
     global _DIRECT_JIRA_DISABLED_UNTIL
     headers = _jira_headers(pat)
     clean_endpoint = endpoint.lstrip('/')
+    if clean_endpoint.startswith('rest/'):
+        clean_endpoint = clean_endpoint[5:]
 
     # 1. Try MCP Server REST Proxy (primary path - always used inside K8s)
     try:
@@ -354,6 +358,15 @@ def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "G
             return resp.json()
         elif resp.status_code in (401, 403):
             raise HTTPException(status_code=resp.status_code, detail=f"Jira Authentication Failed (HTTP {resp.status_code}). Please check your Jira PAT in Settings.")
+        elif resp.status_code == 400:
+            # Bad Request (e.g. project not found or openSprints not supported)
+            try:
+                err_json = resp.json()
+                if "errorMessages" in err_json or "errors" in err_json:
+                    return err_json
+            except Exception:
+                pass
+            raise HTTPException(status_code=400, detail=resp.text)
         logger.info(f"MCP proxy returned {resp.status_code}, trying direct Jira fallback...")
     except HTTPException:
         raise
@@ -369,6 +382,13 @@ def fetch_jira(endpoint: str, params: Dict[str, Any], pat: str, method: str = "G
                 return resp.json()
             elif resp.status_code in (401, 403):
                 raise HTTPException(status_code=resp.status_code, detail=f"Jira Authentication Failed (HTTP {resp.status_code}). Please check your Jira PAT in Settings.")
+            elif resp.status_code == 400:
+                try:
+                    err_json = resp.json()
+                    if "errorMessages" in err_json or "errors" in err_json:
+                        return err_json
+                except Exception:
+                    pass
         except HTTPException:
             raise
         except Exception as e:
@@ -386,7 +406,7 @@ def _get_field_names(project_key: str, pat: str) -> dict:
 
 sprint_cache = TTLCache(maxsize=100, ttl=10)
 
-@cached(cache=sprint_cache, key=lambda project_key, sprint_name, pat: (project_key, sprint_name))
+@cached(cache=sprint_cache, key=lambda project_key, sprint_name, pat: (project_key, sprint_name, pat))
 def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[List[dict], str, dict]:
     """
     Fetch all issues for the active or requested sprint.
@@ -462,14 +482,21 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
                 sprint_title = sprints[0].get("name", f"Sprint {sprint_id}")
                 sprint_jql = f"project = {project_key} AND sprint = {sprint_id}"
                 data = fetch_jira("api/2/search", {"jql": sprint_jql, "maxResults": 500, "fields": fields_str}, pat)
-                return data.get("issues", []), sprint_title, field_names
+                issues = data.get("issues", [])
+                if issues:
+                    return issues, sprint_title, field_names
     except Exception as e:
         logger.warning(f"Agile Board sprint query failed: {e}")
 
     # 3. Fallback: Query all recent issues in the project
-    jql_fallback = f"project = {project_key} ORDER BY updated DESC"
-    data = fetch_jira("api/2/search", {"jql": jql_fallback, "maxResults": 60, "fields": fields_str}, pat)
-    return data.get("issues", []), "Current Project Tickets", field_names
+    try:
+        jql_fallback = f"project = {project_key} ORDER BY updated DESC"
+        data = fetch_jira("api/2/search", {"jql": jql_fallback, "maxResults": 60, "fields": fields_str}, pat)
+        issues = data.get("issues", [])
+        return issues, "Current Project Tickets" if issues else "No Active Sprint", field_names
+    except Exception as e:
+        logger.warning(f"Fallback recent issues JQL failed: {e}")
+        return [], "No Active Sprint", field_names
 
 
 # ============================================================================
@@ -2100,11 +2127,15 @@ def get_user_profile(request: Request):
     
     try:
         data = fetch_jira("api/2/myself", {}, pat)
-        display_name = data.get("displayName", "Jira User")
-        return {"name": display_name, "division": "LGSI GPOS & Apps"}
+        display_name = data.get("displayName")
+        if display_name and display_name != "Jira User":
+            return {"name": display_name, "division": "LGSI GPOS & Apps"}
     except Exception as e:
         logger.error(f"Failed to fetch user profile: {e}")
-        return {"name": "GPOS User", "division": "LGSI GPOS & Apps"}
+    
+    auth_user = get_current_user(request)
+    display = auth_user if auth_user and auth_user != "user" else "GPOS User"
+    return {"name": display, "division": "LGSI GPOS & Apps"}
 
 @app.get("/api/agents")
 def get_agents():
@@ -2170,21 +2201,13 @@ def get_mentions(request: Request):
         )
 
     jql = "text ~ currentUser() AND updated >= startOfDay() ORDER BY updated DESC"
-    url = f"{JIRA_BASE_URL}/rest/api/2/search"
-    headers = {
-        "Authorization": f"Bearer {pat}",
-        "Content-Type": "application/json",
-        "X-Jira-PAT": pat
-    }
     payload = {
         "jql": jql,
         "maxResults": 20,
         "fields": ["summary", "status", "updated", "assignee"]
     }
     try:
-        resp = requests.post(url, headers=headers, json=payload, verify=False, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
+        data = fetch_jira("api/2/search", {}, pat, method="POST", json_body=payload)
         issues = data.get("issues", [])
         
         result = []
@@ -2202,7 +2225,7 @@ def get_mentions(request: Request):
             })
         return {"mentions": result}
     except Exception as e:
-        print(f"Error fetching mentions: {e}")
+        logger.warning(f"Error fetching mentions: {e}")
         return {"mentions": []}
 
 @app.get("/api/sprint/report")
@@ -2235,6 +2258,11 @@ def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_n
             key = issue.get("key", "")
             summary = fields.get("summary", "")
             
+            # Status classification
+            status_obj = fields.get("status", {})
+            status_name = status_obj.get("name", "To Do") if isinstance(status_obj, dict) else str(status_obj)
+            status_class = _classify_status(status_name, status_obj)
+
             # Story Points
             points_val = fields.get(STORY_POINTS_FIELD)
             try:
@@ -2252,11 +2280,6 @@ def get_sprint_report(request: Request, project_key: str = "SIGPOSDEV", sprint_n
                         overdue_tickets.append({"key": key, "summary": summary, "url": f"{JIRA_BASE_URL}/browse/{key}"})
                 except:
                     pass
-            
-            # Status classification
-            status_obj = fields.get("status", {})
-            status_name = status_obj.get("name", "To Do") if isinstance(status_obj, dict) else str(status_obj)
-            status_class = _classify_status(status_name, status_obj)
             
             if status_class == "done":
                 done_tickets += 1

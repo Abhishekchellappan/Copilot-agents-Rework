@@ -98,11 +98,21 @@
     syncToLegacyKeys(profile) {
       if (!profile) return;
       try {
-        if (profile.jiraPat !== undefined) localStorage.setItem('jira_pat', profile.jiraPat);
+        if (profile.jiraPat && profile.jiraPat.trim()) {
+          localStorage.setItem('jira_pat', profile.jiraPat.trim());
+        } else {
+          const globalPat = localStorage.getItem('jira_pat');
+          if (globalPat) profile.jiraPat = globalPat;
+        }
+        if (profile.collabPat && profile.collabPat.trim()) {
+          localStorage.setItem('collab_pat', profile.collabPat.trim());
+        } else {
+          const globalCollab = localStorage.getItem('collab_pat');
+          if (globalCollab) profile.collabPat = globalCollab;
+        }
         if (profile.llmUrl !== undefined) localStorage.setItem('llm_api_url', profile.llmUrl);
         if (profile.llmKey !== undefined) localStorage.setItem('llm_api_key', profile.llmKey);
         if (profile.llmModel !== undefined) localStorage.setItem('llm_api_model', profile.llmModel);
-        if (profile.collabPat !== undefined) localStorage.setItem('collab_pat', profile.collabPat);
       } catch (e) {
         console.error('Failed to sync profile to legacy keys', e);
       }
@@ -398,6 +408,7 @@
     populateEditor(p, activeId) {
       const nameInput = document.getElementById('profile-name-input');
       const patInput = document.getElementById('profile-jira-pat');
+      const projectKeyInput = document.getElementById('profile-project-key');
       const urlInput = document.getElementById('profile-llm-url');
       const keyInput = document.getElementById('profile-llm-key');
       const modelInput = document.getElementById('profile-llm-model');
@@ -405,11 +416,12 @@
       const isDefaultCheckbox = document.getElementById('profile-is-default-chk');
 
       if (nameInput) nameInput.value = p.name || '';
-      if (patInput) patInput.value = p.jiraPat || '';
+      if (patInput) patInput.value = p.jiraPat || localStorage.getItem('jira_pat') || '';
+      if (projectKeyInput) projectKeyInput.value = localStorage.getItem('jira_project_key') || 'SIGPOSDEV';
       if (urlInput) urlInput.value = p.llmUrl || '';
       if (keyInput) keyInput.value = p.llmKey || '';
       if (modelInput) modelInput.value = p.llmModel || '';
-      if (collabPatInput) collabPatInput.value = p.collabPat || '';
+      if (collabPatInput) collabPatInput.value = p.collabPat || localStorage.getItem('collab_pat') || '';
       if (isDefaultCheckbox) isDefaultCheckbox.checked = !!p.isDefault;
 
       const titleEl = document.getElementById('profile-editor-title');
@@ -430,6 +442,7 @@
 
       const nameInput = document.getElementById('profile-name-input');
       const patInput = document.getElementById('profile-jira-pat');
+      const projectKeyInput = document.getElementById('profile-project-key');
       const urlInput = document.getElementById('profile-llm-url');
       const keyInput = document.getElementById('profile-llm-key');
       const modelInput = document.getElementById('profile-llm-model');
@@ -449,9 +462,57 @@
 
       this.save(updatedData);
 
+      // Persist Jira PAT and Collab PAT globally to localStorage so all profiles & views have access
+      if (updatedData.jiraPat) {
+        localStorage.setItem('jira_pat', updatedData.jiraPat);
+        // Also update all profiles in cache so switching profiles never clears Jira PAT
+        const allProfs = this.getAll();
+        allProfs.forEach(p => { if (!p.jiraPat) p.jiraPat = updatedData.jiraPat; });
+        this.saveAll(allProfs);
+      }
+      if (updatedData.collabPat) {
+        localStorage.setItem('collab_pat', updatedData.collabPat);
+      }
+      if (projectKeyInput && projectKeyInput.value.trim()) {
+        const pk = projectKeyInput.value.trim().toUpperCase();
+        localStorage.setItem('jira_project_key', pk);
+        const headerInput = document.getElementById('header-project-key');
+        if (headerInput) headerInput.value = pk;
+        document.querySelectorAll('.project-name-display').forEach(el => el.textContent = pk);
+      }
+
       if (activateAfterSave) {
-        this.activate(this.selectedModalProfileId, false);
+        this.activate(this.selectedModalProfileId, true);
         this.closeSettingsModal();
+      } else {
+        this.syncToLegacyKeys(updatedData);
+        this.refreshActiveSession();
+      }
+    },
+
+    refreshActiveSession() {
+      // Re-fetch user profile for header greeting
+      if (typeof API !== 'undefined' && API.getUserProfile) {
+        API.getUserProfile().then(user => {
+          if (user && user.name) {
+            const greetingEl = document.getElementById('user-greeting');
+            if (greetingEl) {
+              const hour = new Date().getHours();
+              let greeting = "Good evening";
+              if (hour < 12) greeting = "Good morning";
+              else if (hour < 17) greeting = "Good afternoon";
+              greetingEl.textContent = `${greeting}, ${user.name} / ${user.division} 👋`;
+            }
+            const profileNameEl = document.getElementById('sidebar-user-name');
+            const profileInitialsEl = document.getElementById('sidebar-user-initials');
+            if (profileNameEl) profileNameEl.textContent = user.name;
+            if (profileInitialsEl) profileInitialsEl.textContent = user.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+          }
+        }).catch(e => console.warn('Could not refresh user profile:', e));
+      }
+      // Re-fetch dashboard data
+      if (typeof dashboard !== 'undefined' && typeof dashboard.loadData === 'function') {
+        dashboard.loadData();
       }
     },
 
