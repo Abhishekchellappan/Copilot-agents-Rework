@@ -470,15 +470,25 @@
       const patEl = document.getElementById('profile-jira-pat');
       const urlEl = document.getElementById('profile-llm-url');
       const keyEl = document.getElementById('profile-llm-key');
+      const activeProf = this.getActive();
+
+      const patVal = (patEl ? patEl.value.trim() : '') || localStorage.getItem('jira_pat') || (activeProf ? activeProf.jiraPat : '') || '';
+      const urlVal = (urlEl ? urlEl.value.trim() : '') || (activeProf ? activeProf.llmUrl : '') || 'http://exacode-chat.lge.com/v1';
+      const keyVal = (keyEl ? keyEl.value.trim() : '') || localStorage.getItem('llm_key') || (activeProf ? activeProf.llmKey : '') || '';
+
       if (typeof API !== 'undefined' && API.saveBugWatchdogSettings && enEl) {
         API.saveBugWatchdogSettings({
           is_enabled: enEl.checked,
           jira_projects: prEl ? prEl.value.trim() : '',
           target_board_ip: ipEl ? ipEl.value.trim() : '',
           notify_email: emEl ? emEl.value.trim() : '',
-          jira_pat: patEl ? patEl.value.trim() : '',
-          llm_url: urlEl ? urlEl.value.trim() : '',
-          llm_key: keyEl ? keyEl.value.trim() : ''
+          jira_pat: patVal,
+          llm_url: urlVal,
+          llm_key: keyVal
+        }).then(() => {
+          if (typeof bugWatchdogPanel !== 'undefined' && bugWatchdogPanel.load) {
+            setTimeout(() => bugWatchdogPanel.load(), 2000);
+          }
         }).catch(err => console.warn('Could not save bug watchdog settings:', err));
       }
 

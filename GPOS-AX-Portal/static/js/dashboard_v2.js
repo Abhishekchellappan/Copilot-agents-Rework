@@ -485,9 +485,12 @@ const bugWatchdogPanel = {
   },
 
   ACTION_COLORS: {
-    'REMINDED':      'bg-amber-500/20 text-amber-400 border-amber-500/40',
-    'LABEL_UPDATED': 'bg-blue-500/20 text-blue-400 border-blue-500/40',
-    'ANALYSIS_DONE': 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
+    'REMINDED':       'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    'PREREQ_MISSING': 'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    'LABEL_UPDATED':  'bg-blue-500/20 text-blue-400 border-blue-500/40',
+    'ANALYSIS_DONE':  'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
+    'PENDING_AUDIT':  'bg-indigo-500/20 text-indigo-400 border-indigo-500/40',
+    'ERROR':          'bg-red-500/20 text-red-400 border-red-500/40',
   },
 
   init(containerId) {

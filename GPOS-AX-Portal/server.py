@@ -359,6 +359,11 @@ async def get_bug_watchdog_settings(request: Request):
 async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: Request):
     """Save (upsert) the current user's Bug Analyser configuration into the database."""
     username = get_current_user(request)
+    pat = req.jira_pat.strip() or (get_jira_pat(request) or "")
+    llm_url = req.llm_url.strip() or "http://exacode-chat.lge.com/v1"
+    llm_key = req.llm_key.strip()
+    projects = req.jira_projects.strip() or "SIGPOSDEV"
+
     conn = get_db()
     try:
         conn.execute("""
@@ -377,15 +382,23 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
         """, (
             username,
             1 if req.is_enabled else 0,
-            req.jira_projects.strip(),
-            req.jira_pat.strip(),
+            projects,
+            pat,
             req.target_board_ip.strip(),
             req.notify_email.strip() or f"{username}@lge.com",
-            req.llm_url.strip(),
-            req.llm_key.strip(),
+            llm_url,
+            llm_key,
         ))
         conn.commit()
-        logger.info(f"Bug Analyser settings saved for user '{username}': enabled={req.is_enabled}, projects='{req.jira_projects}'")
+        logger.info(f"Bug Analyser settings saved for user '{username}': enabled={req.is_enabled}, projects='{projects}'")
+
+        if req.is_enabled:
+            try:
+                from bug_watchdog import run_bug_triage_cycle, MCP_SERVER_URL
+                asyncio.create_task(run_bug_triage_cycle(MCP_SERVER_URL))
+            except Exception as e:
+                logger.warning(f"Could not trigger immediate triage cycle: {e}")
+
         return {"ok": True, "message": f"Bug Analyser settings saved for {username}."}
     finally:
         conn.close()
