@@ -435,10 +435,42 @@
           ${isActive ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Active in Portal</span>' : ''}
         `;
       }
+
+      // Load per-user Bug Analyser settings from backend database
+      if (typeof API !== 'undefined' && API.getBugWatchdogSettings) {
+        API.getBugWatchdogSettings().then(cfg => {
+          if (cfg) {
+            const enEl = document.getElementById('user-bug-watchdog-enable');
+            const prEl = document.getElementById('user-bug-watchdog-projects');
+            const ipEl = document.getElementById('user-bug-watchdog-board-ip');
+            const emEl = document.getElementById('user-bug-watchdog-email');
+            if (enEl) enEl.checked = !!cfg.is_enabled;
+            if (prEl) prEl.value = cfg.jira_projects || '';
+            if (ipEl) ipEl.value = cfg.target_board_ip || '';
+            if (emEl) emEl.value = cfg.notify_email || '';
+          }
+        }).catch(err => console.warn('Could not load bug watchdog settings:', err));
+      }
     },
 
     saveCurrentEditor(activateAfterSave = false) {
       if (!this.selectedModalProfileId) return;
+
+      // Save per-user Bug Analyser settings to backend database
+      const enEl = document.getElementById('user-bug-watchdog-enable');
+      const prEl = document.getElementById('user-bug-watchdog-projects');
+      const ipEl = document.getElementById('user-bug-watchdog-board-ip');
+      const emEl = document.getElementById('user-bug-watchdog-email');
+      const patEl = document.getElementById('profile-jira-pat');
+      if (typeof API !== 'undefined' && API.saveBugWatchdogSettings && enEl) {
+        API.saveBugWatchdogSettings({
+          is_enabled: enEl.checked,
+          jira_projects: prEl ? prEl.value.trim() : '',
+          target_board_ip: ipEl ? ipEl.value.trim() : '',
+          notify_email: emEl ? emEl.value.trim() : '',
+          jira_pat: patEl ? patEl.value.trim() : ''
+        }).catch(err => console.warn('Could not save bug watchdog settings:', err));
+      }
 
       const nameInput = document.getElementById('profile-name-input');
       const patInput = document.getElementById('profile-jira-pat');

@@ -168,5 +168,16 @@ const API = {
       method: 'POST',
       body: JSON.stringify({ username: username, allowed: allowed })
     });
+  },
+
+  async getBugWatchdogSettings() {
+    return this._fetch('/user/bug-watchdog/settings');
+  },
+
+  async saveBugWatchdogSettings(settings) {
+    return this._fetch('/user/bug-watchdog/settings', {
+      method: 'POST',
+      body: JSON.stringify(settings)
+    });
   }
 };

@@ -1933,6 +1933,34 @@
                             </div>
                         </div>
 
+                        <!-- Bug Analyser (Auto-Triage) Section -->
+                        <div class="space-y-3 pt-3 border-t border-slate-700/60">
+                            <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                                <span class="flex items-center gap-1.5 text-amber-400">
+                                    <i data-lucide="shield-alert" class="w-3.5 h-3.5"></i> Automated Bug Analyser
+                                </span>
+                                <label class="flex items-center gap-1.5 cursor-pointer">
+                                    <input type="checkbox" id="user-bug-watchdog-enable" class="w-4 h-4 text-emerald-500 bg-slate-900 border-slate-700 rounded focus:ring-emerald-500">
+                                    <span class="text-xs text-emerald-400 font-semibold">Enable for me</span>
+                                </label>
+                            </div>
+                            <p class="text-[11px] text-slate-400">When bugs are assigned to you, the agent automatically checks for 4 prerequisites (Logs, Coredump, Repro Steps, Test Cases). If missing, it comments on the ticket. If present, it performs analysis, comments in Jira, and emails you so you can review/edit.</p>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-300 mb-1">Monitored Jira Projects</label>
+                                    <input type="text" id="user-bug-watchdog-projects" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white uppercase focus:outline-none focus:border-amber-500 font-mono text-xs" placeholder="e.g. SIGPOSDEV, WEBOS_APP">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-300 mb-1">Target Board IP (Optional)</label>
+                                    <input type="text" id="user-bug-watchdog-board-ip" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 font-mono text-xs" placeholder="e.g. 10.221.66.108">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-300 mb-1">My Notification Email</label>
+                                <input type="email" id="user-bug-watchdog-email" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 text-xs" placeholder="e.g. yourname@lge.com">
+                            </div>
+                        </div>
+
                         <!-- Default Checkbox -->
                         <div class="pt-2 border-t border-slate-700/60">
                             <label class="flex items-center gap-2 cursor-pointer">

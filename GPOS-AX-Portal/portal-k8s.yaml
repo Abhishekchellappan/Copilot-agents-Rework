@@ -43,13 +43,7 @@ spec:
           value: "http://jira.lge.com/issue"
         - name: DB_PATH
           value: "/app/data/gpos_portal.db"
-        # Automated Bug Triage Watchdog — disabled by default, opt-in only
-        - name: BUG_WATCHDOG_ENABLED
-          value: "false"
-        - name: BUG_WATCHDOG_PROJECT_KEY
-          value: "SIGPOSDEV"
-        - name: BUG_WATCHDOG_USERS
-          value: ""
+        # Automated Bug Triage Watchdog — platform infrastructure secrets
         - name: BUG_WATCHDOG_JIRA_PAT
           valueFrom:
             secretKeyRef:

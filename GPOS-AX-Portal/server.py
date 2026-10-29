@@ -99,6 +99,19 @@ def init_db():
             recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Per-user Bug Analyser configuration — no env vars needed.
+    # Each engineer self-configures via the Settings UI in the portal.
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS user_bug_watchdog_config (
+            username         TEXT PRIMARY KEY,
+            is_enabled       INTEGER DEFAULT 0,
+            jira_projects    TEXT DEFAULT '',
+            jira_pat         TEXT DEFAULT '',
+            target_board_ip  TEXT DEFAULT '',
+            notify_email     TEXT DEFAULT '',
+            updated_at       TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     # Ensure admin users exist
     for admin in ADMIN_USERS:
         c.execute('''
@@ -285,6 +298,82 @@ def get_current_user(request: Request) -> str:
     if not payload:
         raise HTTPException(status_code=401, detail='Token expired or invalid')
     return payload.get('sub', '')
+
+
+# ─── Bug Analyser Per-User Settings API ──────────────────────────────────────
+
+class BugWatchdogSettingsRequest(BaseModel):
+    is_enabled: bool = False
+    jira_projects: str = ""
+    jira_pat: str = ""
+    target_board_ip: str = ""
+    notify_email: str = ""
+
+
+@app.get("/api/user/bug-watchdog/settings")
+async def get_bug_watchdog_settings(request: Request):
+    """Return the current user's Bug Analyser configuration from the database."""
+    username = get_current_user(request)
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, updated_at "
+            "FROM user_bug_watchdog_config WHERE username = ?",
+            (username,)
+        ).fetchone()
+        if row is None:
+            return {
+                "is_enabled": False,
+                "jira_projects": "",
+                "jira_pat": "",
+                "target_board_ip": "",
+                "notify_email": f"{username}@lge.com",
+                "updated_at": None
+            }
+        return {
+            "is_enabled": bool(row["is_enabled"]),
+            "jira_projects": row["jira_projects"] or "",
+            "jira_pat": row["jira_pat"] or "",
+            "target_board_ip": row["target_board_ip"] or "",
+            "notify_email": row["notify_email"] or f"{username}@lge.com",
+            "updated_at": row["updated_at"]
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/user/bug-watchdog/settings")
+async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: Request):
+    """Save (upsert) the current user's Bug Analyser configuration into the database."""
+    username = get_current_user(request)
+    conn = get_db()
+    try:
+        conn.execute("""
+            INSERT INTO user_bug_watchdog_config
+                (username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(username) DO UPDATE SET
+                is_enabled      = excluded.is_enabled,
+                jira_projects   = excluded.jira_projects,
+                jira_pat        = excluded.jira_pat,
+                target_board_ip = excluded.target_board_ip,
+                notify_email    = excluded.notify_email,
+                updated_at      = CURRENT_TIMESTAMP
+        """, (
+            username,
+            1 if req.is_enabled else 0,
+            req.jira_projects.strip(),
+            req.jira_pat.strip(),
+            req.target_board_ip.strip(),
+            req.notify_email.strip() or f"{username}@lge.com",
+        ))
+        conn.commit()
+        logger.info(f"Bug Analyser settings saved for user '{username}': enabled={req.is_enabled}, projects='{req.jira_projects}'")
+        return {"ok": True, "message": f"Bug Analyser settings saved for {username}."}
+    finally:
+        conn.close()
+
+
 
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
