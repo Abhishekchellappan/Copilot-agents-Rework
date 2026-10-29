@@ -244,11 +244,12 @@ def _sort_by_priority(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 BUG_TRIAGE_PROMPT = """You are the GPOS Automated Bug Triage Agent running unattended.
 You are triaging a bug ticket assigned to: {assignee_username}.
 Issue Key: {issue_key}
+Reporter: {reporter_username}
 Current ticket labels: {current_labels}
 Should post reminder comment if prerequisites still missing: {allow_reminder}
 
 Your task:
-1. Call `jira_get_issue(issue_key="{issue_key}")` to retrieve full description, fields, and labels.
+1. Call `jira_get_issue(issue_key="{issue_key}")` to retrieve full description, fields, and labels. Verify the reporter username (fields.reporter.name).
 2. Call `jira_list_attachments(issue_key="{issue_key}")` to inspect attached evidence.
 3. Check the 4 mandatory prerequisites:
    A. System or application Logs attached (.log, .txt, .tar, .tar.gz, .tgz, .zip, .7z)
@@ -258,11 +259,13 @@ Your task:
 
 4. If ANY prerequisite is MISSING:
    - If 'AX_AutoTriage-Pending' is NOT in labels, OR if allow_reminder is True:
-     - Formulate a clear, professional comment starting with:
+     - Formulate a clear, professional comment addressed to the reporter using Jira user mention format `[~reporter_username]`:
+       Hi [~{reporter_username}],
+
        ### ❌ Prerequisites Check: FAILED
-       The following mandatory items are missing:
+       The following mandatory items are missing from this bug report:
        - [List missing items here with instructions on what to attach]
-       Please attach the required items so automated root cause analysis can proceed.
+       Please attach or provide the missing items so automated root cause analysis can proceed.
      - Call `jira_add_comment(issue_key="{issue_key}", body=...)` with this comment text.
      - Call `jira_update_issue(issue_key="{issue_key}", fields={{"labels": existing_labels + ["AX_AutoTriage-Pending"]}})`
    - CRITICAL RULE: Do NOT send any email when prerequisites are missing. Stop triage for this issue.
@@ -361,7 +364,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
         logger.info(f"Bug watchdog [{username}]: Searching Jira bugs with JQL: {jql}")
         search_result = await jira_session.call_tool(
             "jira_search",
-            arguments={"jql": jql, "fields": "summary,assignee,priority,labels", "max_results": BUG_WATCHDOG_MAX_ISSUES_PER_USER}
+            arguments={"jql": jql, "fields": "summary,assignee,priority,labels,reporter", "max_results": BUG_WATCHDOG_MAX_ISSUES_PER_USER}
         )
         content_text = ""
         if isinstance(search_result.content, list):
@@ -426,15 +429,24 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
             else:
                 pri_name = str(pri_val or "Normal")
 
+            reporter_val = candidate.get("reporter") or raw_fields.get("reporter")
+            if isinstance(reporter_val, dict):
+                reporter_username = reporter_val.get("name") or reporter_val.get("key") or ""
+            elif isinstance(reporter_val, str):
+                reporter_username = reporter_val
+            else:
+                reporter_username = ""
+
             prompt = BUG_TRIAGE_PROMPT.format(
                 assignee_username=username,
                 issue_key=issue_key,
+                reporter_username=reporter_username or "reporter",
                 current_labels=json.dumps(current_labels),
                 allow_reminder=allow_reminder
             )
             messages = [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Begin bug triage for {issue_key}. Priority: {pri_name}. Existing labels: {current_labels}."}
+                {"role": "user", "content": f"Begin bug triage for {issue_key}. Reporter: {reporter_username}. Priority: {pri_name}. Existing labels: {current_labels}."}
             ]
 
             headers = {
@@ -499,6 +511,13 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                     comment_text = str(args.get("body") or "")
                                     is_failure_comment = "failed" in comment_text.lower() or "missing" in comment_text.lower()
 
+                                    # Guarantee reporter mention in prerequisite failure comment
+                                    if is_failure_comment and reporter_username:
+                                        mention_tag = f"[~{reporter_username}]"
+                                        if mention_tag not in comment_text and f"@{reporter_username}" not in comment_text:
+                                            args["body"] = f"Hi {mention_tag},\n\n" + comment_text.lstrip()
+                                            comment_text = args["body"]
+
                                     if is_pending and not allow_reminder and is_failure_comment:
                                         logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key}; skipping duplicate reminder comment.")
                                         call_res = json.dumps({"status": "skipped", "message": f"Reminder comment skipped: 24h cooldown active. Already reminded within {BUG_WATCHDOG_REMIND_HOURS} hours."})
@@ -524,6 +543,16 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                 else:
                                     res = await jira_session.call_tool(fn, arguments=args)
                                     call_res = str(res.content)
+                                    if fn in ("jira_get_issue", "get_jira_issue") and not reporter_username:
+                                        try:
+                                            issue_data = json.loads(call_res)
+                                            rep_obj = issue_data.get("fields", {}).get("reporter")
+                                            if isinstance(rep_obj, dict):
+                                                reporter_username = rep_obj.get("name") or rep_obj.get("key") or ""
+                                            elif isinstance(rep_obj, str):
+                                                reporter_username = rep_obj
+                                        except Exception:
+                                            pass
 
                             messages.append({
                                 "role": "tool",
