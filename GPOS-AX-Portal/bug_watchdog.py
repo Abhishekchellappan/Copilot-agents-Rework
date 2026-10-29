@@ -114,6 +114,31 @@ def _send_email_to_assignee(to_email: str, subject: str, body: str) -> str:
         return f"Email send failed: {e}"
 
 
+def _init_watchdog_db():
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS watchdog_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_key TEXT NOT NULL,
+                priority TEXT DEFAULT 'Normal',
+                action TEXT NOT NULL,
+                prereq_ok INTEGER DEFAULT 0,
+                missing_items TEXT DEFAULT '',
+                reminded_at TEXT NOT NULL,
+                analysis_ok INTEGER DEFAULT 0,
+                notes TEXT DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_watchdog_audit_key ON watchdog_audit(issue_key)")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Could not initialize watchdog_audit table: {e}")
+
+_init_watchdog_db()
+
+
 def _get_enrolled_users() -> List[Dict[str, Any]]:
     """Retrieve all users who have enabled Bug Auto-Triage in their Portal Settings."""
     try:
@@ -131,6 +156,14 @@ def _get_enrolled_users() -> List[Dict[str, Any]]:
 
 
 def _get_last_reminder_time(issue_key: str) -> Optional[str]:
+    # 1. Check in-memory log first
+    for e in reversed(_audit_log):
+        if e.get("issue_key") == issue_key and e.get("action") == "PREREQ_MISSING":
+            t = e.get("reminded_at") or e.get("cycle_at")
+            if t:
+                return t
+
+    # 2. Fall back to SQLite database
     try:
         conn = sqlite3.connect(DB_PATH, timeout=5)
         row = conn.execute(
@@ -157,6 +190,7 @@ def _should_post_reminder(issue_key: str) -> bool:
 
 def _record_audit(issue_key: str, user: str, priority: str, action: str, prereq_ok: bool, missing: str, notes: str):
     global _audit_log
+    now_iso = datetime.now(timezone.utc).isoformat()
     entry = {
         "issue_key": issue_key,
         "user": user,
@@ -165,11 +199,21 @@ def _record_audit(issue_key: str, user: str, priority: str, action: str, prereq_
         "prereq_ok": prereq_ok,
         "missing_items": missing,
         "analysis_ok": 1 if prereq_ok else 0,
-        "reminded_at": datetime.now(timezone.utc).isoformat(),
+        "reminded_at": now_iso,
         "notes": notes,
-        "cycle_at": datetime.now(timezone.utc).isoformat()
+        "cycle_at": now_iso
     }
-    _audit_log.append(entry)
+
+    # Deduplicate in-memory audit log: if same issue and same action exists, update it rather than duplicating
+    existing = next((e for e in reversed(_audit_log) if e.get("issue_key") == issue_key and e.get("action") == action), None)
+    if existing:
+        existing["cycle_at"] = now_iso
+        existing["priority"] = priority
+        existing["missing_items"] = missing or existing.get("missing_items", "")
+        existing["notes"] = notes
+    else:
+        _audit_log.append(entry)
+
     if len(_audit_log) > 200:
         _audit_log = _audit_log[-200:]
     try:
@@ -180,7 +224,7 @@ def _record_audit(issue_key: str, user: str, priority: str, action: str, prereq_
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             issue_key, priority, action, 1 if prereq_ok else 0, missing,
-            entry["reminded_at"], 1 if prereq_ok else 0, f"User: {user} | {notes}"
+            now_iso, 1 if prereq_ok else 0, f"User: {user} | {notes}"
         ))
         conn.commit()
         conn.close()
@@ -452,25 +496,34 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                         args["body"] = args.pop("comment")
                                     if "text" in args and "body" not in args:
                                         args["body"] = args.pop("text")
+                                    comment_text = str(args.get("body") or "")
+                                    is_failure_comment = "failed" in comment_text.lower() or "missing" in comment_text.lower()
+
+                                    if is_pending and not allow_reminder and is_failure_comment:
+                                        logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key}; skipping duplicate reminder comment.")
+                                        call_res = json.dumps({"status": "skipped", "message": f"Reminder comment skipped: 24h cooldown active. Already reminded within {BUG_WATCHDOG_REMIND_HOURS} hours."})
+                                        _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Reminder skipped due to 24h cooldown")
+                                    else:
+                                        res = await jira_session.call_tool(fn, arguments=args)
+                                        call_res = str(res.content)
+                                        if is_failure_comment:
+                                            missing_desc = "Missing evidence (logs/coredump/repro/tests)"
+                                            for line in comment_text.splitlines():
+                                                if "missing" in line.lower() and (":" in line or "-" in line):
+                                                    missing_desc = line.strip().lstrip("-*# ").strip()
+                                                    break
+                                            _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, missing_desc, "Prerequisite comment posted to Jira")
+                                        else:
+                                            _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Analysis comment posted on ticket")
                                 elif fn == "jira_update_issue":
                                     if "fields" not in args and any(k != "issue_key" for k in args):
                                         sub_fields = {k: v for k, v in args.items() if k != "issue_key"}
                                         args = {"issue_key": args.get("issue_key", issue_key), "fields": sub_fields}
-
-                                res = await jira_session.call_tool(fn, arguments=args)
-                                call_res = str(res.content)
-
-                                if fn == "jira_add_comment":
-                                    comment_text = str(args.get("body") or "")
-                                    if "failed" in comment_text.lower() or "missing" in comment_text.lower():
-                                        missing_desc = "Missing evidence (logs/coredump/repro/tests)"
-                                        for line in comment_text.splitlines():
-                                            if "missing" in line.lower() and (":" in line or "-" in line):
-                                                missing_desc = line.strip().lstrip("-*# ").strip()
-                                                break
-                                        _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, missing_desc, "Prerequisite comment posted to Jira")
-                                    else:
-                                        _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Analysis comment posted on ticket")
+                                    res = await jira_session.call_tool(fn, arguments=args)
+                                    call_res = str(res.content)
+                                else:
+                                    res = await jira_session.call_tool(fn, arguments=args)
+                                    call_res = str(res.content)
 
                             messages.append({
                                 "role": "tool",
@@ -522,6 +575,7 @@ def get_watchdog_status() -> Dict[str, Any]:
         "interval_s": BUG_WATCHDOG_INTERVAL_SECONDS,
         "remind_hours": BUG_WATCHDOG_REMIND_HOURS,
         "project": first_project,
+        "jira_base_url": JIRA_BASE_URL,
         "enrolled_users_count": len(users),
         "watched_users": [u.get("username") for u in users],
         "recent_entries": _audit_log[-50:]

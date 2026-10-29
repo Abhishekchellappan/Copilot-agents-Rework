@@ -545,11 +545,30 @@ const bugWatchdogPanel = {
     const project     = data.project || '—';
     const interval    = data.interval_s ? `${data.interval_s}s` : '—';
     const remindHours = data.remind_hours ? `${data.remind_hours}h` : '—';
-    const entries     = data.recent_entries || data.in_memory_log || [];
+    const rawEntries  = data.recent_entries || data.in_memory_log || [];
+    const jiraBase    = (data.jira_base_url || 'http://jira.lge.com/issue').replace(/\/+$/, '');
 
-    const rows = entries.map(e => `
+    // Deduplicate entries by issue_key: keep only the latest record for each bug
+    const latestMap = new Map();
+    rawEntries.forEach(e => {
+      if (e && e.issue_key) {
+        latestMap.set(e.issue_key, e);
+      }
+    });
+    const entries = Array.from(latestMap.values()).reverse();
+
+    const rows = entries.map(e => {
+      const jiraUrl = `${jiraBase}/browse/${encodeURIComponent(e.issue_key)}`;
+      return `
       <tr class="border-b border-slate-800 hover:bg-slate-800/40 transition-colors">
-        <td class="px-3 py-2 font-mono text-blue-400 text-xs font-semibold">${e.issue_key || '—'}</td>
+        <td class="px-3 py-2 font-mono text-xs font-semibold">
+          <a href="${jiraUrl}" target="_blank" rel="noopener noreferrer" 
+             class="inline-flex items-center gap-1.5 text-blue-400 hover:text-blue-300 hover:underline transition-colors group" 
+             title="Open ${e.issue_key} in Jira">
+            <span>${e.issue_key || '—'}</span>
+            <i data-lucide="external-link" class="w-3 h-3 opacity-60 group-hover:opacity-100 transition-opacity"></i>
+          </a>
+        </td>
         <td class="px-3 py-2">${this._priorityBadge(e.priority)}</td>
         <td class="px-3 py-2">${e.prereq_ok
           ? '<span class="text-[10px] text-emerald-400 font-semibold">✅ PASS</span>'
@@ -560,7 +579,8 @@ const bugWatchdogPanel = {
           ? '<span class="text-[10px] text-emerald-400 font-semibold">✅ Done</span>'
           : '<span class="text-[10px] text-slate-500">—</span>'}</td>
         <td class="px-3 py-2 text-[10px] text-slate-500 font-mono whitespace-nowrap">${(e.cycle_at || e.reminded_at || '').substring(0,16).replace('T',' ')}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
 
     container.innerHTML = `
       <div class="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
