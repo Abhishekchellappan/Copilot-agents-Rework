@@ -3546,6 +3546,23 @@ def quick_action(action: str, request: Request, project_key: str = "SIGPOSDEV"):
 
 
 
+# ─── Bug Watchdog Status / Control API ───────────────────────────────────────
+
+@app.get("/api/watchdog/bug-status")
+async def bug_watchdog_status(request: Request):
+    """Return the current bug watchdog state, audit log, watched users, and config."""
+    get_current_user(request)  # JWT auth guard
+    from bug_watchdog import get_watchdog_status
+    return get_watchdog_status()
+
+
+@app.post("/api/watchdog/bug-status/reset")
+async def bug_watchdog_reset(request: Request):
+    """Clear the in-memory audit log (does NOT delete the DB table — historical data is preserved)."""
+    get_current_user(request)  # JWT auth guard
+    import bug_watchdog as bw
+    bw._audit_log.clear()
+    return {"ok": True, "message": "In-memory watchdog audit log cleared."}
 
 
 @app.get("/api/watchdog/stream")

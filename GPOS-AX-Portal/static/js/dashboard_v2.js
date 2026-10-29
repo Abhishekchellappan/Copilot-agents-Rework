@@ -6,6 +6,9 @@ const dashboard = {
 
   init() {
     this.loadData();
+    if (typeof bugWatchdogPanel !== 'undefined' && document.getElementById('bug-watchdog-container')) {
+      bugWatchdogPanel.init('bug-watchdog-container');
+    }
     setInterval(() => this.loadData(), 60000);
   },
 
@@ -329,6 +332,157 @@ const dashboard = {
     });
     
     container.appendChild(list);
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+  }
+};
+
+
+// ─── Bug Watchdog Panel ───────────────────────────────────────────────────────
+const bugWatchdogPanel = {
+  _timer: null,
+
+  PRIORITY_COLORS: {
+    p1: 'bg-red-500/20 text-red-400 border-red-500/40',
+    p2: 'bg-orange-500/20 text-orange-400 border-orange-500/40',
+    p3: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40',
+    p4: 'bg-slate-600/20 text-slate-400 border-slate-500/40',
+    blocker:  'bg-red-500/20 text-red-400 border-red-500/40',
+    critical: 'bg-orange-500/20 text-orange-400 border-orange-500/40',
+    major:    'bg-yellow-500/20 text-yellow-400 border-yellow-500/40',
+    minor:    'bg-slate-600/20 text-slate-400 border-slate-500/40',
+  },
+
+  ACTION_COLORS: {
+    'REMINDED':      'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    'LABEL_UPDATED': 'bg-blue-500/20 text-blue-400 border-blue-500/40',
+    'ANALYSIS_DONE': 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
+  },
+
+  init(containerId) {
+    this.containerId = containerId;
+    this.load();
+    this._timer = setInterval(() => this.load(), 60000);
+  },
+
+  destroy() {
+    if (this._timer) clearInterval(this._timer);
+  },
+
+  async load() {
+    const container = document.getElementById(this.containerId);
+    if (!container) return;
+    try {
+      const token = localStorage.getItem('auth_token') || localStorage.getItem('ax_portal_token') || '';
+      const resp  = await fetch('/api/watchdog/bug-status', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      this.render(container, data);
+    } catch (err) {
+      container.innerHTML = `<div class="text-xs text-red-400 p-3">Failed to load watchdog status: ${err.message}</div>`;
+    }
+  },
+
+  async reset() {
+    const token = localStorage.getItem('auth_token') || localStorage.getItem('ax_portal_token') || '';
+    await fetch('/api/watchdog/bug-status/reset', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    this.load();
+  },
+
+  _priorityBadge(priority) {
+    const key   = (priority || 'unknown').toLowerCase();
+    const color = this.PRIORITY_COLORS[key] || 'bg-slate-600/20 text-slate-400 border-slate-500/40';
+    return `<span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${color}">${priority || '—'}</span>`;
+  },
+
+  _actionBadge(action) {
+    const color = this.ACTION_COLORS[action] || 'bg-slate-600/20 text-slate-400 border-slate-500/40';
+    return `<span class="text-[10px] font-medium px-2 py-0.5 rounded border ${color}">${action || '—'}</span>`;
+  },
+
+  render(container, data) {
+    const enabled     = data.enabled;
+    const users       = (data.watched_users || []).join(', ') || 'None';
+    const project     = data.project || '—';
+    const interval    = data.interval_s ? `${data.interval_s}s` : '—';
+    const remindHours = data.remind_hours ? `${data.remind_hours}h` : '—';
+    const entries     = data.recent_entries || data.in_memory_log || [];
+
+    const rows = entries.map(e => `
+      <tr class="border-b border-slate-800 hover:bg-slate-800/40 transition-colors">
+        <td class="px-3 py-2 font-mono text-blue-400 text-xs font-semibold">${e.issue_key || '—'}</td>
+        <td class="px-3 py-2">${this._priorityBadge(e.priority)}</td>
+        <td class="px-3 py-2">${e.prereq_ok
+          ? '<span class="text-[10px] text-emerald-400 font-semibold">✅ PASS</span>'
+          : '<span class="text-[10px] text-red-400 font-semibold">❌ FAIL</span>'}</td>
+        <td class="px-3 py-2">${this._actionBadge(e.action)}</td>
+        <td class="px-3 py-2 text-[11px] text-slate-400 max-w-xs truncate" title="${e.missing_items || ''}">${e.missing_items || '—'}</td>
+        <td class="px-3 py-2">${e.analysis_ok
+          ? '<span class="text-[10px] text-emerald-400 font-semibold">✅ Done</span>'
+          : '<span class="text-[10px] text-slate-500">—</span>'}</td>
+        <td class="px-3 py-2 text-[10px] text-slate-500 font-mono whitespace-nowrap">${(e.cycle_at || e.reminded_at || '').substring(0,16).replace('T',' ')}</td>
+      </tr>`).join('');
+
+    container.innerHTML = `
+      <div class="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 bg-slate-800/80 border-b border-slate-700">
+          <div class="flex items-center gap-2.5">
+            <div class="p-1.5 rounded-lg ${enabled ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-slate-700/60 border border-slate-600'}">
+              <i data-lucide="shield-check" class="w-4 h-4 ${enabled ? 'text-emerald-400' : 'text-slate-500'}"></i>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-slate-100">Bug Watchdog v2</h3>
+              <p class="text-[10px] text-slate-400">${project} · poll every ${interval} · re-remind every ${remindHours}</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border font-semibold
+              ${enabled ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-slate-700 border-slate-600 text-slate-400'}">
+              <span class="w-1.5 h-1.5 rounded-full ${enabled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}"></span>
+              ${enabled ? 'Active' : 'Disabled'}
+            </span>
+            <button onclick="bugWatchdogPanel.load()"
+              class="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-slate-200 transition-colors border border-slate-600" title="Refresh">
+              <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            </button>
+            <button onclick="bugWatchdogPanel.reset()"
+              class="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-slate-200 transition-colors border border-slate-600" title="Clear in-memory log">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+        </div>
+        <div class="px-4 py-2 bg-slate-800/40 border-b border-slate-700/60 flex items-center gap-2">
+          <i data-lucide="users" class="w-3.5 h-3.5 text-blue-400 flex-shrink-0"></i>
+          <span class="text-[11px] text-slate-400">Watched:</span>
+          <span class="text-[11px] text-slate-200 font-mono">${users}</span>
+        </div>
+        ${entries.length === 0 ? `
+          <div class="px-4 py-8 text-center text-slate-500 text-sm">
+            <i data-lucide="inbox" class="w-8 h-8 mx-auto mb-2 opacity-40"></i>
+            No bugs processed yet this session.
+          </div>` : `
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+              <thead class="text-[10px] uppercase text-slate-400 bg-slate-900/60 border-b border-slate-700">
+                <tr>
+                  <th class="px-3 py-2">Bug Key</th>
+                  <th class="px-3 py-2">Priority</th>
+                  <th class="px-3 py-2">Prereqs</th>
+                  <th class="px-3 py-2">Action</th>
+                  <th class="px-3 py-2">Missing Items</th>
+                  <th class="px-3 py-2">Analysis</th>
+                  <th class="px-3 py-2">Cycle Time</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60">${rows}</tbody>
+            </table>
+          </div>`}
+      </div>`;
+
     if (typeof lucide !== 'undefined') lucide.createIcons();
   }
 };
