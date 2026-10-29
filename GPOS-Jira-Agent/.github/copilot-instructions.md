@@ -189,7 +189,7 @@ Before calling `jira_add_comment`:
 4. **Subagent & Terminal Ban**: You are **STRICTLY FORBIDDEN** from spawning Subagents, or using `grep`, `awk`, `python3`, `cat`, or ANY terminal/bash commands to parse JSON. You MUST read JSON directly in your context window.
 5. **NO RAW API MUTATIONS**: You MUST use `jira_create_issue` and `jira_update_issue` for modifications. `jira_raw_api` is strictly GET-only.
 6. **Bulk Operation Safety**: Before updating more than 3 tickets in a loop, render a "Dry-Run" table and wait for the user to say "Approve".
-7. **Sprint Reports**: When asked for a "sprint report" or "developer breakdown", call `jira_generate_sprint_report()`. Do NOT calculate manually.
+7. **Sprint Reports vs. Listing Stories**: When asked to "list", "show", "find", or "view" stories, tasks, bugs, or tickets in the current sprint (e.g., "list my current sprint stories", "list current sprint stories", "show my tickets"), you MUST call `jira_search()` with JQL (e.g. `project = KEY AND sprint in openSprints() AND assignee = currentUser() AND issuetype in (Story, Task)`). Do NOT call `jira_generate_sprint_report()` unless the user explicitly requests an aggregated "sprint report" or "developer breakdown / metrics".
 8. **Burndown Charts**: When asked for a "burndown" or "velocity chart", call `jira_get_sprint_burndown()`. Do NOT build manually.
 
 ---

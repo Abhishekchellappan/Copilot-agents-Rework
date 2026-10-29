@@ -1875,6 +1875,20 @@ async def llm_chat(req: ChatRequest, request: Request):
        - DO NOT claim that your instructions strictly limit you to {target_project}. You have full access to any Jira project or ticket readable by the user's Jira credentials/PAT. Always fetch the requested ticket!
     3. When tools accept a project_key argument (e.g. generate_sprint_report, get_sprint_burndown, create_jira_issue), pass the requested project key if specified by the user, or default to "{target_project}".
     
+    CRITICAL INTENT & JQL ROUTING RULES (MANDATORY):
+    1. LISTING TICKETS VS. SPRINT REPORT:
+       - When the user asks to "list", "show", "get", "find", "view", or "what are" stories, tasks, bugs, or tickets in the sprint (e.g., "list my current sprint stories", "list the current sprint stories", "show my sprint tickets", "what are my stories for this sprint"):
+         * NEVER call `jira_generate_sprint_report`!
+         * ALWAYS call `jira_search(jql="...")`:
+           - If user asked for "my" stories/tickets in sprint:
+             `jql='project = {target_project} AND sprint in openSprints() AND assignee = currentUser() AND issuetype in (Story, Task)'`
+           - If user asked for "my" bugs in sprint:
+             `jql='project = {target_project} AND sprint in openSprints() AND assignee = currentUser() AND issuetype = Bug'`
+           - If user asked for all stories in the current sprint:
+             `jql='project = {target_project} AND sprint in openSprints() AND issuetype in (Story, Task)'`
+         * Present the list using the mandatory `<agent-html>` table!
+       - ONLY call `jira_generate_sprint_report` when the user explicitly requests an aggregated "sprint report", "sprint overview", "sprint health", or "developer breakdown / metrics".
+    
     CRITICAL LOG ANALYSIS RULE:
     When a user asks you to analyze an attached crash log (like a .7z or .zip file attached to a bug ticket), you MUST perform the following sequence:
     1. Call `jira_list_attachments` with the issue key to find the internal attachment ID and exact filename.
@@ -2297,7 +2311,7 @@ def get_mentions(request: Request):
     if not pat:
         return {"mentions": []}
 
-    jql = "assignee = currentUser() ORDER BY updated DESC"
+    jql = "updated >= startOfDay() AND text ~ currentUser() ORDER BY updated DESC"
     payload = {
         "jql": jql,
         "maxResults": 15,

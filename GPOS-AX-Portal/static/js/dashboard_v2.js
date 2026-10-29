@@ -263,13 +263,13 @@ const dashboard = {
         responsive: true, maintainAspectRatio: false,
         interaction: { intersect: false, mode: 'index' },
         plugins: {
-          legend: { position: 'bottom', labels: { usePointStyle: true, padding: 16, font: { size: 12 } } },
-          tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 12, cornerRadius: 8 },
+          legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 6, padding: 10, font: { size: 11 } } },
+          tooltip: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 8, cornerRadius: 6 },
           datalabels: { display: false }
         },
         scales: {
-          y: { beginAtZero: true, grid: { color: 'rgba(51, 65, 85, 0.5)', drawBorder: false }, ticks: { padding: 8 } },
-          x: { grid: { display: false }, ticks: { padding: 8 } }
+          y: { beginAtZero: true, grid: { color: 'rgba(51, 65, 85, 0.4)', drawBorder: false }, ticks: { padding: 4, font: { size: 11 } } },
+          x: { grid: { display: false }, ticks: { padding: 4, font: { size: 11 } } }
         }
       }
     });
@@ -303,20 +303,23 @@ const dashboard = {
           data: chartData, 
           backgroundColor: chartColors, 
           borderColor: '#1e293b', 
-          borderWidth: 3, 
-          hoverOffset: 6 
+          borderWidth: 2, 
+          hoverOffset: 4 
         }]
       },
       options: {
-        responsive: true, maintainAspectRatio: false, cutout: '72%',
+        responsive: true,
+        maintainAspectRatio: true,
+        aspectRatio: 1,
+        cutout: '68%',
         plugins: {
           legend: { 
             position: 'bottom', 
-            labels: { usePointStyle: true, padding: 16, font: { size: 12 } } 
+            labels: { usePointStyle: true, boxWidth: 6, padding: 8, font: { size: 11 } } 
           },
           tooltip: { 
             backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, 
-            titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 12, cornerRadius: 8,
+            titleColor: '#f1f5f9', bodyColor: '#94a3b8', padding: 8, cornerRadius: 6,
             callbacks: {
               label: function(context) {
                 if (totalCount === 0) return ' No tickets found';
@@ -326,7 +329,7 @@ const dashboard = {
           },
           datalabels: {
             color: '#ffffff',
-            font: { weight: 'bold', size: 14 },
+            font: { weight: 'bold', size: 11 },
             formatter: (value, ctx) => {
               if (totalCount === 0 || value === 0) return '';
               let percentage = (value * 100 / totalCount).toFixed(0) + "%";
