@@ -43,19 +43,7 @@ spec:
           value: "http://jira.lge.com/issue"
         - name: DB_PATH
           value: "/app/data/gpos_portal.db"
-        # Automated Bug Triage Watchdog — platform infrastructure secrets
-        - name: BUG_WATCHDOG_JIRA_PAT
-          valueFrom:
-            secretKeyRef:
-              name: gpos-bug-watchdog-secret
-              key: jira-pat
-              optional: true
-        - name: BUG_WATCHDOG_LLM_KEY
-          valueFrom:
-            secretKeyRef:
-              name: gpos-bug-watchdog-secret
-              key: llm-key
-              optional: true
+        # Automated Bug Analyser — Internal SMTP Mail Relay
         - name: SMTP_HOST
           value: "lgesmtp.lge.com"
         - name: SMTP_PORT

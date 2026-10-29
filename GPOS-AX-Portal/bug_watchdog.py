@@ -120,7 +120,7 @@ def _get_enrolled_users() -> List[Dict[str, Any]]:
         conn = sqlite3.connect(DB_PATH, timeout=5)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email "
+            "SELECT username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key "
             "FROM user_bug_watchdog_config WHERE is_enabled = 1"
         ).fetchall()
         conn.close()
@@ -244,9 +244,14 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
         projects = ["SIGPOSDEV"]
     user_pat = user_config.get("jira_pat") or DEFAULT_JIRA_PAT
     user_email = user_config.get("notify_email") or f"{username}@lge.com"
+    user_llm_key = user_config.get("llm_key") or LLM_KEY
+    user_llm_url = user_config.get("llm_url") or LLM_URL or "http://exacode-chat.lge.com/v1"
 
     if not user_pat:
-        logger.warning(f"Bug watchdog: no Jira PAT available for user '{username}'. Skipping.")
+        logger.warning(f"Bug watchdog: user '{username}' is enrolled but missing Jira PAT in Settings. Skipping.")
+        return
+    if not user_llm_key:
+        logger.warning(f"Bug watchdog: user '{username}' is enrolled but missing LLM API Key in Settings. Skipping.")
         return
 
     import httpx
@@ -353,12 +358,12 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
             ]
 
             headers = {
-                "Authorization": f"Bearer {LLM_KEY}",
+                "Authorization": f"Bearer {user_llm_key}",
                 "Content-Type": "application/json",
                 "X-Title": "EXACODE SWE(API)",
                 "X-Model": "Chat-EXACODE-A",
             }
-            llm_url = LLM_URL.rstrip('/')
+            llm_url = user_llm_url.rstrip('/')
             if not llm_url.endswith('chat/completions'):
                 llm_url += '/chat/completions' if llm_url.endswith('v1') else '/v1/chat/completions'
 
@@ -423,9 +428,6 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
 async def run_bug_triage_cycle(mcp_server_url: str):
     users = _get_enrolled_users()
     if not users:
-        return
-    if not LLM_KEY:
-        logger.warning("Bug watchdog skipped: LLM key not configured.")
         return
 
     for user_cfg in users:

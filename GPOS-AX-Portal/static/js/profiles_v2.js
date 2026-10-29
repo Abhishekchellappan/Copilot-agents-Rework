@@ -444,10 +444,16 @@
             const prEl = document.getElementById('user-bug-watchdog-projects');
             const ipEl = document.getElementById('user-bug-watchdog-board-ip');
             const emEl = document.getElementById('user-bug-watchdog-email');
+            const patEl = document.getElementById('profile-jira-pat');
+            const urlEl = document.getElementById('profile-llm-url');
+            const keyEl = document.getElementById('profile-llm-key');
             if (enEl) enEl.checked = !!cfg.is_enabled;
             if (prEl) prEl.value = cfg.jira_projects || '';
             if (ipEl) ipEl.value = cfg.target_board_ip || '';
             if (emEl) emEl.value = cfg.notify_email || '';
+            if (patEl && !patEl.value && cfg.jira_pat) patEl.value = cfg.jira_pat;
+            if (urlEl && !urlEl.value && cfg.llm_url) urlEl.value = cfg.llm_url;
+            if (keyEl && !keyEl.value && cfg.llm_key) keyEl.value = cfg.llm_key;
           }
         }).catch(err => console.warn('Could not load bug watchdog settings:', err));
       }
@@ -456,19 +462,23 @@
     saveCurrentEditor(activateAfterSave = false) {
       if (!this.selectedModalProfileId) return;
 
-      // Save per-user Bug Analyser settings to backend database
+      // Save per-user Bug Analyser settings and credentials to backend database
       const enEl = document.getElementById('user-bug-watchdog-enable');
       const prEl = document.getElementById('user-bug-watchdog-projects');
       const ipEl = document.getElementById('user-bug-watchdog-board-ip');
       const emEl = document.getElementById('user-bug-watchdog-email');
       const patEl = document.getElementById('profile-jira-pat');
+      const urlEl = document.getElementById('profile-llm-url');
+      const keyEl = document.getElementById('profile-llm-key');
       if (typeof API !== 'undefined' && API.saveBugWatchdogSettings && enEl) {
         API.saveBugWatchdogSettings({
           is_enabled: enEl.checked,
           jira_projects: prEl ? prEl.value.trim() : '',
           target_board_ip: ipEl ? ipEl.value.trim() : '',
           notify_email: emEl ? emEl.value.trim() : '',
-          jira_pat: patEl ? patEl.value.trim() : ''
+          jira_pat: patEl ? patEl.value.trim() : '',
+          llm_url: urlEl ? urlEl.value.trim() : '',
+          llm_key: keyEl ? keyEl.value.trim() : ''
         }).catch(err => console.warn('Could not save bug watchdog settings:', err));
       }
 

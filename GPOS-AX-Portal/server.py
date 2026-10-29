@@ -109,9 +109,16 @@ def init_db():
             jira_pat         TEXT DEFAULT '',
             target_board_ip  TEXT DEFAULT '',
             notify_email     TEXT DEFAULT '',
+            llm_url          TEXT DEFAULT '',
+            llm_key          TEXT DEFAULT '',
             updated_at       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    for col in ["llm_url", "llm_key"]:
+        try:
+            c.execute(f"ALTER TABLE user_bug_watchdog_config ADD COLUMN {col} TEXT DEFAULT ''")
+        except Exception:
+            pass
     # Ensure admin users exist
     for admin in ADMIN_USERS:
         c.execute('''
@@ -308,6 +315,8 @@ class BugWatchdogSettingsRequest(BaseModel):
     jira_pat: str = ""
     target_board_ip: str = ""
     notify_email: str = ""
+    llm_url: str = ""
+    llm_key: str = ""
 
 
 @app.get("/api/user/bug-watchdog/settings")
@@ -317,7 +326,7 @@ async def get_bug_watchdog_settings(request: Request):
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, updated_at "
+            "SELECT is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key, updated_at "
             "FROM user_bug_watchdog_config WHERE username = ?",
             (username,)
         ).fetchone()
@@ -328,6 +337,8 @@ async def get_bug_watchdog_settings(request: Request):
                 "jira_pat": "",
                 "target_board_ip": "",
                 "notify_email": f"{username}@lge.com",
+                "llm_url": "",
+                "llm_key": "",
                 "updated_at": None
             }
         return {
@@ -336,6 +347,8 @@ async def get_bug_watchdog_settings(request: Request):
             "jira_pat": row["jira_pat"] or "",
             "target_board_ip": row["target_board_ip"] or "",
             "notify_email": row["notify_email"] or f"{username}@lge.com",
+            "llm_url": row["llm_url"] or "",
+            "llm_key": row["llm_key"] or "",
             "updated_at": row["updated_at"]
         }
     finally:
@@ -350,14 +363,16 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
     try:
         conn.execute("""
             INSERT INTO user_bug_watchdog_config
-                (username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                (username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(username) DO UPDATE SET
                 is_enabled      = excluded.is_enabled,
                 jira_projects   = excluded.jira_projects,
-                jira_pat        = excluded.jira_pat,
+                jira_pat        = CASE WHEN excluded.jira_pat != '' THEN excluded.jira_pat ELSE user_bug_watchdog_config.jira_pat END,
                 target_board_ip = excluded.target_board_ip,
                 notify_email    = excluded.notify_email,
+                llm_url         = CASE WHEN excluded.llm_url != '' THEN excluded.llm_url ELSE user_bug_watchdog_config.llm_url END,
+                llm_key         = CASE WHEN excluded.llm_key != '' THEN excluded.llm_key ELSE user_bug_watchdog_config.llm_key END,
                 updated_at      = CURRENT_TIMESTAMP
         """, (
             username,
@@ -366,6 +381,8 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
             req.jira_pat.strip(),
             req.target_board_ip.strip(),
             req.notify_email.strip() or f"{username}@lge.com",
+            req.llm_url.strip(),
+            req.llm_key.strip(),
         ))
         conn.commit()
         logger.info(f"Bug Analyser settings saved for user '{username}': enabled={req.is_enabled}, projects='{req.jira_projects}'")
