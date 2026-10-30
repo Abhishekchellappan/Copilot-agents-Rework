@@ -356,7 +356,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                         },
                     }
                     for t in dev_tools_resp.tools
-                    if t.name in {"run_gdb_backtrace", "analyze_core_dump", "analyze_kernel_panic", "search_log_contents", "read_log_snippet", "extract_archive"}
+                    if t.name in {"run_gdb_backtrace", "analyze_core_dump", "analyze_kernel_panic", "search_log_contents", "read_log_snippet", "extract_archive", "profile_memory_leaks"}
                 ]
             except Exception:
                 pass

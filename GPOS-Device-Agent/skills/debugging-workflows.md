@@ -6,8 +6,9 @@
 3. **ANTI-HALLUCINATION GUARDRAIL**: If GDB output says "No debugging symbols found" or "??", DO NOT GUESS. Halt analysis and inform the user: "Inconclusive Root Cause: Unstripped .debug symbols are missing."
 
 ## Memory Analysis
-1. Use `run_valgrind_profiler` for deep memory leak checks.
-2. Use `run_leaktracer` for lightweight dynamic allocation tracking.
+1. Use `profile_memory_leaks` for universal memory leak profiling across ANY webOS application (Flutter, Web, QML), Luna service, or native daemon. Supports runtime soak profiling (e.g. 60s, 300s), lifecycle open/close stress testing, and Luna service request load.
+2. Use `run_valgrind_profiler` for deep binary memory leak checks.
+3. Use `run_leaktracer` for standalone C/C++ daemons.
 
 ## Core Dump Analysis & Kernel Panics
 1. **User Space**: Use `analyze_core_dump` to discover `/tmp/core*` or `/var/lib/systemd/coredump/`.

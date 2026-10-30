@@ -18,14 +18,15 @@ from datetime import date
 from typing import Optional, Dict, Any, List, Tuple
 from fastapi import FastAPI, HTTPException, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import requests
 from dotenv import load_dotenv
 import jwt
 import hashlib
-from datetime import datetime, timedelta
+from cryptography.fernet import Fernet
+from datetime import datetime, timedelta, timezone
 from cachetools import TTLCache, cached
 
 # Load env variables
@@ -119,6 +120,13 @@ def init_db():
             c.execute(f"ALTER TABLE user_bug_watchdog_config ADD COLUMN {col} TEXT DEFAULT ''")
         except Exception:
             pass
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS user_credential_profiles (
+            username TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    ''')
     # Ensure admin users exist
     for admin in ADMIN_USERS:
         c.execute('''
@@ -180,6 +188,25 @@ class AgentAction(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class CredentialProfileIn(BaseModel):
+    id: str
+    name: str = 'Untitled Profile'
+    isDefault: bool = False
+    jiraPat: str = ''
+    llmUrl: str = ''
+    llmKey: str = ''
+    llmModel: str = ''
+    collabPat: str = ''
+    createdAt: Optional[int] = None
+    updatedAt: Optional[int] = None
+
+
+class ProfilesPutRequest(BaseModel):
+    profiles: List[CredentialProfileIn] = Field(default_factory=list)
+    activeId: Optional[str] = None
+    baseUpdatedAt: Optional[str] = None
 
 
 def _create_jwt_token(username: str) -> str:
@@ -404,6 +431,148 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
         conn.close()
 
 
+_PROFILE_SECRET_FIELDS = ('jiraPat', 'llmUrl', 'llmKey', 'llmModel', 'collabPat')
+
+
+def _require_profile_cipher() -> Fernet:
+    """Return the Fernet cipher, or 503 if profiles cannot be stored encrypted."""
+    raw = os.environ.get('PROFILE_ENCRYPTION_KEY', '').strip()
+    if not raw:
+        logger.error('PROFILE_ENCRYPTION_KEY is missing or invalid')
+        raise HTTPException(status_code=503, detail='Profile sync is unavailable')
+    try:
+        return Fernet(raw.encode('utf-8'))
+    except Exception:
+        logger.error('PROFILE_ENCRYPTION_KEY is missing or invalid')
+        raise HTTPException(status_code=503, detail='Profile sync is unavailable')
+
+
+def _empty_profile_document() -> dict:
+    return {'profiles': [], 'activeId': None, 'updatedAt': None}
+
+
+def _decode_profile_row(cipher: Fernet, row) -> dict:
+    try:
+        raw = cipher.decrypt(row['payload'].encode('utf-8'))
+        data = json.loads(raw.decode('utf-8'))
+    except Exception:
+        logger.error('Failed to decrypt credential profiles')
+        raise HTTPException(status_code=500, detail='Failed to read saved profiles')
+    profiles = data.get('profiles') if isinstance(data, dict) else []
+    active_id = data.get('activeId') if isinstance(data, dict) else None
+    if not isinstance(profiles, list):
+        profiles = []
+    return {
+        'profiles': profiles,
+        'activeId': active_id,
+        'updatedAt': row['updated_at'],
+    }
+
+
+def _normalize_profiles(req: ProfilesPutRequest) -> dict:
+    if len(req.profiles) > 30:
+        raise HTTPException(status_code=400, detail='Too many profiles')
+    profiles = []
+    for profile in req.profiles:
+        item = profile.model_dump() if hasattr(profile, 'model_dump') else profile.dict()
+        profile_id = item.get('id') or ''
+        if not isinstance(profile_id, str) or not profile_id.strip() or len(profile_id) > 80:
+            raise HTTPException(status_code=400, detail='Invalid profile id')
+        name = item.get('name') or ''
+        if not isinstance(name, str) or len(name) > 200:
+            raise HTTPException(status_code=400, detail='Profile name is too long')
+        item['id'] = profile_id.strip()
+        item['name'] = name.strip() or 'Untitled Profile'
+        item['isDefault'] = bool(item.get('isDefault'))
+        for field in _PROFILE_SECRET_FIELDS:
+            value = item.get(field) or ''
+            if not isinstance(value, str) or len(value) > 8192:
+                raise HTTPException(status_code=400, detail='Profile field is too long')
+            item[field] = value
+        profiles.append(item)
+    if profiles and not any(p['isDefault'] for p in profiles):
+        profiles[0]['isDefault'] = True
+    seen_default = False
+    for profile in profiles:
+        if profile['isDefault'] and seen_default:
+            profile['isDefault'] = False
+        elif profile['isDefault']:
+            seen_default = True
+    ids = {p['id'] for p in profiles}
+    active_id = req.activeId if req.activeId in ids else None
+    if active_id is None and profiles:
+        default = next((p for p in profiles if p['isDefault']), profiles[0])
+        active_id = default['id']
+    return {'profiles': profiles, 'activeId': active_id}
+
+
+def _load_profile_row(conn, username: str):
+    return conn.execute(
+        'SELECT payload, updated_at FROM user_credential_profiles WHERE username = ?',
+        (username,)
+    ).fetchone()
+
+
+@app.get('/api/profiles')
+async def get_credential_profiles(username: str = Depends(get_current_user)):
+    """Return this user's credential profiles. Empty when nothing has been saved."""
+    cipher = _require_profile_cipher()
+    conn = get_db()
+    try:
+        row = _load_profile_row(conn, username)
+    finally:
+        conn.close()
+    if row is None:
+        return _empty_profile_document()
+    return _decode_profile_row(cipher, row)
+
+
+@app.put('/api/profiles')
+async def put_credential_profiles(req: ProfilesPutRequest, username: str = Depends(get_current_user)):
+    """Replace this user's credential profiles. 409 when baseUpdatedAt is stale."""
+    cipher = _require_profile_cipher()
+    document = _normalize_profiles(req)
+    payload = json.dumps(
+        {'profiles': document['profiles'], 'activeId': document['activeId']},
+        separators=(',', ':')
+    )
+    token = cipher.encrypt(payload.encode('utf-8')).decode('utf-8')
+    stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    conflict_body = None
+    response_body = None
+    conn = get_db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row = _load_profile_row(conn, username)
+        if row is not None and (not req.baseUpdatedAt or req.baseUpdatedAt != row['updated_at']):
+            conflict_body = _decode_profile_row(cipher, row)
+            conn.rollback()
+        else:
+            conn.execute('''
+                INSERT INTO user_credential_profiles (username, payload, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at
+            ''', (username, token, stamp))
+            conn.commit()
+            response_body = {
+                'profiles': document['profiles'],
+                'activeId': document['activeId'],
+                'updatedAt': stamp,
+            }
+            logger.info('Saved credential profiles for %s', username)
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+    if conflict_body is not None:
+        return JSONResponse(status_code=409, content=conflict_body)
+    return response_body
 
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
@@ -685,7 +854,14 @@ When the user asks to run shell commands on the target board (such as `grep`, `l
   `find /usr/palm/applications -maxdepth 2 -iname "*settings*" 2>/dev/null || ls -la /usr/palm/applications | grep -i settings || grep -ri "settings" /usr/palm/applications/ 2>/dev/null | head -n 30`
 - When the user asks to "Run CPU benchmark", ALWAYS call `run_perf_benchmark(target_ip=...)`. It automatically runs the embedded performance profiler and gathers metrics!
 - When the user asks to take a screenshot, capture screen, or snapshot of the current window, ALWAYS call `take_screenshot(target_ip=...)`. It captures the screen directly from the webOS surface compositor! When presented with the <agent-html> widget in the tool response, YOU MUST include that exact <agent-html>...</agent-html> block in your response to display the screenshot in the chat UI.
-- When the user asks to "Run leaktracer" or check memory leaks with LeakTracer, ALWAYS call `run_leaktracer(target_ip=..., executable=..., duration_seconds=...)`. It automatically resolves binary paths and preloads the LeakTracer library dynamically!
+- When the user asks to check memory leaks, investigate memory leaks, or profile memory for ANY webOS application (Flutter, Web, QML), Luna service, or native daemon (e.g. "is there any memory leak in my app", "check memory leaks for 1 min", "monitor memory leaks"):
+  ALWAYS call `profile_memory_leaks(target_ip=..., target_id=..., scenario=..., duration_seconds=..., cycles=...)`!
+  * For runtime / duration queries (e.g. "for 1 min", "for 60s"): set scenario="soak", duration_seconds=60 (or user duration).
+  * For open/close or launch/exit queries: set scenario="lifecycle", cycles=5.
+  * For Luna services under load: set scenario="workload" or "soak".
+  * By default, set scenario="auto".
+  NEVER use `run_leaktracer` on webOS App IDs (like `com.webos.app.*`) or Luna Services (`com.webos.service.*`)!
+  When presented with the <agent-html> widget in the tool response, YOU MUST include that exact <agent-html>...</agent-html> block in your response to display the memory profiling card!
 - When the user asks for logs with a specific time window, timestamp, or date (e.g., "between 11:15 and 11:20", "from 10:00 to 10:30"):
   ALWAYS call `stream_device_logs(target_ip=..., filter_keywords=[...], since=..., until=...)` or use `execute_device_command` with `journalctl --since "..." --until "..."`. NEVER refuse, claim you cannot filter by time, or ask the user for permission to run journalctl — execute the query immediately!
 - When the user asks to "Download complete system logs" or "Capture all logs" or save logs to the vault:
