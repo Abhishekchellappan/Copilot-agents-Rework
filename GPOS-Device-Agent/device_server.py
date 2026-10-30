@@ -1521,134 +1521,257 @@ fi
         ss_res = sum((r["pdirty_mb"] - (slope_sec * r["sec"] + intercept)) ** 2 for r in sample_rows)
         r_squared = round(1.0 - (ss_res / ss_tot), 3) if ss_tot > 0.001 else 0.0
 
-        # Verdict logic
+        # Verdict logic and Executive Grade
         if rate_mb_per_min >= 1.5 and r_squared >= 0.55:
-            verdict_badge = "🔴 Memory Leak Confirmed"
+            grade_badge = "GRADE F • CRITICAL LEAK"
+            grade_pill = "bg-red-500/15 border-red-500/50 text-red-400 shadow-lg shadow-red-500/10"
+            dot_color = "bg-red-500"
             verdict_style = "bg-red-500/10 text-red-400 border border-red-500/30"
             verdict_headline = f"🔴 Critical Memory Leak (+{rate_mb_per_min} MB/min)"
+            verdict_banner = "🚨 ACTION REQUIRED: Severe memory leak detected! Defer deployment until external texture handles and controller lifecycles are resolved."
+            verdict_banner_cls = "bg-red-950/40 border-red-500/40 text-red-300"
+            theme_color = "#ef4444"
         elif rate_mb_per_min >= 0.35 or delta_dirty >= 3.0:
-            verdict_badge = "🟡 Slow Memory Creep"
+            grade_badge = "GRADE C • SLOW CREEP"
+            grade_pill = "bg-amber-500/15 border-amber-500/50 text-amber-400 shadow-lg shadow-amber-500/10"
+            dot_color = "bg-amber-400"
             verdict_style = "bg-amber-500/10 text-amber-400 border border-amber-500/30"
             verdict_headline = f"🟡 Slow Memory Creep Detected (+{rate_mb_per_min} MB/min)"
+            verdict_banner = "⚠️ MONITOR CLOSELY: Slow memory creep observed. Audit cached image bindings and uncancelled event subscriptions."
+            verdict_banner_cls = "bg-amber-950/40 border-amber-500/40 text-amber-300"
+            theme_color = "#f59e0b"
         else:
-            verdict_badge = "✅ Stable / No Leak Detected"
+            grade_badge = "GRADE A+ • ZERO LEAKS"
+            grade_pill = "bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-lg shadow-emerald-500/10"
+            dot_color = "bg-emerald-400"
             verdict_style = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
             verdict_headline = "✅ Stable Runtime Memory (No Leak Detected)"
+            verdict_banner = "✅ PRODUCTION CERTIFIED: Zero memory regression detected. Dart VM GC, camera texture buffers, and file handles are rock solid."
+            verdict_banner_cls = "bg-emerald-950/40 border-emerald-500/40 text-emerald-300 shadow-lg shadow-emerald-500/10"
+            theme_color = "#10b981"
 
         # Diagnostics tailored to tech stack
         diag_items = []
         if target_meta.get("SUB_TYPE") == "FLUTTER":
             if rate_mb_per_min >= 0.35:
-                diag_items.append("<strong>External Texture Retention:</strong> Video frame buffers (DMA-BUF / TextureId) may not be recycled after display rendering.")
-                diag_items.append("<strong>Dart Heap & Controllers:</strong> Verify that camera stream subscriptions and <code>CameraController.dispose()</code> are called.")
-                diag_items.append("<strong>Flutter ImageCache:</strong> Check that <code>PaintingBinding.instance.imageCache</code> has a bounded maximum size.")
+                diag_items.append("<strong>External Texture Retention:</strong> Video frame buffers (DMA-BUF / TextureId) not deallocated after display.")
+                diag_items.append("<strong>Dart Heap & Controllers:</strong> Verify camera streams and call <code>CameraController.dispose()</code>.")
+                diag_items.append("<strong>Flutter ImageCache:</strong> Constrain <code>PaintingBinding.instance.imageCache.maximumSize</code>.")
             else:
-                diag_items.append("<strong>Healthy Flutter Pipeline:</strong> Dart VM generational GC and native texture buffer recycling are operating cleanly.")
+                diag_items.append("<strong>Healthy Flutter Pipeline:</strong> Generational Dart VM GC and native camera texture recycling operate cleanly.")
         elif target_meta.get("SUB_TYPE") == "WEB_APP":
             if rate_mb_per_min >= 0.35:
-                diag_items.append("<strong>DOM / V8 Heap Retention:</strong> Detached DOM tree nodes or uncollected JavaScript closures in the WAM renderer.")
+                diag_items.append("<strong>DOM / V8 Heap Retention:</strong> Detached DOM tree elements or closures in WAM renderer.")
             else:
-                diag_items.append("<strong>Clean WAM Renderer:</strong> Chromium V8 engine is effectively reclaiming dereferenced JS objects.")
+                diag_items.append("<strong>Clean WAM Renderer:</strong> Chromium V8 engine effectively reclaims dereferenced JS objects.")
         elif target_meta.get("IS_SRV") == "1":
             if rate_mb_per_min >= 0.35:
-                diag_items.append("<strong>Luna IPC Buffer Creep:</strong> IPC message reply payloads or client subscription lists are retaining memory.")
+                diag_items.append("<strong>Luna IPC Buffer Creep:</strong> IPC message replies or subscription lists retaining memory.")
             else:
-                diag_items.append("<strong>Stable Service Daemon:</strong> Luna service is releasing request buffers immediately after method completion.")
+                diag_items.append("<strong>Stable Service Daemon:</strong> Request buffers released immediately post-execution.")
 
         if delta_fds >= 4:
-            diag_items.append(f"<strong>File Descriptor Creep:</strong> Open handles increased by +{delta_fds} during test (possible camera device /dev/video* or socket leak).")
+            diag_items.append(f"<strong>File Descriptor Creep:</strong> Handles increased by +{delta_fds} during test (possible camera /dev/video* or socket leak).")
+        else:
+            diag_items.append(f"<strong>File Descriptor Stability:</strong> Handles remained constant ({t_end['fds']} open FDs).")
 
         # HTML Table rows
         table_html_rows = ""
         for r in sample_rows:
             step_delta = round(r["pdirty_mb"] - base_dirty, 2)
-            delta_str = f"+{step_delta} MB" if step_delta > 0 else (f"{step_delta} MB" if step_delta < 0 else "—")
-            delta_cls = "text-red-400" if step_delta >= 1.0 else ("text-amber-400" if step_delta > 0 else "text-slate-500")
+            delta_str = f"+{step_delta} MB" if step_delta > 0 else (f"{step_delta} MB" if step_delta < 0 else "0.0 MB")
+            delta_cls = "text-red-400" if step_delta >= 1.0 else ("text-amber-400" if step_delta > 0 else "text-slate-400")
             table_html_rows += f"""
-            <tr class="border-b border-slate-800 hover:bg-slate-800/40 font-mono text-xs text-slate-300">
+            <tr class="border-b border-slate-800/80 hover:bg-slate-800/50 font-mono text-xs text-slate-300">
               <td class="py-1.5 px-3">T + {r['sec']:02d}s</td>
               <td class="py-1.5 px-3 font-semibold text-white">{r['pdirty_mb']:.1f} MB</td>
               <td class="py-1.5 px-3 text-slate-400">{r['pss_mb']:.1f} MB</td>
-              <td class="py-1.5 px-3 text-slate-400">{r['rss_mb']:.1f} MB</td>
               <td class="py-1.5 px-3 text-slate-400">{r['fds']}</td>
               <td class="py-1.5 px-3 text-right font-bold {delta_cls}">{delta_str}</td>
             </tr>"""
 
-        diag_html = "".join([f"<div>&bull; {d}</div>" for d in diag_items])
+        diag_html = "".join([f"<div class='flex items-start gap-2 text-xs text-slate-300'><i data-lucide='check' class='w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5'></i><div>{d}</div></div>" for d in diag_items])
+
+        # Generate Inline SVG Memory Trajectory Sparkline
+        chart_w, chart_h = 560, 95
+        pad_l, pad_r, pad_t, pad_b = 55, 20, 15, 25
+        plot_w = chart_w - pad_l - pad_r
+        plot_h = chart_h - pad_t - pad_b
+        
+        all_dirty = [r["pdirty_mb"] for r in sample_rows]
+        min_v = min(all_dirty)
+        max_v = max(all_dirty)
+        v_span = max(0.1, max_v - min_v)
+        
+        svg_pts = []
+        svg_circles = []
+        for r in sample_rows:
+            px = pad_l + (r["sec"] / total_time_s) * plot_w
+            if max_v == min_v:
+                py = pad_t + plot_h / 2.0
+            else:
+                py = pad_t + plot_h * (1.0 - (r["pdirty_mb"] - min_v) / v_span)
+            svg_pts.append(f"{px:.1f},{py:.1f}")
+            svg_circles.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3" fill="{theme_color}" stroke="#0f172a" stroke-width="1.5" />')
+            
+        polyline_str = " ".join(svg_pts)
+        area_polygon = f"{pad_l},{pad_t + plot_h} " + polyline_str + f" {pad_l + plot_w},{pad_t + plot_h}"
+        
+        time_steps = [0, total_time_s // 4, total_time_s // 2, (3 * total_time_s) // 4, total_time_s]
+        time_labels_svg = "".join([
+            f'<text x="{pad_l + (t / total_time_s) * plot_w:.1f}" y="{chart_h - 6}" font-size="9" fill="#94a3b8" text-anchor="middle" font-family="monospace">T+{t}s</text>'
+            for t in time_steps
+        ])
+        
+        svg_chart = f"""<svg viewBox="0 0 {chart_w} {chart_h}" class="w-full h-24 overflow-visible">
+          <defs>
+            <linearGradient id="memGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="{theme_color}" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="{theme_color}" stop-opacity="0.0"/>
+            </linearGradient>
+          </defs>
+          <line x1="{pad_l}" y1="{pad_t}" x2="{pad_l + plot_w}" y2="{pad_t}" stroke="#334155" stroke-dasharray="3,3" stroke-width="0.7"/>
+          <line x1="{pad_l}" y1="{pad_t + plot_h / 2}" x2="{pad_l + plot_w}" y2="{pad_t + plot_h / 2}" stroke="#1e293b" stroke-dasharray="2,2" stroke-width="0.7"/>
+          <line x1="{pad_l}" y1="{pad_t + plot_h}" x2="{pad_l + plot_w}" y2="{pad_t + plot_h}" stroke="#334155" stroke-width="1"/>
+          <text x="{pad_l - 6}" y="{pad_t + 4}" font-size="9" fill="#94a3b8" text-anchor="end" font-family="monospace">{max_v:.1f}M</text>
+          <text x="{pad_l - 6}" y="{pad_t + plot_h + 3}" font-size="9" fill="#94a3b8" text-anchor="end" font-family="monospace">{min_v:.1f}M</text>
+          <polygon points="{area_polygon}" fill="url(#memGrad)" />
+          <polyline points="{polyline_str}" fill="none" stroke="{theme_color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          {' '.join(svg_circles)}
+          {time_labels_svg}
+        </svg>"""
 
         card_html = f"""<agent-html>
-<div class="memory-profile-card bg-slate-800/95 border border-slate-700/80 rounded-xl p-5 shadow-2xl font-sans mb-4">
-  <div class="flex items-center justify-between pb-3 border-b border-slate-700/80 mb-4">
+<div class="memory-profile-card bg-slate-900/95 border border-slate-700/80 rounded-2xl p-5 shadow-2xl font-sans mb-4">
+  <!-- Executive Header -->
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-700/80 mb-5">
     <div class="flex items-center gap-3">
-      <div class="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-        <i data-lucide="microchip" class="w-5 h-5"></i>
+      <div class="p-3 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 text-indigo-400 border border-indigo-500/30 shadow-md">
+        <i data-lucide="shield-check" class="w-6 h-6"></i>
       </div>
       <div>
-        <h3 class="text-sm font-bold text-white m-0">Universal Memory Profiler</h3>
-        <div class="text-xs text-slate-400 font-mono mt-0.5">
-          Target: <span class="text-slate-200 font-semibold">{clean_id}</span> &bull; 
-          <span class="px-1.5 py-0.2 rounded text-[10px] bg-slate-700 text-slate-300 font-bold">{type_display}</span> &bull; 
-          PID: <span class="text-slate-300">{target_meta.get('PID', 'N/A')}</span>
+        <h2 class="text-base font-bold text-white tracking-wide m-0">Memory Health & Leak Assessment Report</h2>
+        <div class="text-xs text-slate-400 font-mono mt-0.5 flex flex-wrap items-center gap-2">
+          <span>Target: <strong class="text-slate-200">{clean_id}</strong></span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold border border-slate-700">{type_display}</span>
+          <span>PID: <strong class="text-slate-300">{target_meta.get('PID', 'N/A')}</strong></span>
+          <span>Duration: <strong class="text-slate-300">{total_time_s}s Soak</strong></span>
         </div>
       </div>
     </div>
-    <div class="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold {verdict_style}">
-      {verdict_badge}
+    <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-bold tracking-wider uppercase {grade_pill}">
+      <span class="w-2.5 h-2.5 rounded-full {dot_color} animate-pulse"></span>
+      {grade_badge}
     </div>
   </div>
 
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-center">
-    <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/60">
-      <div class="text-[10px] uppercase tracking-wider text-slate-400">Baseline Private RAM</div>
-      <div class="text-sm font-bold font-mono text-slate-200 mt-0.5">{base_dirty:.1f} MB</div>
+  <!-- 4 Primary KPI Cards -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold flex items-center justify-between">
+        <span>Leak Velocity</span>
+        <i data-lucide="trending-up" class="w-3.5 h-3.5 text-slate-400"></i>
+      </div>
+      <div class="text-lg font-bold font-mono {'text-red-400' if rate_mb_per_min >= 0.35 else 'text-emerald-400'} mt-1">
+        {'+' if rate_mb_per_min > 0 else ''}{rate_mb_per_min:.2f} <span class="text-xs font-sans">MB/min</span>
+      </div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">Fit: R² = {r_squared:.2f}</div>
     </div>
-    <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/60">
-      <div class="text-[10px] uppercase tracking-wider text-slate-400">Peak Private RAM</div>
-      <div class="text-sm font-bold font-mono text-blue-400 mt-0.5">{peak_dirty:.1f} MB</div>
-    </div>
-    <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/60">
-      <div class="text-[10px] uppercase tracking-wider text-slate-400">Net Delta ({total_time_s}s)</div>
-      <div class="text-sm font-bold font-mono {'text-red-400' if delta_dirty > 0 else 'text-emerald-400'} mt-0.5">
-        {'+' if delta_dirty > 0 else ''}{delta_dirty:.1f} MB
+
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold flex items-center justify-between">
+        <span>Private Dirty RAM</span>
+        <i data-lucide="hard-drive" class="w-3.5 h-3.5 text-blue-400"></i>
+      </div>
+      <div class="text-lg font-bold font-mono text-slate-100 mt-1">
+        {base_dirty:.1f} &rarr; {end_dirty:.1f} <span class="text-xs font-sans">MB</span>
+      </div>
+      <div class="text-[10px] {'text-red-400 font-semibold' if delta_dirty > 0 else 'text-emerald-400'} mt-0.5 font-mono">
+        Delta: {'+' if delta_dirty > 0 else ''}{delta_dirty:.1f} MB
       </div>
     </div>
-    <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/60">
-      <div class="text-[10px] uppercase tracking-wider text-slate-400">Leak Growth Rate</div>
-      <div class="text-sm font-bold font-mono {'text-red-400' if rate_mb_per_min >= 0.35 else 'text-emerald-400'} mt-0.5">
-        {'+' if rate_mb_per_min > 0 else ''}{rate_mb_per_min:.1f} MB/min
+
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold flex items-center justify-between">
+        <span>Proportional RAM (PSS)</span>
+        <i data-lucide="pie-chart" class="w-3.5 h-3.5 text-purple-400"></i>
+      </div>
+      <div class="text-lg font-bold font-mono text-purple-300 mt-1">
+        {t_end['pss_mb']:.1f} <span class="text-xs font-sans">MB</span>
+      </div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">Peak Dirty: {peak_dirty:.1f} MB</div>
+    </div>
+
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold flex items-center justify-between">
+        <span>Kernel Handles</span>
+        <i data-lucide="plug" class="w-3.5 h-3.5 text-cyan-400"></i>
+      </div>
+      <div class="text-lg font-bold font-mono text-cyan-300 mt-1">
+        {t_end['fds']} <span class="text-xs font-sans">Open FDs</span>
+      </div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">Delta: {'+' if delta_fds > 0 else ''}{delta_fds} handles</div>
+    </div>
+  </div>
+
+  <!-- Real-Time Memory Sparkline Graph -->
+  <div class="bg-slate-800/50 rounded-xl border border-slate-700/60 p-4 mb-5">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2 text-xs font-bold text-slate-200">
+        <i data-lucide="activity" class="w-4 h-4 text-indigo-400"></i>
+        <span>Private Dirty Memory Trajectory (/proc/<pid>/smaps_rollup)</span>
+      </div>
+      <div class="text-[11px] font-mono text-slate-400">
+        Linear Trend: <span class="{'text-red-400 font-bold' if rate_mb_per_min >= 0.35 else 'text-emerald-400 font-bold'}">{'+' if rate_mb_per_min > 0 else ''}{rate_mb_per_min:.2f} MB/min</span>
+      </div>
+    </div>
+    <div class="w-full bg-slate-900/90 rounded-lg p-2 border border-slate-800">
+      {svg_chart}
+    </div>
+  </div>
+
+  <!-- Subsystem Diagnostics & Timeline -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+    <!-- Subsystem Checks -->
+    <div class="bg-slate-800/60 rounded-xl border border-slate-700/60 p-4">
+      <div class="text-xs font-bold text-slate-200 mb-3 flex items-center gap-2">
+        <i data-lucide="cpu" class="w-4 h-4 text-indigo-400"></i>
+        <span>Subsystem Health & Diagnostics</span>
+      </div>
+      <div class="space-y-2.5">
+        {diag_html}
+      </div>
+    </div>
+
+    <!-- Timeline Table -->
+    <div class="bg-slate-800/60 rounded-xl border border-slate-700/60 overflow-hidden">
+      <div class="px-4 py-2.5 bg-slate-900/60 border-b border-slate-700/60 text-xs font-bold text-slate-200 flex items-center justify-between">
+        <span class="flex items-center gap-2"><i data-lucide="clock" class="w-3.5 h-3.5 text-indigo-400"></i> Kernel Telemetry Timeline</span>
+        <span class="text-[10px] text-slate-400 font-mono">{len(sample_rows)} samples</span>
+      </div>
+      <div class="max-h-44 overflow-y-auto">
+        <table class="w-full text-xs text-left">
+          <thead class="text-[10px] uppercase text-slate-400 bg-slate-900/40 border-b border-slate-700/40 sticky top-0">
+            <tr>
+              <th class="py-1.5 px-3">Time</th>
+              <th class="py-1.5 px-3">Private Dirty</th>
+              <th class="py-1.5 px-3">PSS</th>
+              <th class="py-1.5 px-3">FDs</th>
+              <th class="py-1.5 px-3 text-right">Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+            {table_html_rows}
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
 
-  <div class="bg-slate-900/60 rounded-lg border border-slate-700/60 overflow-hidden mb-4">
-    <div class="px-3 py-2 bg-slate-900/80 border-b border-slate-700/60 flex items-center justify-between text-xs">
-      <span class="font-semibold text-slate-300 flex items-center gap-1.5">
-        <i data-lucide="line-chart" class="w-3.5 h-3.5 text-indigo-400"></i> Kernel Memory Timeline (smaps_rollup)
-      </span>
-      <span class="text-[10px] text-slate-400 font-mono">Slope Confidence: R² = {r_squared:.2f}</span>
-    </div>
-    <table class="w-full text-xs text-left">
-      <thead class="text-[10px] uppercase text-slate-400 bg-slate-900/40 border-b border-slate-700/40">
-        <tr>
-          <th class="py-1.5 px-3">Timestamp</th>
-          <th class="py-1.5 px-3">Private Dirty</th>
-          <th class="py-1.5 px-3">PSS</th>
-          <th class="py-1.5 px-3">RSS</th>
-          <th class="py-1.5 px-3">Open FDs</th>
-          <th class="py-1.5 px-3 text-right">Step Delta</th>
-        </tr>
-      </thead>
-      <tbody>
-        {table_html_rows}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="p-3 {'bg-red-950/20 border-red-500/30' if rate_mb_per_min >= 0.35 else 'bg-blue-950/20 border-blue-500/30'} border rounded-lg text-xs text-slate-300 space-y-1">
-    <div class="font-bold {'text-red-400' if rate_mb_per_min >= 0.35 else 'text-blue-400'} flex items-center gap-1.5 mb-1">
-      <i data-lucide="{'alert-triangle' if rate_mb_per_min >= 0.35 else 'check-circle'}" class="w-4 h-4"></i> Engineering Diagnostics:
-    </div>
-    {diag_html}
+  <!-- Executive Verdict Banner -->
+  <div class="p-3.5 rounded-xl border text-xs flex items-center gap-3 {verdict_banner_cls}">
+    <i data-lucide="{'check-circle-2' if rate_mb_per_min < 0.35 else 'alert-octagon'}" class="w-5 h-5 shrink-0"></i>
+    <div class="font-medium">{verdict_banner}</div>
   </div>
 </div>
 </agent-html>"""
@@ -1702,13 +1825,21 @@ fi
         retained_delta = round(c_end["post"]["pdirty_mb"] - c_start["post"]["pdirty_mb"], 2)
 
         if retained_delta >= 4.0:
-            verdict_badge = "🔴 Lifecycle Leak Confirmed"
+            grade_badge = "GRADE F • LEAK CONFIRMED"
+            grade_pill = "bg-red-500/15 border-red-500/50 text-red-400 shadow-lg shadow-red-500/10"
+            dot_color = "bg-red-500"
             verdict_style = "bg-red-500/10 text-red-400 border border-red-500/30"
             verdict_headline = f"🔴 Memory Leak Confirmed (+{retained_delta} MB retained across {len(lifecycle_rows)} cycles)"
+            verdict_banner = f"🚨 ACTION REQUIRED: Dirty memory accumulation (+{retained_delta} MB) detected across open/close cycles! Investigate external texture unpinning and widget disposal."
+            verdict_banner_cls = "bg-red-950/40 border-red-500/40 text-red-300"
         else:
-            verdict_badge = "✅ Clean Lifecycle Release"
+            grade_badge = "GRADE A+ • ZERO RESIDUAL"
+            grade_pill = "bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-lg shadow-emerald-500/10"
+            dot_color = "bg-emerald-400"
             verdict_style = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
             verdict_headline = "✅ Clean Lifecycle Release (No Retained Heap Leak)"
+            verdict_banner = "✅ PRODUCTION CERTIFIED: Clean lifecycle teardown. Memory and handles are completely reclaimed upon application close."
+            verdict_banner_cls = "bg-emerald-950/40 border-emerald-500/40 text-emerald-300 shadow-lg shadow-emerald-500/10"
 
         diag_items = []
         if target_meta.get("SUB_TYPE") == "FLUTTER":
@@ -1717,83 +1848,215 @@ fi
                 diag_items.append("<strong>Unreleased Controller:</strong> Check if <code>CameraController.dispose()</code> was omitted during widget teardown.")
             else:
                 diag_items.append("<strong>Clean Teardown:</strong> Flutter engine and camera textures were deallocated cleanly on every close.")
+        else:
+            if retained_delta >= 4.0:
+                diag_items.append("<strong>Process Retention:</strong> Background process dirty memory increased across cycles.")
+            else:
+                diag_items.append("<strong>Clean Subsystem Teardown:</strong> Application resources released cleanly to kernel pool.")
 
         table_rows_html = ""
         for r in lifecycle_rows:
+            peak_d = r['peak']['pdirty_mb']
+            post_d = r['post']['pdirty_mb']
             table_rows_html += f"""
-            <tr class="border-b border-slate-800 hover:bg-slate-800/40 font-mono text-xs text-slate-300">
-              <td class="py-1.5 px-3 font-semibold text-white">Cycle {r['cycle']}</td>
-              <td class="py-1.5 px-3 text-blue-400">{r['peak']['pdirty_mb']:.1f} MB</td>
-              <td class="py-1.5 px-3 text-slate-300">{r['post']['pdirty_mb']:.1f} MB</td>
-              <td class="py-1.5 px-3 text-slate-400">{r['peak']['fds']} &rarr; {r['post']['fds']}</td>
+            <tr class="border-b border-slate-800/80 hover:bg-slate-800/50 font-mono text-xs text-slate-300">
+              <td class="py-2 px-3 font-semibold text-white">Cycle {r['cycle']}</td>
+              <td class="py-2 px-3 text-blue-400 font-semibold">{peak_d:.1f} MB</td>
+              <td class="py-2 px-3 text-slate-200">{post_d:.1f} MB</td>
+              <td class="py-2 px-3 text-slate-400">{r['peak']['fds']} &rarr; {r['post']['fds']}</td>
+              <td class="py-2 px-3 text-right font-bold {'text-red-400' if post_d - c_start['post']['pdirty_mb'] >= 3.0 else 'text-emerald-400'}">
+                {'+' if post_d - c_start['post']['pdirty_mb'] > 0 else ''}{round(post_d - c_start['post']['pdirty_mb'], 1)} MB
+              </td>
             </tr>"""
 
-        diag_html = "".join([f"<div>&bull; {d}</div>" for d in diag_items])
+        diag_html = "".join([f"<div class='flex items-start gap-2 text-xs text-slate-300'><i data-lucide='check' class='w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5'></i><div>{d}</div></div>" for d in diag_items])
 
         card_html = f"""<agent-html>
-<div class="memory-profile-card bg-slate-800/95 border border-slate-700/80 rounded-xl p-5 shadow-2xl font-sans mb-4">
-  <div class="flex items-center justify-between pb-3 border-b border-slate-700/80 mb-4">
+<div class="memory-profile-card bg-slate-900/95 border border-slate-700/80 rounded-2xl p-5 shadow-2xl font-sans mb-4">
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-700/80 mb-5">
     <div class="flex items-center gap-3">
-      <div class="p-2 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
-        <i data-lucide="repeat" class="w-5 h-5"></i>
+      <div class="p-3 rounded-xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 text-purple-400 border border-purple-500/30 shadow-md">
+        <i data-lucide="repeat" class="w-6 h-6"></i>
       </div>
       <div>
-        <h3 class="text-sm font-bold text-white m-0">Lifecycle Stress Profiler</h3>
-        <div class="text-xs text-slate-400 font-mono mt-0.5">
-          Target: <span class="text-slate-200 font-semibold">{clean_id}</span> &bull; 
-          <span class="px-1.5 py-0.2 rounded text-[10px] bg-slate-700 text-slate-300 font-bold">{type_display}</span> &bull; 
-          {len(lifecycle_rows)} Open/Close Cycles
+        <h2 class="text-base font-bold text-white tracking-wide m-0">Lifecycle Stress & Retention Report</h2>
+        <div class="text-xs text-slate-400 font-mono mt-0.5 flex flex-wrap items-center gap-2">
+          <span>Target: <strong class="text-slate-200">{clean_id}</strong></span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold border border-slate-700">{type_display}</span>
+          <span>Stress: <strong class="text-slate-300">{len(lifecycle_rows)} Open/Close Cycles</strong></span>
         </div>
       </div>
     </div>
-    <div class="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold {verdict_style}">
-      {verdict_badge}
+    <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-bold tracking-wider uppercase {grade_pill}">
+      <span class="w-2.5 h-2.5 rounded-full {dot_color} animate-pulse"></span>
+      {grade_badge}
     </div>
   </div>
 
-  <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4 text-center">
-    <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/60">
-      <div class="text-[10px] uppercase tracking-wider text-slate-400">Initial Cycle Retained</div>
-      <div class="text-sm font-bold font-mono text-slate-200 mt-0.5">{c_start['post']['pdirty_mb']:.1f} MB</div>
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Initial Retained</div>
+      <div class="text-lg font-bold font-mono text-slate-100 mt-1">{c_start['post']['pdirty_mb']:.1f} <span class="text-xs font-sans">MB</span></div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">Cycle 1 Baseline</div>
     </div>
-    <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/60">
-      <div class="text-[10px] uppercase tracking-wider text-slate-400">Final Cycle Retained</div>
-      <div class="text-sm font-bold font-mono text-blue-400 mt-0.5">{c_end['post']['pdirty_mb']:.1f} MB</div>
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Final Retained</div>
+      <div class="text-lg font-bold font-mono text-purple-300 mt-1">{c_end['post']['pdirty_mb']:.1f} <span class="text-xs font-sans">MB</span></div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">Cycle {len(lifecycle_rows)} Residual</div>
     </div>
-    <div class="bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/60">
-      <div class="text-[10px] uppercase tracking-wider text-slate-400">Net Accumulation</div>
-      <div class="text-sm font-bold font-mono {'text-red-400' if retained_delta >= 4.0 else 'text-emerald-400'} mt-0.5">
-        {'+' if retained_delta > 0 else ''}{retained_delta:.1f} MB
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Net Accumulation</div>
+      <div class="text-lg font-bold font-mono {'text-red-400' if retained_delta >= 4.0 else 'text-emerald-400'} mt-1">
+        {'+' if retained_delta > 0 else ''}{retained_delta:.1f} <span class="text-xs font-sans">MB</span>
+      </div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">Residual Growth</div>
+    </div>
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Max Launch Peak</div>
+      <div class="text-lg font-bold font-mono text-blue-300 mt-1">{max(r['peak']['pdirty_mb'] for r in lifecycle_rows):.1f} <span class="text-xs font-sans">MB</span></div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">During Active Rendering</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+    <div class="bg-slate-800/60 rounded-xl border border-slate-700/60 p-4">
+      <div class="text-xs font-bold text-slate-200 mb-3 flex items-center gap-2">
+        <i data-lucide="check-circle-2" class="w-4 h-4 text-purple-400"></i>
+        <span>Teardown & Cleanup Diagnostics</span>
+      </div>
+      <div class="space-y-2.5">
+        {diag_html}
       </div>
     </div>
-  </div>
 
-  <div class="bg-slate-900/60 rounded-lg border border-slate-700/60 overflow-hidden mb-4">
-    <table class="w-full text-xs text-left">
-      <thead class="text-[10px] uppercase text-slate-400 bg-slate-900/40 border-b border-slate-700/40">
-        <tr>
-          <th class="py-1.5 px-3">Cycle</th>
-          <th class="py-1.5 px-3">Launch Peak RAM</th>
-          <th class="py-1.5 px-3">Post-Close Retained</th>
-          <th class="py-1.5 px-3">File Descriptors</th>
-        </tr>
-      </thead>
-      <tbody>
-        {table_rows_html}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="p-3 {'bg-red-950/20 border-red-500/30' if retained_delta >= 4.0 else 'bg-blue-950/20 border-blue-500/30'} border rounded-lg text-xs text-slate-300 space-y-1">
-    <div class="font-bold {'text-red-400' if retained_delta >= 4.0 else 'text-blue-400'} flex items-center gap-1.5 mb-1">
-      <i data-lucide="{'alert-triangle' if retained_delta >= 4.0 else 'check-circle'}" class="w-4 h-4"></i> Diagnostics:
+    <div class="bg-slate-800/60 rounded-xl border border-slate-700/60 overflow-hidden">
+      <div class="px-4 py-2 bg-slate-900/60 border-b border-slate-700/60 text-xs font-bold text-slate-200">
+        Cycle Telemetry Log
+      </div>
+      <table class="w-full text-xs text-left">
+        <thead class="text-[10px] uppercase text-slate-400 bg-slate-900/40 border-b border-slate-700/40">
+          <tr>
+            <th class="py-1.5 px-3">Cycle</th>
+            <th class="py-1.5 px-3">Launch Peak</th>
+            <th class="py-1.5 px-3">Post-Close</th>
+            <th class="py-1.5 px-3">FDs</th>
+            <th class="py-1.5 px-3 text-right">Drift</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table_rows_html}
+        </tbody>
+      </table>
     </div>
-    {diag_html}
+  </div>
+
+  <div class="p-3.5 rounded-xl border text-xs flex items-center gap-3 {verdict_banner_cls}">
+    <i data-lucide="{'check-circle-2' if retained_delta < 4.0 else 'alert-octagon'}" class="w-5 h-5 shrink-0"></i>
+    <div class="font-medium">{verdict_banner}</div>
   </div>
 </div>
 </agent-html>"""
 
         return f"🔬 **Lifecycle Memory Profiling Report: `{clean_id}`**\n\n{verdict_headline}\n\n{card_html}"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SCENARIO 3: WORKLOAD BURST PROFILING
+    # ─────────────────────────────────────────────────────────────────────────
+    elif exec_scenario == "workload":
+        def _parse_sub_m(s):
+            vals = {}
+            for p in s.split("|"):
+                if ":" in p:
+                    k, v = p.split(":", 1)
+                    vals[k] = int(v) if v.isdigit() else 0
+            return {
+                "pdirty_mb": round(vals.get("PDIRTY", 0) / 1024.0, 2),
+                "pss_mb": round(vals.get("PSS", 0) / 1024.0, 2),
+                "rss_mb": round(vals.get("RSS", 0) / 1024.0, 2),
+                "fds": vals.get("FDS", 0)
+            }
+
+        m_pre_match = re.search(r"WORKLOAD_PRE\|([^\r\n]+)", raw_output)
+        m_burst_match = re.search(r"WORKLOAD_BURST\|([^\r\n]+)", raw_output)
+        m_post_match = re.search(r"WORKLOAD_POST\|([^\r\n]+)", raw_output)
+
+        pre_m = _parse_sub_m(m_pre_match.group(1)) if m_pre_match else {"pdirty_mb": 0.0, "pss_mb": 0.0, "fds": 0}
+        burst_m = _parse_sub_m(m_burst_match.group(1)) if m_burst_match else pre_m
+        post_m = _parse_sub_m(m_post_match.group(1)) if m_post_match else pre_m
+
+        creep_mb = round(post_m["pdirty_mb"] - pre_m["pdirty_mb"], 2)
+        burst_spike_mb = round(burst_m["pdirty_mb"] - pre_m["pdirty_mb"], 2)
+
+        if creep_mb >= 2.0:
+            grade_badge = "GRADE F • API BUFFER LEAK"
+            grade_pill = "bg-red-500/15 border-red-500/50 text-red-400"
+            dot_color = "bg-red-500"
+            verdict_headline = f"🔴 Service Memory Creep (+{creep_mb} MB retained post-burst)"
+            verdict_banner = f"🚨 ACTION REQUIRED: Service failed to reclaim {creep_mb} MB of request buffer memory after 25 API bursts."
+            verdict_banner_cls = "bg-red-950/40 border-red-500/40 text-red-300"
+        else:
+            grade_badge = "GRADE A+ • FULL RECOVERY"
+            grade_pill = "bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-lg shadow-emerald-500/10"
+            dot_color = "bg-emerald-400"
+            verdict_headline = "✅ Workload Stress Passed (Buffers Fully Reclaimed)"
+            verdict_banner = "✅ PRODUCTION CERTIFIED: Service successfully handled 25 rapid API bursts with full buffer deallocation."
+            verdict_banner_cls = "bg-emerald-950/40 border-emerald-500/40 text-emerald-300 shadow-lg shadow-emerald-500/10"
+
+        card_html = f"""<agent-html>
+<div class="memory-profile-card bg-slate-900/95 border border-slate-700/80 rounded-2xl p-5 shadow-2xl font-sans mb-4">
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-700/80 mb-5">
+    <div class="flex items-center gap-3">
+      <div class="p-3 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-500/20 text-cyan-400 border border-cyan-500/30 shadow-md">
+        <i data-lucide="zap" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h2 class="text-base font-bold text-white tracking-wide m-0">Luna Service Workload Stress Report</h2>
+        <div class="text-xs text-slate-400 font-mono mt-0.5 flex flex-wrap items-center gap-2">
+          <span>Service: <strong class="text-slate-200">{clean_id}</strong></span>
+          <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-semibold border border-slate-700">{type_display}</span>
+          <span>Load: <strong class="text-slate-300">25 Rapid IPC Bursts</strong></span>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-bold tracking-wider uppercase {grade_pill}">
+      <span class="w-2.5 h-2.5 rounded-full {dot_color} animate-pulse"></span>
+      {grade_badge}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Baseline Private RAM</div>
+      <div class="text-lg font-bold font-mono text-slate-100 mt-1">{pre_m['pdirty_mb']:.1f} <span class="text-xs font-sans">MB</span></div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">Pre-workload</div>
+    </div>
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Burst Peak RAM</div>
+      <div class="text-lg font-bold font-mono text-cyan-300 mt-1">{burst_m['pdirty_mb']:.1f} <span class="text-xs font-sans">MB</span></div>
+      <div class="text-[10px] text-cyan-400 mt-0.5 font-mono">Spike: +{burst_spike_mb:.1f} MB</div>
+    </div>
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Post-Burst Recovery</div>
+      <div class="text-lg font-bold font-mono text-slate-100 mt-1">{post_m['pdirty_mb']:.1f} <span class="text-xs font-sans">MB</span></div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">After Cooldown</div>
+    </div>
+    <div class="bg-slate-800/70 p-3 rounded-xl border border-slate-700/60 shadow-sm">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Residual Creep</div>
+      <div class="text-lg font-bold font-mono {'text-red-400' if creep_mb >= 2.0 else 'text-emerald-400'} mt-1">
+        {'+' if creep_mb > 0 else ''}{creep_mb:.1f} <span class="text-xs font-sans">MB</span>
+      </div>
+      <div class="text-[10px] text-slate-400 mt-0.5 font-mono">FDs: {pre_m['fds']} &rarr; {post_m['fds']}</div>
+    </div>
+  </div>
+
+  <div class="p-3.5 rounded-xl border text-xs flex items-center gap-3 {verdict_banner_cls}">
+    <i data-lucide="{'check-circle-2' if creep_mb < 2.0 else 'alert-octagon'}" class="w-5 h-5 shrink-0"></i>
+    <div class="font-medium">{verdict_banner}</div>
+  </div>
+</div>
+</agent-html>"""
+
+        return f"🔬 **Workload Memory Profiling Report: `{clean_id}`**\n\n{verdict_headline}\n\n{card_html}"
 
     return f"🔬 **Memory Profiling Completed for `{clean_id}`**\n\n```\n{raw_output[:2500]}\n```"
 

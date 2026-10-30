@@ -1241,6 +1241,7 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
             last_screenshot_widget = None
             last_flamegraph_widget = None
             last_log_widget = None
+            last_genui_widget = None
             last_tool_output = None
             async with httpx.AsyncClient() as client:
                 for _ in range(25):
@@ -1270,12 +1271,15 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                             else:
                                 content = "⚠️ Command finished, but no output was returned."
                         else:
-                            if last_log_widget and "<agent-html>" not in content:
-                                content = f"{content}\n\n{last_log_widget}".strip()
-                            elif last_screenshot_widget and "<agent-html>" not in content:
-                                content = f"{content}\n\n{last_screenshot_widget}".strip()
-                            elif last_flamegraph_widget and "<agent-html>" not in content:
-                                content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                            if "<agent-html>" not in content:
+                                if last_genui_widget:
+                                    content = f"{content}\n\n{last_genui_widget}".strip()
+                                elif last_log_widget:
+                                    content = f"{content}\n\n{last_log_widget}".strip()
+                                elif last_screenshot_widget:
+                                    content = f"{content}\n\n{last_screenshot_widget}".strip()
+                                elif last_flamegraph_widget:
+                                    content = f"{content}\n\n{last_flamegraph_widget}".strip()
                         return {"intent": "chat", "message": content}
 
                     for tool_call in msg["tool_calls"]:
@@ -2401,6 +2405,10 @@ async def llm_chat(req: ChatRequest, request: Request):
                             if is_tool_error and not res_text.startswith("TOOL EXECUTION FAILED"):
                                 res_text = f"TOOL EXECUTION FAILED: {res_text}\nCRITICAL INSTRUCTION: You MUST inform the user that the action failed and explain the error. DO NOT say it succeeded."
                             
+                            if "<agent-html>" in res_text and "</agent-html>" in res_text:
+                                m_gen = re.search(r'(<agent-html>[\s\S]*?</agent-html>)', res_text)
+                                if m_gen:
+                                    last_genui_widget = m_gen.group(1)
                             last_tool_output = res_text
                             messages.append({
                                 "role": "tool",
@@ -2420,7 +2428,9 @@ async def llm_chat(req: ChatRequest, request: Request):
                             })
                             
                 final_msg = "I reached the maximum number of tool calls and had to stop."
-                if last_log_widget and "<agent-html>" not in final_msg:
+                if last_genui_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_genui_widget
+                elif last_log_widget and "<agent-html>" not in final_msg:
                     final_msg = last_log_widget
                 elif last_screenshot_widget and "<agent-html>" not in final_msg:
                     final_msg = last_screenshot_widget
