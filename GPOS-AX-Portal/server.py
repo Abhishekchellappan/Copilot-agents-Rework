@@ -904,9 +904,10 @@ Present your findings, benchmarks, diagnostics, and logs using rich visual UI wi
 - When an `<agent-html>` widget is provided by a tool (e.g. for screenshots, flamegraphs, system logs, or benchmarks), output that exact `<agent-html>` widget as your response.
 - When presenting logs or shell execution results, present them using the provided `<agent-html>` Log Terminal widget or a well-formatted code block. NEVER return an empty response!
 
-1. **CPU & Memory Benchmark Results**:
-When you run a benchmark (e.g. `run_perf_benchmark`), ALWAYS emit the `<device-benchmark>` telemetry tag first so the Device HUD gauges update:
+1. **CPU Hardware Performance Benchmarks**:
+When you run a CPU hardware benchmark (`run_perf_benchmark`), emit the `<device-benchmark>` telemetry tag so the Device HUD gauges update:
 <device-benchmark>{"ipc": 1.29, "cacheMiss": 546, "pageFaults": 17, "totalCycles": 13200000}</device-benchmark>
+CRITICAL: NEVER emit the `<device-benchmark>` tag when checking memory leaks (`profile_memory_leaks`)! Memory leak investigations are NOT CPU benchmarks; they must present the full Memory Health Report Card using the `<agent-html>...</agent-html>` widget returned by the tool.
 
 CRITICAL BENCHMARK FORMATTING DIRECTIVE:
 You MUST NEVER dump raw terminal `<pre>` blocks of `top` or `/proc/meminfo`!
@@ -1259,8 +1260,12 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
 
                     if not msg.get("tool_calls"):
                         content = (msg.get("content") or "").strip()
-                        if not content:
-                            if last_log_widget:
+                        # If content is empty or ONLY contains a dummy <device-benchmark> tag without any text, use the genui widget
+                        clean_content = re.sub(r'<device-benchmark>[\s\S]*?</device-benchmark>', '', content).strip()
+                        if not clean_content:
+                            if last_genui_widget:
+                                content = last_genui_widget
+                            elif last_log_widget:
                                 content = last_log_widget
                             elif last_screenshot_widget:
                                 content = last_screenshot_widget
@@ -1492,6 +1497,10 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
 
                             if not res_text:
                                 res_text = "(Command returned empty output)"
+                            if "<agent-html>" in res_text and "</agent-html>" in res_text:
+                                m_gen = re.search(r'(<agent-html>[\s\S]*?</agent-html>)', res_text)
+                                if m_gen:
+                                    last_genui_widget = m_gen.group(1)
                             last_tool_output = res_text
                         except Exception as e:
                             res_text = f"[ERROR] Tool execution failed: {str(e)}"
@@ -1505,7 +1514,9 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                         })
 
                 final_msg = "The agent reached the maximum number of iterations."
-                if last_log_widget and "<agent-html>" not in final_msg:
+                if last_genui_widget and "<agent-html>" not in final_msg:
+                    final_msg = last_genui_widget
+                elif last_log_widget and "<agent-html>" not in final_msg:
                     final_msg = last_log_widget
                 elif last_screenshot_widget and "<agent-html>" not in final_msg:
                     final_msg = last_screenshot_widget
@@ -1694,6 +1705,7 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
             last_screenshot_widget = None
             last_flamegraph_widget = None
             last_log_widget = None
+            last_genui_widget = None
             last_tool_output = None
             async with httpx.AsyncClient(timeout=120.0) as client:
                 for _ in range(25):
@@ -1726,12 +1738,15 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                             else:
                                 content = "⚠️ Command finished, but no output was returned."
                         else:
-                            if last_log_widget and "<agent-html>" not in content:
-                                content = f"{content}\n\n{last_log_widget}".strip()
-                            elif last_screenshot_widget and "<agent-html>" not in content:
-                                content = f"{content}\n\n{last_screenshot_widget}".strip()
-                            elif last_flamegraph_widget and "<agent-html>" not in content:
-                                content = f"{content}\n\n{last_flamegraph_widget}".strip()
+                            if "<agent-html>" not in content:
+                                if last_genui_widget:
+                                    content = f"{content}\n\n{last_genui_widget}".strip()
+                                elif last_log_widget:
+                                    content = f"{content}\n\n{last_log_widget}".strip()
+                                elif last_screenshot_widget:
+                                    content = f"{content}\n\n{last_screenshot_widget}".strip()
+                                elif last_flamegraph_widget:
+                                    content = f"{content}\n\n{last_flamegraph_widget}".strip()
                         return {"intent": "chat", "message": content}
                         
                     for tool_call in message["tool_calls"]:
