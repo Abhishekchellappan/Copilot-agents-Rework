@@ -256,7 +256,7 @@ def _record_audit(issue_key: str, user: str, priority: str, action: str, prereq_
     # If the previous action was PREREQ_MISSING, do NOT allow a generic EVALUATED or PENDING action to flip prereq_ok to True!
     existing = next((e for e in reversed(_audit_log) if e.get("issue_key") == issue_key), None)
     if existing:
-        if existing.get("action") == "PREREQ_MISSING" and action not in ("ANALYSIS_DONE",):
+        if existing.get("action") == "PREREQ_MISSING" and action in ("EVALUATED", "PENDING_AUDIT"):
             existing["cycle_at"] = now_iso
             existing["priority"] = priority
             if missing:
@@ -304,6 +304,17 @@ Issue Key: {issue_key}
 Reporter: {reporter_username}
 Current ticket labels: {current_labels}
 Should post reminder comment if prerequisites still missing: {allow_reminder}
+
+SPECIAL RULE FOR TICKETS WITH 'AX_AutoTriage-Done':
+- If 'AX_AutoTriage-Done' is already present in Current ticket labels, prerequisite checks (Phase 3) and initial automated bug analysis report (Phase 4) have ALREADY been completed. DO NOT re-post prerequisite failure or initial analysis comments!
+- Focus on Phase 1 (Ingest) and Phase 2 (Autonomous Comment Resolution).
+- Inspect the comments. If a user, QE, or reporter asked an unanswered question (e.g., asking for target board IP, build version, logs, repro steps), answer it autonomously using facts from the ticket description, attachments, or summary.
+- Address the user who asked using Jira user mention format `[~username]` (e.g., `[~varun.baba]`).
+- Format your reply exactly as:
+  [Autonomous Ticket Assistant Reply]
+  Hi [~username], based on the ticket description, the target board IP is ... and the build image version is ...
+- Post it immediately using `jira_add_comment(issue_key="{issue_key}", body=...)`.
+- If all inquiries are already resolved, finish without posting duplicate comments.
 
 You MUST follow this exact 4-phase procedure:
 
@@ -413,7 +424,6 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
     proj_clause = ", ".join(f'"{p}"' for p in projects)
     jql = (
         f'project in ({proj_clause}) AND assignee = "{username}" AND issuetype = "Bug" '
-        f'AND (labels is EMPTY OR labels not in ("AX_AutoTriage-Done")) '
         f'AND updated >= -{BUG_WATCHDOG_LOOKBACK_DAYS}d '
         f'ORDER BY priority ASC, updated DESC'
     )
@@ -540,12 +550,21 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                 {"role": "user", "content": f"Begin bug triage for {issue_key}. Reporter: {reporter_username}. Priority: {pri_name}. Existing labels: {current_labels}."}
             ]
 
-            headers = {
-                "Authorization": f"Bearer {user_llm_key}",
-                "Content-Type": "application/json",
-                "X-Title": "EXACODE SWE(API)",
-                "X-Model": "Chat-EXACODE-A",
-            }
+            is_google_api = "googleapis.com" in user_llm_url.lower() or "generativelanguage" in user_llm_url.lower()
+            if is_google_api:
+                model_name = "gemini-3-flash-preview"
+                headers = {
+                    "Authorization": f"Bearer {user_llm_key}",
+                    "Content-Type": "application/json",
+                }
+            else:
+                model_name = "Chat-EXACODE-A"
+                headers = {
+                    "Authorization": f"Bearer {user_llm_key}",
+                    "Content-Type": "application/json",
+                    "X-Title": "EXACODE SWE(API)",
+                    "X-Model": "Chat-EXACODE-A",
+                }
             llm_url = user_llm_url.rstrip('/')
             if not llm_url.endswith('chat/completions'):
                 llm_url += '/chat/completions' if llm_url.endswith('v1') else '/v1/chat/completions'
@@ -553,7 +572,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
             async with httpx.AsyncClient(timeout=180.0) as client:
                 for _ in range(15):
                     payload = {
-                        "model": "Chat-EXACODE-A",
+                        "model": model_name,
                         "messages": messages,
                         "tools": tools,
                         "tool_choice": "auto",
@@ -561,6 +580,10 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                     }
                     try:
                         resp = await client.post(llm_url, headers=headers, json=payload)
+                        if resp.status_code == 503 and is_google_api and model_name != "gemini-3.5-flash":
+                            model_name = "gemini-3.5-flash"
+                            payload["model"] = model_name
+                            resp = await client.post(llm_url, headers=headers, json=payload)
                         if resp.status_code != 200:
                             logger.error(f"Bug watchdog LLM error ({resp.status_code}): {resp.text}")
                             break
@@ -648,7 +671,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                                 logger.warning(f"Could not update done label for {issue_key}: {err}")
                                             _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Analysis comment posted on ticket", analysis_ok=True)
                                         elif is_autonomous_reply:
-                                            _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", False, "", "Autonomous answer posted to user/QE inquiry", analysis_ok=False)
+                                            _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", True, "", "Autonomous answer posted to user/QE inquiry", analysis_ok=True)
                                         else:
                                             _record_audit(issue_key, username, pri_name, "COMMENTED", False, "", "Comment posted on ticket", analysis_ok=False)
                                 elif fn == "jira_update_issue":
@@ -684,7 +707,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                                             "created": c.get("created"),
                                                             "body": c.get("body")
                                                         }
-                                                        for c in fields.get("comment", {}).get("comments", []) if isinstance(c, dict)
+                                                        for c in fields.get("comment", {}).get("comments", [])[-15:] if isinstance(c, dict)
                                                     ]
                                                 }
                                                 call_res = json.dumps(clean_issue, indent=2)
@@ -707,7 +730,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                                     "created": c.get("created"),
                                                     "body": c.get("body")
                                                 }
-                                                for c in comment_list if isinstance(c, dict)
+                                                for c in comment_list[-15:] if isinstance(c, dict)
                                             ]
                                             call_res = json.dumps(clean_comments, indent=2)
                                         except Exception:
