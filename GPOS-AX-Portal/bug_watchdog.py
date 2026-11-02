@@ -14,21 +14,26 @@ Workflow:
 2. For each enabled user, queries Jira for bugs assigned to them:
    `project in (<user_projects>) AND assignee = "<username>" AND issuetype = Bug AND labels not in (AX_AutoTriage-Done)`
 3. Sorts candidate bugs by priority (P1 -> P2 -> P3).
-4. For each bug, checks 4 prerequisites:
-   - System/Application Logs
-   - Coredump file
-   - Steps to Reproduce
-   - Related Test Cases
+4. For each bug:
+   - Reads all available fields: Summary, Description, Attachments, and complete Comment history.
+   - Autonomous Comment Resolution (Rule 2): If a user or QE asks a question in comments that can be answered from ticket context, replies automatically.
+   - Conditional Prerequisite Check (Rule 1):
+     1. Logs (Always mandatory)
+     2. Steps to Reproduce (Always mandatory)
+     3. Related Test Cases (Always mandatory)
+     4. Core dump file (CONDITIONAL: required ONLY if ticket mentions a crash/abort/SIGSEGV; skipped if non-crashing bug).
 5. If prerequisites are MISSING:
    - Posts a comment on the Jira ticket listing missing items.
    - Adds label 'AX_AutoTriage-Pending'.
    - NO EMAIL is sent to reporter or user (zero email spam; discussion stays on Jira ticket).
-6. If prerequisites are PRESENT:
+   - Records audit status PREREQ_MISSING (prereq_ok=False, analysis_ok=0).
+6. If prerequisites are PRESENT (or satisfied under conditional rules):
    - Downloads logs/coredumps, performs crash signal search and Device Agent GDB analysis.
-   - Posts "🔎 Initial Automated Bug Analysis" comment directly to the Jira ticket.
-   - Adds label 'AX_AutoTriage-Done'.
+   - Posts "### 🔎 Initial Automated Bug Analysis" comment directly to the Jira ticket.
+   - Removes 'AX_AutoTriage-Pending', adds label 'AX_AutoTriage-Done'.
    - Sends notification email ONLY to the assigned user:
      "Initial analysis added to <KEY>. Please review and edit if needed."
+   - Records audit status ANALYSIS_DONE (prereq_ok=True, analysis_ok=1).
 """
 
 import os
@@ -139,6 +144,46 @@ def _init_watchdog_db():
 _init_watchdog_db()
 
 
+def _load_audit_history():
+    """Seed in-memory audit log from persistent SQLite storage on startup."""
+    global _audit_log
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT issue_key, priority, action, prereq_ok, missing_items, reminded_at, analysis_ok, notes "
+            "FROM watchdog_audit ORDER BY id DESC LIMIT 100"
+        ).fetchall()
+        conn.close()
+        loaded = []
+        seen = set()
+        for r in rows:
+            k = r["issue_key"]
+            if k not in seen:
+                seen.add(k)
+                notes_val = r["notes"] or ""
+                user_str = ""
+                if "User:" in notes_val:
+                    user_str = notes_val.split("|")[0].replace("User:", "").strip()
+                loaded.append({
+                    "issue_key": k,
+                    "user": user_str,
+                    "priority": r["priority"],
+                    "action": r["action"],
+                    "prereq_ok": bool(r["prereq_ok"]),
+                    "missing_items": r["missing_items"] or "",
+                    "analysis_ok": int(r["analysis_ok"] or 0),
+                    "reminded_at": r["reminded_at"],
+                    "notes": notes_val,
+                    "cycle_at": r["reminded_at"]
+                })
+        _audit_log = loaded[::-1]
+    except Exception as e:
+        logger.warning(f"Could not load audit history from DB: {e}")
+
+_load_audit_history()
+
+
 def _get_enrolled_users() -> List[Dict[str, Any]]:
     """Retrieve all users who have enabled Bug Auto-Triage in their Portal Settings."""
     try:
@@ -188,29 +233,41 @@ def _should_post_reminder(issue_key: str) -> bool:
         return True
 
 
-def _record_audit(issue_key: str, user: str, priority: str, action: str, prereq_ok: bool, missing: str, notes: str):
+def _record_audit(issue_key: str, user: str, priority: str, action: str, prereq_ok: bool, missing: str, notes: str, analysis_ok: Optional[bool] = None):
     global _audit_log
     now_iso = datetime.now(timezone.utc).isoformat()
+    if analysis_ok is None:
+        analysis_ok = (action == "ANALYSIS_DONE")
+
     entry = {
         "issue_key": issue_key,
         "user": user,
         "priority": priority,
         "action": action,
-        "prereq_ok": prereq_ok,
+        "prereq_ok": bool(prereq_ok),
         "missing_items": missing,
-        "analysis_ok": 1 if prereq_ok else 0,
+        "analysis_ok": 1 if analysis_ok else 0,
         "reminded_at": now_iso,
         "notes": notes,
         "cycle_at": now_iso
     }
 
-    # Deduplicate in-memory audit log: if same issue and same action exists, update it rather than duplicating
-    existing = next((e for e in reversed(_audit_log) if e.get("issue_key") == issue_key and e.get("action") == action), None)
+    # Deduplicate in-memory audit log by issue_key:
+    # If the previous action was PREREQ_MISSING, do NOT allow a generic EVALUATED or PENDING action to flip prereq_ok to True!
+    existing = next((e for e in reversed(_audit_log) if e.get("issue_key") == issue_key), None)
     if existing:
-        existing["cycle_at"] = now_iso
-        existing["priority"] = priority
-        existing["missing_items"] = missing or existing.get("missing_items", "")
-        existing["notes"] = notes
+        if existing.get("action") == "PREREQ_MISSING" and action not in ("ANALYSIS_DONE",):
+            existing["cycle_at"] = now_iso
+            existing["priority"] = priority
+            if missing:
+                existing["missing_items"] = missing
+            if notes:
+                existing["notes"] = notes
+            # Strictly preserve prereq_ok = False and analysis_ok = 0
+            existing["prereq_ok"] = False
+            existing["analysis_ok"] = 0
+        else:
+            existing.update(entry)
     else:
         _audit_log.append(entry)
 
@@ -224,7 +281,7 @@ def _record_audit(issue_key: str, user: str, priority: str, action: str, prereq_
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             issue_key, priority, action, 1 if prereq_ok else 0, missing,
-            now_iso, 1 if prereq_ok else 0, f"User: {user} | {notes}"
+            now_iso, 1 if analysis_ok else 0, f"User: {user} | {notes}"
         ))
         conn.commit()
         conn.close()
@@ -248,36 +305,70 @@ Reporter: {reporter_username}
 Current ticket labels: {current_labels}
 Should post reminder comment if prerequisites still missing: {allow_reminder}
 
-Your task:
-1. Call `jira_get_issue(issue_key="{issue_key}")` to retrieve full description, fields, and labels. Verify the reporter username (fields.reporter.name).
-2. Call `jira_list_attachments(issue_key="{issue_key}")` to inspect attached evidence.
-3. Check the 4 mandatory prerequisites:
-   A. System or application Logs attached (.log, .txt, .tar, .tar.gz, .tgz, .zip, .7z)
-   B. Coredump file attached (filename containing 'core' or 'dump') OR explicitly mentioned as N/A in description
-   C. Detailed Steps to Reproduce present in description
-   D. Related Test Cases referenced in description (e.g. 'TC-', 'Test Case', 'Test Scenario') or test file attached
+You MUST follow this exact 4-phase procedure:
 
-4. If ANY prerequisite is MISSING:
-   - If 'AX_AutoTriage-Pending' is NOT in labels, OR if allow_reminder is True:
-     - Formulate a clear, professional comment addressed to the reporter using Jira user mention format `[~reporter_username]`:
-       Hi [~{reporter_username}],
+════════════════════════════════════════════════════════════════════════════════
+PHASE 1: INGEST ALL TICKET FIELDS & COMMENTS
+════════════════════════════════════════════════════════════════════════════════
+1. Call `jira_get_issue(issue_key="{issue_key}")` to retrieve full summary, description, fields, attachments, and labels. Verify reporter username (fields.reporter.name).
+2. Call `jira_get_comments(issue_key="{issue_key}")` to fetch the complete chronological comment thread.
+3. Call `jira_list_attachments(issue_key="{issue_key}")` to inspect all attached artifacts.
+4. Thoroughly read and understand ALL available fields: Summary, Description, Attachments, and all prior Comments.
 
-       ### ❌ Prerequisites Check: FAILED
-       The following mandatory items are missing from this bug report:
-       - [List missing items here with instructions on what to attach]
-       Please attach or provide the missing items so automated root cause analysis can proceed.
-     - Call `jira_add_comment(issue_key="{issue_key}", body=...)` with this comment text.
-     - Call `jira_update_issue(issue_key="{issue_key}", fields={{"labels": existing_labels + ["AX_AutoTriage-Pending"]}})`
-   - CRITICAL RULE: Do NOT send any email when prerequisites are missing. Stop triage for this issue.
+════════════════════════════════════════════════════════════════════════════════
+PHASE 2: AUTONOMOUS COMMENT RESOLUTION (RULE 2)
+════════════════════════════════════════════════════════════════════════════════
+- Monitor the comments section. Check if any user, QE, or developer has asked a question, requested clarification, or inquired about the bug (e.g., asking for build version, device logs, board IP, reproduction steps, test environment details, error codes, or clarification).
+- If there is an unanswered question in the comments that CAN be answered using the ticket's summary, description, attachments, or prior comment history:
+  - Generate an immediate, clear, professional answer citing the facts from the ticket.
+  - Mention the user who asked using Jira user mention format `[~username]`.
+  - Format the reply exactly as:
+    [Autonomous Ticket Assistant Reply]
+    Hi [~username],
 
-5. If ALL 4 prerequisites are PRESENT:
-   - Download the log/coredump using `jira_download_attachment`.
-   - If compressed, call `extract_archive`.
-   - Call `search_log_contents` or `read_log_snippet` to locate errors, crashes, SIGSEGV, Call Trace, or assertion failures.
-   - If coredump is present and Device Agent tools (e.g., `run_gdb_backtrace`) are available, use them.
-   - Call `jira_add_comment(issue_key="{issue_key}", body=...)` with the comprehensive "### 🔎 Initial Automated Bug Analysis" report.
-   - Clean labels: remove 'AX_AutoTriage-Pending' if present, and add 'AX_AutoTriage-Done'. Call `jira_update_issue(issue_key="{issue_key}", fields={{"labels": cleaned_labels + ["AX_AutoTriage-Done"]}})`.
-   - Call `notify_assignee_email(issue_key="{issue_key}")` so the assigned developer is informed that the initial analysis has been posted and they can review/edit it.
+    <Your clear, direct answer resolving their question based on the ticket summary, description, or attachments>
+  - Post it immediately using `jira_add_comment(issue_key="{issue_key}", body=...)`.
+  - Do this autonomously without waiting for human intervention!
+
+════════════════════════════════════════════════════════════════════════════════
+PHASE 3: CONDITIONAL PREREQUISITE CHECK (RULE 1)
+════════════════════════════════════════════════════════════════════════════════
+Evaluate the 4 prerequisites using the following exact conditional rules:
+1. System or application Logs (ALWAYS MANDATORY):
+   - Attached log file (.log, .txt, .tar, .tar.gz, .tgz, .zip, .7z) or full log snippet pasted in description.
+2. Steps to Reproduce (ALWAYS MANDATORY):
+   - Clear, numbered or detailed steps to reproduce the bug present in the summary or description.
+3. Related Test Cases (ALWAYS MANDATORY):
+   - Reference to a test case in description (e.g., 'TC-', 'Test Case', 'Test Scenario', 'TC_') OR a test file/automation script attached.
+4. Core dump file (CONDITIONAL PREREQUISITE):
+   - Carefully check the ticket Summary, Description, and Comments: Does the bug explicitly describe a process CRASH, SIGSEGV, segmentation fault, fatal exception, abort, panic, or core dump?
+   - CRASHING BUG: A coredump file (filename containing 'core' or 'dump') OR an explicit note stating why core dump is not available / N/A is REQUIRED. If missing, flag Coredump as MISSING.
+   - NON-CRASHING BUG: If the ticket describes a non-crashing issue (such as a UI visual bug, functional defect, display error, button behavior, data synchronization error, or memory leak/retention without crash), SKIP the core dump check! Mark Coredump as NOT REQUIRED (PASS) and proceed with analysis.
+
+════════════════════════════════════════════════════════════════════════════════
+PHASE 4: OUTCOME & ACTIONS
+════════════════════════════════════════════════════════════════════════════════
+- IF ANY MANDATORY PREREQUISITE IS MISSING:
+  - If 'AX_AutoTriage-Pending' is NOT in labels, OR if allow_reminder is True:
+    - Formulate a clear, professional comment addressed to the reporter using Jira user mention format `[~{reporter_username}]`:
+      Hi [~{reporter_username}],
+
+      ### ❌ Prerequisites Check: FAILED
+      The following mandatory items are missing from this bug report:
+      - [Item Name]: [Clear explanation of what is missing and how to provide it]
+      Please attach or provide the missing items so automated root cause analysis can proceed.
+    - Post via `jira_add_comment(issue_key="{issue_key}", body=...)`.
+    - Update issue labels: add 'AX_AutoTriage-Pending'.
+  - CRITICAL RULE: Never send any notification email when prerequisites are missing. Stop triage for this issue.
+
+- IF ALL PREREQUISITES ARE PRESENT (OR SATISFIED UNDER CONDITIONAL RULES):
+  - Download the logs/archives using `jira_download_attachment`.
+  - If compressed, extract the archive.
+  - Search logs for errors, exceptions, stack traces, or warnings using `search_log_contents` or `read_log_snippet`.
+  - If coredump is present and Device Agent tools are available, run `run_gdb_backtrace` or `analyze_core_dump`.
+  - Call `jira_add_comment(issue_key="{issue_key}", body=...)` with the comprehensive "### 🔎 Initial Automated Bug Analysis" report.
+  - Update issue labels: remove 'AX_AutoTriage-Pending' if present, and add 'AX_AutoTriage-Done'.
+  - Call `notify_assignee_email(issue_key="{issue_key}")` to notify the assigned developer that initial analysis is posted.
 """
 
 NOTIFY_EMAIL_TOOL_SCHEMA = {
@@ -498,7 +589,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                     f"— GPOS AX Portal Bug Analyser"
                                 )
                                 call_res = _send_email_to_assignee(user_email, subject, body)
-                                _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Email sent to assignee")
+                                _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Email sent to assignee", analysis_ok=True)
                             elif device_session and any(t["function"]["name"] == fn for t in device_tools):
                                 res = await device_session.call_tool(fn, arguments=args)
                                 call_res = str(res.content)
@@ -509,7 +600,11 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                     if "text" in args and "body" not in args:
                                         args["body"] = args.pop("text")
                                     comment_text = str(args.get("body") or "")
-                                    is_failure_comment = "failed" in comment_text.lower() or "missing" in comment_text.lower()
+
+                                    # Distinguish autonomous comment replies from failure and analysis reports
+                                    is_autonomous_reply = "[autonomous ticket assistant reply]" in comment_text.lower() or "autonomous" in comment_text.lower()
+                                    is_failure_comment = ("failed" in comment_text.lower() or "missing" in comment_text.lower()) and not is_autonomous_reply
+                                    is_analysis_comment = ("initial automated bug analysis" in comment_text.lower() or "🔎" in comment_text) and not is_failure_comment and not is_autonomous_reply
 
                                     # Guarantee reporter mention in prerequisite failure comment
                                     if is_failure_comment and reporter_username:
@@ -521,7 +616,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                     if is_pending and not allow_reminder and is_failure_comment:
                                         logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key}; skipping duplicate reminder comment.")
                                         call_res = json.dumps({"status": "skipped", "message": f"Reminder comment skipped: 24h cooldown active. Already reminded within {BUG_WATCHDOG_REMIND_HOURS} hours."})
-                                        _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Reminder skipped due to 24h cooldown")
+                                        _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Reminder skipped due to 24h cooldown", analysis_ok=False)
                                     else:
                                         res = await jira_session.call_tool(fn, arguments=args)
                                         call_res = str(res.content)
@@ -531,9 +626,31 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                                 if "missing" in line.lower() and (":" in line or "-" in line):
                                                     missing_desc = line.strip().lstrip("-*# ").strip()
                                                     break
-                                            _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, missing_desc, "Prerequisite comment posted to Jira")
+                                            # Automatically ensure AX_AutoTriage-Pending label is saved to Jira
+                                            if "AX_AutoTriage-Pending" not in current_labels:
+                                                try:
+                                                    new_labels = list(set(current_labels + ["AX_AutoTriage-Pending"]))
+                                                    await jira_session.call_tool("jira_update_issue", arguments={"issue_key": issue_key, "fields": {"labels": new_labels}})
+                                                    current_labels = new_labels
+                                                    is_pending = True
+                                                except Exception as err:
+                                                    logger.warning(f"Could not update pending label for {issue_key}: {err}")
+                                            _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, missing_desc, "Prerequisite comment posted to Jira", analysis_ok=False)
+                                        elif is_analysis_comment:
+                                            # Clean labels: remove Pending, add Done
+                                            clean_labels = [l for l in current_labels if l != "AX_AutoTriage-Pending"]
+                                            if "AX_AutoTriage-Done" not in clean_labels:
+                                                clean_labels.append("AX_AutoTriage-Done")
+                                            try:
+                                                await jira_session.call_tool("jira_update_issue", arguments={"issue_key": issue_key, "fields": {"labels": clean_labels}})
+                                                current_labels = clean_labels
+                                            except Exception as err:
+                                                logger.warning(f"Could not update done label for {issue_key}: {err}")
+                                            _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Analysis comment posted on ticket", analysis_ok=True)
+                                        elif is_autonomous_reply:
+                                            _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", False, "", "Autonomous answer posted to user/QE inquiry", analysis_ok=False)
                                         else:
-                                            _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Analysis comment posted on ticket")
+                                            _record_audit(issue_key, username, pri_name, "COMMENTED", False, "", "Comment posted on ticket", analysis_ok=False)
                                 elif fn == "jira_update_issue":
                                     if "fields" not in args and any(k != "issue_key" for k in args):
                                         sub_fields = {k: v for k, v in args.items() if k != "issue_key"}
@@ -564,8 +681,18 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                         logger.error(f"Error during triage of {issue_key}: {e}")
                         break
 
-            if not any(a["issue_key"] == issue_key for a in _audit_log[-5:]):
-                _record_audit(issue_key, username, pri_name, "PENDING_AUDIT" if is_pending else "EVALUATED", not is_pending, "Waiting for developer evidence" if is_pending else "Evaluated", "Cycle check complete")
+            # Candidate cycle completion check
+            # Preserve existing audit status; do NOT overwrite PREREQ_MISSING with EVALUATED or PASS!
+            existing_audit = next((a for a in reversed(_audit_log) if a.get("issue_key") == issue_key), None)
+            if not existing_audit:
+                if is_pending:
+                    _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (pending reporter response)", "Pending reporter evidence (24h cooldown active)", analysis_ok=False)
+                elif "AX_AutoTriage-Done" in current_labels:
+                    _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Analysis already completed", analysis_ok=True)
+                else:
+                    _record_audit(issue_key, username, pri_name, "EVALUATED", False, "Under triage", "Cycle check complete (no action taken)", analysis_ok=False)
+            else:
+                existing_audit["cycle_at"] = datetime.now(timezone.utc).isoformat()
 
 
 async def run_bug_triage_cycle(mcp_server_url: str):

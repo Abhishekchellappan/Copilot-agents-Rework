@@ -491,6 +491,8 @@ const bugWatchdogPanel = {
     'ANALYSIS_DONE':  'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
     'PENDING_AUDIT':  'bg-indigo-500/20 text-indigo-400 border-indigo-500/40',
     'ERROR':          'bg-red-500/20 text-red-400 border-red-500/40',
+    'COMMENT_RESOLVED': 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40',
+    'EVALUATED':      'bg-slate-500/20 text-slate-400 border-slate-500/40',
   },
 
   init(containerId) {
