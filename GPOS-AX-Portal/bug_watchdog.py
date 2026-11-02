@@ -660,14 +660,56 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                 else:
                                     res = await jira_session.call_tool(fn, arguments=args)
                                     call_res = str(res.content)
-                                    if fn in ("jira_get_issue", "get_jira_issue") and not reporter_username:
+                                    if fn in ("jira_get_issue", "get_jira_issue"):
                                         try:
                                             issue_data = json.loads(call_res)
-                                            rep_obj = issue_data.get("fields", {}).get("reporter")
-                                            if isinstance(rep_obj, dict):
-                                                reporter_username = rep_obj.get("name") or rep_obj.get("key") or ""
-                                            elif isinstance(rep_obj, str):
-                                                reporter_username = rep_obj
+                                            fields = issue_data.get("fields", {}) if isinstance(issue_data, dict) else {}
+                                            if fields:
+                                                clean_issue = {
+                                                    "key": issue_data.get("key", issue_key),
+                                                    "summary": fields.get("summary"),
+                                                    "description": fields.get("description"),
+                                                    "reporter": fields.get("reporter", {}).get("name") if isinstance(fields.get("reporter"), dict) else fields.get("reporter"),
+                                                    "assignee": fields.get("assignee", {}).get("name") if isinstance(fields.get("assignee"), dict) else fields.get("assignee"),
+                                                    "priority": fields.get("priority", {}).get("name") if isinstance(fields.get("priority"), dict) else fields.get("priority"),
+                                                    "labels": fields.get("labels", []),
+                                                    "attachments": [
+                                                        {"id": a.get("id"), "filename": a.get("filename"), "size": a.get("size")}
+                                                        for a in fields.get("attachment", []) if isinstance(a, dict)
+                                                    ],
+                                                    "comments": [
+                                                        {
+                                                            "id": c.get("id"),
+                                                            "author": c.get("author", {}).get("name") if isinstance(c.get("author"), dict) else c.get("author"),
+                                                            "created": c.get("created"),
+                                                            "body": c.get("body")
+                                                        }
+                                                        for c in fields.get("comment", {}).get("comments", []) if isinstance(c, dict)
+                                                    ]
+                                                }
+                                                call_res = json.dumps(clean_issue, indent=2)
+                                                if not reporter_username:
+                                                    rep_obj = fields.get("reporter")
+                                                    if isinstance(rep_obj, dict):
+                                                        reporter_username = rep_obj.get("name") or rep_obj.get("key") or ""
+                                                    elif isinstance(rep_obj, str):
+                                                        reporter_username = rep_obj
+                                        except Exception as parse_err:
+                                            logger.warning(f"Failed to compact issue json: {parse_err}")
+                                    elif fn == "jira_get_comments":
+                                        try:
+                                            comments_data = json.loads(call_res)
+                                            comment_list = comments_data.get("comments", []) if isinstance(comments_data, dict) else (comments_data if isinstance(comments_data, list) else [])
+                                            clean_comments = [
+                                                {
+                                                    "id": c.get("id"),
+                                                    "author": c.get("author", {}).get("name") if isinstance(c.get("author"), dict) else c.get("author"),
+                                                    "created": c.get("created"),
+                                                    "body": c.get("body")
+                                                }
+                                                for c in comment_list if isinstance(c, dict)
+                                            ]
+                                            call_res = json.dumps(clean_comments, indent=2)
                                         except Exception:
                                             pass
 
@@ -675,7 +717,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                 "role": "tool",
                                 "tool_call_id": tool_call["id"],
                                 "name": fn,
-                                "content": call_res[:4000]
+                                "content": call_res[:16000]
                             })
                     except Exception as e:
                         logger.error(f"Error during triage of {issue_key}: {e}")

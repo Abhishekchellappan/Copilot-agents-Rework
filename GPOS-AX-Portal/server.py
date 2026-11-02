@@ -3931,6 +3931,18 @@ async def bug_watchdog_reset(request: Request):
     return {"ok": True, "message": "In-memory watchdog audit log cleared."}
 
 
+@app.post("/api/watchdog/bug-status/run-now")
+async def bug_watchdog_run_now(request: Request):
+    """Trigger an immediate triage cycle for all enrolled users."""
+    get_current_user(request)  # JWT auth guard
+    try:
+        from bug_watchdog import run_bug_triage_cycle, MCP_SERVER_URL
+        asyncio.create_task(run_bug_triage_cycle(MCP_SERVER_URL))
+        return {"ok": True, "message": "Immediate bug triage cycle triggered."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/watchdog/stream")
 async def watchdog_stream(request: Request, ip: str):
     from fastapi.responses import StreamingResponse

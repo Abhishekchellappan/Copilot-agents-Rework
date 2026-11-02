@@ -521,6 +521,19 @@ const bugWatchdogPanel = {
     }
   },
 
+  async runNow() {
+    const token = localStorage.getItem('auth_token') || localStorage.getItem('ax_portal_token') || '';
+    try {
+      await fetch('/api/watchdog/bug-status/run-now', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+    } catch (_) {}
+    this.load();
+    setTimeout(() => this.load(), 3000);
+    setTimeout(() => this.load(), 8000);
+  },
+
   async reset() {
     const token = localStorage.getItem('auth_token') || localStorage.getItem('ax_portal_token') || '';
     await fetch('/api/watchdog/bug-status/reset', {
@@ -602,7 +615,7 @@ const bugWatchdogPanel = {
               <span class="w-1.5 h-1.5 rounded-full ${enabled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}"></span>
               ${enabled ? 'Active' : 'Disabled'}
             </span>
-            <button onclick="bugWatchdogPanel.load()"
+            <button onclick="bugWatchdogPanel.runNow()"
               class="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-slate-200 transition-colors border border-slate-600" title="Refresh">
               <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
             </button>
