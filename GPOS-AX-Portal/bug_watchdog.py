@@ -538,6 +538,41 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
             else:
                 reporter_username = ""
 
+            # DEDUPLICATION & QUOTA GUARD:
+            # If the ticket is already marked AX_AutoTriage-Done, only invoke LLM if there is an actual NEW unresolved inquiry.
+            if "AX_AutoTriage-Done" in current_labels:
+                try:
+                    c_resp = await jira_session.call_tool("jira_get_comments", arguments={"issue_key": issue_key})
+                    c_text = ""
+                    if isinstance(c_resp.content, list):
+                        c_text = "\n".join(str(c.text) for c in c_resp.content if hasattr(c, "text"))
+                    else:
+                        c_text = str(c_resp.content)
+                    c_data = json.loads(c_text)
+                    c_list = c_data.get("comments", []) if isinstance(c_data, dict) else (c_data if isinstance(c_data, list) else [])
+                    
+                    has_unresolved_inquiry = False
+                    for c in reversed(c_list[-10:]):
+                        body = str(c.get("body") or "")
+                        author = c.get("author", {}).get("name") if isinstance(c.get("author"), dict) else str(c.get("author") or "")
+                        # If latest relevant comment is already our autonomous reply, all inquiries are resolved!
+                        if "[autonomous ticket assistant reply]" in body.lower():
+                            has_unresolved_inquiry = False
+                            break
+                        # If another user asked a question or asked for details:
+                        if author.lower() != username.lower() and ("?" in body or any(w in body.lower() for w in ["confirm", "verify", "what", "which", "could you", "please provide", "analyse"])):
+                            has_unresolved_inquiry = True
+                            break
+                    
+                    if not has_unresolved_inquiry:
+                        logger.info(f"Bug watchdog [{username}]: {issue_key} already triaged and no new inquiries. Skipping.")
+                        _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", True, "", "Analysis completed & all inquiries resolved", analysis_ok=True)
+                        continue
+                except Exception as check_err:
+                    logger.debug(f"Could not check comments pre-filter for {issue_key}: {check_err}")
+
+            llm_failed = False
+            llm_error_msg = ""
             prompt = BUG_TRIAGE_PROMPT.format(
                 assignee_username=username,
                 issue_key=issue_key,
@@ -586,6 +621,8 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                             resp = await client.post(llm_url, headers=headers, json=payload)
                         if resp.status_code != 200:
                             logger.error(f"Bug watchdog LLM error ({resp.status_code}): {resp.text}")
+                            llm_failed = True
+                            llm_error_msg = f"LLM Error ({resp.status_code})"
                             break
                         res_json = resp.json()
                         msg = res_json["choices"][0]["message"]
@@ -745,6 +782,11 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                     except Exception as e:
                         logger.error(f"Error during triage of {issue_key}: {e}")
                         break
+
+            # If LLM failed (e.g. 429 quota or network), do not report misleading PREREQ FAIL
+            if llm_failed:
+                _record_audit(issue_key, username, pri_name, "ERROR", False, llm_error_msg, f"Triage paused due to {llm_error_msg}", analysis_ok=False)
+                continue
 
             # Candidate cycle completion check
             # Preserve existing audit status; do NOT overwrite PREREQ_MISSING with EVALUATED or PASS!
