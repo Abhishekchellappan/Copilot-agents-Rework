@@ -182,9 +182,11 @@ def _run_ssh(target_ip: str, command: str, user: str = None, timeout: int = 30) 
         # PTY adds \r\n line endings — strip carriage returns for clean output
         output = result.stdout.replace("\r\n", "\n").replace("\r", "").strip()
         if result.returncode != 0 and result.stderr.strip():
-            # Filter out the harmless SSH host key warning from stderr
+            # Filter out harmless SSH warnings from stderr
             stderr_lines = [l for l in result.stderr.strip().splitlines()
-                           if "Warning: Permanently added" not in l]
+                           if "Warning: Permanently added" not in l
+                           and "Connection to" not in l
+                           and "closed." not in l]
             if stderr_lines:
                 output += f"\n[STDERR] {chr(10).join(stderr_lines)}"
         return output
@@ -3884,14 +3886,16 @@ def symbolicate_backtrace(
     signal_info = ""
     fault_addr = ""
     for line in lines[:10]:
-        m_sig = re.search(r'\b(SIG[A-Z0-9_]+)\b', line, re.IGNORECASE)
+        m_sig = re.search(r'\b(SIG[A-Z0-9_]+|SEGV[A-Z0-9_]*)\b', line, re.IGNORECASE)
         if m_sig:
             sig_candidate = m_sig.group(1).upper()
             if sig_candidate != "SIGNAL":
                 signal_info = sig_candidate
-        m_fault = re.search(r'(?:fault(?:\s+address)?[:\s]+|(?:SIG[A-Z0-9_]+\s+))(0x[0-9a-fA-F]+)', line, re.IGNORECASE)
+        m_fault = re.search(r'(?:fault(?:\s+address)?[:\s]+|(?:(?:SIG|SEGV)[A-Z0-9_]*\s+))(0x[0-9a-fA-F]+|[0-9a-fA-F]{8,})', line, re.IGNORECASE)
         if m_fault:
             fault_addr = m_fault.group(1)
+            if not fault_addr.startswith("0x"):
+                fault_addr = "0x" + fault_addr
         elif not fault_addr:
             m_hex = re.search(r'\b(0x[0]{3,}[0-9a-fA-F]*)\b', line)
             if m_hex:
@@ -3967,7 +3971,8 @@ def symbolicate_backtrace(
                 f'  which eu-addr2line >/dev/null 2>&1 && eu-addr2line -C -f -e "$dbg" {offset_val} 2>/dev/null; '
                 f'fi'
             )
-            res = _run_ssh(ip, sym_cmd).strip()
+            raw_res = _run_ssh(ip, sym_cmd).strip()
+            res = "\n".join([l.strip() for l in raw_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
             if res and "??" not in res and "[ERROR]" not in res:
                 out_lines = [l.strip() for l in res.splitlines() if l.strip()]
                 if len(out_lines) >= 2:
@@ -3993,12 +3998,13 @@ def symbolicate_backtrace(
                 f'fi'
             )
             dyn_res = _run_ssh(ip, dyn_cmd).strip()
-            if dyn_res and "[ERROR]" not in dyn_res:
+            clean_dyn = "\n".join([l.strip() for l in dyn_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
+            if clean_dyn and "[ERROR]" not in clean_dyn:
                 try:
                     target_off = int(offset_val, 16)
                     closest_func = ""
                     min_diff = float("inf")
-                    for dline in dyn_res.splitlines():
+                    for dline in clean_dyn.splitlines():
                         parts = dline.strip().split()
                         if len(parts) >= 3:
                             try:
@@ -4014,7 +4020,8 @@ def symbolicate_backtrace(
                                 continue
                     if closest_func:
                         demang = _run_ssh(ip, f"which c++filt >/dev/null 2>&1 && c++filt '{closest_func}' || echo '{closest_func}'").strip()
-                        f["func"] = demang or closest_func
+                        clean_demang = [l.strip() for l in demang.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]
+                        f["func"] = clean_demang[0] if clean_demang else closest_func
                         f["status"] = "EXPORTED_DYNSYM"
                         continue
                 except Exception:
