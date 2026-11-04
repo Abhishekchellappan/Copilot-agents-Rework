@@ -428,12 +428,25 @@ PHASE 4: OUTCOME & ACTIONS
   - Download the logs/archives using `jira_download_attachment`.
   - If compressed, extract the archive.
   - Search logs for errors, exceptions, stack traces, or warnings using `search_log_contents` or `read_log_snippet`.
-  - If raw backtrace is present in the ticket, run `symbolicate_backtrace(backtrace_text=..., target_ip=...)`.
-  - If coredump is present and Device Agent tools are available, run `run_gdb_backtrace` or `analyze_core_dump`.
+  - If raw backtrace is present in the ticket:
+    - Run `symbolicate_backtrace(backtrace_text=..., target_ip=..., build_server=..., build_root=...)`.
+  - If coredump is present:
+    - Run `analyze_core_dump` or `run_gdb_backtrace`.
+  - If a source file and line are resolved:
+    - Call `fetch_git_source(file_path=..., start_line=..., end_line=..., build_server=..., build_root=...)` to inspect actual C++ code context.
+    - Call `extract_git_blame(file_path=..., line=..., build_server=..., build_root=...)` to identify the regression commit SHA and author.
+  - If target IP and crash timestamp are available:
+    - Call `extract_pre_crash_timeline(target_ip=..., process_name=...)` to reconstruct the 10-event causal sequence.
   - If reproducible steps and target IP are present, optionally run `autonomous_reproduce_bug`.
-  - Call `jira_add_comment(issue_key="{issue_key}", body=...)` with the comprehensive "### 🔎 Initial Automated Bug Analysis" report.
+  - Synthesize a comprehensive "### 🔎 Antigravity Automated Crash & Root Cause Report" including:
+    1. Verified Crash Diagnosis (Signal, Fault Address, Memory State)
+    2. Exact Function, Source File & Verified Line Number
+    3. Git Blame Regression Metadata (Commit SHA, Author, Date)
+    4. Pre-Crash Event Timeline
+    5. Proposed C++ Fix Patch (Git Diff)
+  - Post the report via `jira_add_comment(issue_key="{issue_key}", body=...)`.
   - Update issue labels: remove 'AX_AutoTriage-Pending' if present, and add 'AX_AutoTriage-Done'.
-  - Call `notify_assignee_email(issue_key="{issue_key}")` to notify the assigned developer that initial analysis is posted.
+  - Call `notify_assignee_email(issue_key="{issue_key}")` to notify the assigned developer that root-cause analysis is posted.
 """
 
 NOTIFY_EMAIL_TOOL_SCHEMA = {
