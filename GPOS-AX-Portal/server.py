@@ -116,7 +116,7 @@ def init_db():
             updated_at       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    for col in ["llm_url", "llm_key"]:
+    for col in ["llm_url", "llm_key", "build_server_ip", "build_root_path"]:
         try:
             c.execute(f"ALTER TABLE user_bug_watchdog_config ADD COLUMN {col} TEXT DEFAULT ''")
         except Exception:
@@ -350,6 +350,8 @@ class BugWatchdogSettingsRequest(BaseModel):
     notify_email: str = ""
     llm_url: str = ""
     llm_key: str = ""
+    build_server_ip: str = ""
+    build_root_path: str = ""
 
 
 @app.get("/api/user/bug-watchdog/settings")
@@ -359,7 +361,8 @@ async def get_bug_watchdog_settings(request: Request):
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key, updated_at "
+            "SELECT is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key, "
+            "build_server_ip, build_root_path, updated_at "
             "FROM user_bug_watchdog_config WHERE username = ?",
             (username,)
         ).fetchone()
@@ -372,6 +375,8 @@ async def get_bug_watchdog_settings(request: Request):
                 "notify_email": f"{username}@lge.com",
                 "llm_url": "",
                 "llm_key": "",
+                "build_server_ip": "",
+                "build_root_path": "",
                 "updated_at": None
             }
         return {
@@ -382,6 +387,8 @@ async def get_bug_watchdog_settings(request: Request):
             "notify_email": row["notify_email"] or f"{username}@lge.com",
             "llm_url": row["llm_url"] or "",
             "llm_key": row["llm_key"] or "",
+            "build_server_ip": row["build_server_ip"] or "" if "build_server_ip" in row.keys() else "",
+            "build_root_path": row["build_root_path"] or "" if "build_root_path" in row.keys() else "",
             "updated_at": row["updated_at"]
         }
     finally:
@@ -396,13 +403,15 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
     llm_url = req.llm_url.strip() or "http://exacode-chat.lge.com/v1"
     llm_key = req.llm_key.strip()
     projects = req.jira_projects.strip() or "SIGPOSDEV"
+    b_ip = req.build_server_ip.strip()
+    b_root = req.build_root_path.strip()
 
     conn = get_db()
     try:
         conn.execute("""
             INSERT INTO user_bug_watchdog_config
-                (username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                (username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key, build_server_ip, build_root_path, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(username) DO UPDATE SET
                 is_enabled      = excluded.is_enabled,
                 jira_projects   = excluded.jira_projects,
@@ -411,6 +420,8 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
                 notify_email    = excluded.notify_email,
                 llm_url         = CASE WHEN excluded.llm_url != '' THEN excluded.llm_url ELSE user_bug_watchdog_config.llm_url END,
                 llm_key         = CASE WHEN excluded.llm_key != '' THEN excluded.llm_key ELSE user_bug_watchdog_config.llm_key END,
+                build_server_ip = excluded.build_server_ip,
+                build_root_path = excluded.build_root_path,
                 updated_at      = CURRENT_TIMESTAMP
         """, (
             username,
@@ -421,6 +432,8 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
             req.notify_email.strip() or f"{username}@lge.com",
             llm_url,
             llm_key,
+            b_ip,
+            b_root
         ))
         conn.commit()
         logger.info(f"Bug Analyser settings saved for user '{username}': enabled={req.is_enabled}, projects='{projects}'")

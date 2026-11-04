@@ -142,6 +142,11 @@ def _init_watchdog_db():
                 last_reminded_at TEXT NOT NULL
             )
         """)
+        for col in ["build_server_ip", "build_root_path"]:
+            try:
+                conn.execute(f"ALTER TABLE user_bug_watchdog_config ADD COLUMN {col} TEXT DEFAULT ''")
+            except Exception:
+                pass
         conn.commit()
         conn.close()
     except Exception as e:
@@ -196,8 +201,7 @@ def _get_enrolled_users() -> List[Dict[str, Any]]:
         conn = sqlite3.connect(DB_PATH, timeout=5)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT username, is_enabled, jira_projects, jira_pat, target_board_ip, notify_email, llm_url, llm_key "
-            "FROM user_bug_watchdog_config WHERE is_enabled = 1"
+            "SELECT * FROM user_bug_watchdog_config WHERE is_enabled = 1"
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
@@ -507,7 +511,13 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                         },
                     }
                     for t in dev_tools_resp.tools
-                    if t.name in {"run_gdb_backtrace", "analyze_core_dump", "analyze_kernel_panic", "search_log_contents", "read_log_snippet", "extract_archive", "profile_memory_leaks"}
+                    if t.name in {
+                        "run_gdb_backtrace", "analyze_core_dump", "analyze_kernel_panic", 
+                        "search_log_contents", "read_log_snippet", "extract_archive", 
+                        "profile_memory_leaks", "symbolicate_backtrace", "extract_git_blame", 
+                        "fetch_git_source", "fetch_debug_symbols", "extract_pre_crash_timeline", 
+                        "autonomous_reproduce_bug", "deploy_and_mount_binary"
+                    }
                 ]
             except Exception:
                 pass
@@ -664,9 +674,21 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                 current_labels=json.dumps(current_labels),
                 allow_reminder=allow_reminder
             )
+            dev_b_ip = user_config.get("build_server_ip", "")
+            dev_b_root = user_config.get("build_root_path", "")
+            dev_target_ip = user_config.get("target_board_ip", "")
+            dev_info = []
+            if dev_b_ip:
+                dev_info.append(f"Developer Build Server IP: {dev_b_ip}")
+            if dev_b_root:
+                dev_info.append(f"Developer Build Workspace Root: {dev_b_root}")
+            if dev_target_ip:
+                dev_info.append(f"Developer Target Board IP: {dev_target_ip}")
+            dev_context = ("\nDeveloper Profile Configuration:\n- " + "\n- ".join(dev_info)) if dev_info else ""
+
             messages = [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Begin bug triage for {issue_key}. Reporter: {reporter_username}. Priority: {pri_name}. Existing labels: {current_labels}."}
+                {"role": "user", "content": f"Begin bug triage for {issue_key}. Reporter: {reporter_username}. Priority: {pri_name}. Existing labels: {current_labels}.{dev_context}"}
             ]
 
             is_google_api = "googleapis.com" in user_llm_url.lower() or "generativelanguage" in user_llm_url.lower()

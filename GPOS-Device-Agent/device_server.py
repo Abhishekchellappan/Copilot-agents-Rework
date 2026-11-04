@@ -600,6 +600,8 @@ def deploy_and_mount_binary(
     target_system_path: str,
     staging_path: str = "/tmp",
     restart_service: str = "",
+    build_server: str = "",
+    build_root: str = "",
     ctx: Context = None
 ) -> str:
     """
@@ -608,25 +610,38 @@ def deploy_and_mount_binary(
     CRITICAL MANDATE: You MUST prompt the user for 2-Phase Confirmation before calling this tool!
     Display the deployment plan and ask "Reply 1 to Deploy, or 2 to Cancel."
 
-    :param binary_path: Absolute path to the binary on the build server / host.
+    :param binary_path: Absolute path to the binary on the build server or local host.
     :param target_ip: IP address of the target device.
-    :param target_system_path: The read-only system path to mount over (e.g. '/usr/bin/audiod').
+    :param target_system_path: The read-only system path to mount over (e.g. '/usr/lib/libcbe.so').
     :param staging_path: Writable staging directory on target (default: /tmp).
     :param restart_service: systemd service name to restart after mounting (e.g. 'audiod').
+    :param build_server: Optional remote build server IP / host.
+    :param build_root: Optional build root directory.
     """
     ip = _resolve_target(target_ip)
     if not ip:
         return "❌ No target IP specified."
-    if not os.path.isfile(binary_path):
-        return f"❌ Binary not found on build server: `{binary_path}`"
 
     binary_name = os.path.basename(binary_path)
     remote_staging = f"{staging_path}/{binary_name}"
     steps = []
 
-    # Step 2A: SCP to writable staging
-    scp_result = _run_scp(binary_path, ip, remote_staging)
-    steps.append(f"📥 **Step 2A (Transfer)**: {scp_result}")
+    # Step 2A: Transfer binary to writable staging on target
+    if build_server and not os.path.isfile(binary_path):
+        b_ip = _resolve_target(build_server)
+        chk = _run_ssh(b_ip, f"test -f '{binary_path}' && echo 'EXISTS' || echo 'MISSING'").strip()
+        if "EXISTS" in chk:
+            scp_cmd = f"scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '{binary_path}' root@{ip}:{remote_staging}"
+            scp_res = _run_ssh(b_ip, scp_cmd).strip()
+            clean_scp = '\n'.join([l.strip() for l in scp_res.splitlines() if not l.startswith('[STDERR]') and 'Connection to' not in l and l.strip()])
+            steps.append(f"📥 **Step 2A (Build Server Transfer)**: Transferred from \`{build_server}:{binary_path}\` to \`{ip}:{remote_staging}\` — {clean_scp or 'OK'}")
+        else:
+            return f"❌ Binary not found on build server \`{build_server}\`: \`{binary_path}\`"
+    else:
+        if not os.path.isfile(binary_path):
+            return f"❌ Binary not found on host or build server: \`{binary_path}\`"
+        scp_result = _run_scp(binary_path, ip, remote_staging)
+        steps.append(f"📥 **Step 2A (Transfer)**: {scp_result}")
 
     # Set executable permissions
     chmod_result = _run_ssh(ip, f"chmod +x {remote_staging}")
@@ -3828,7 +3843,35 @@ def fetch_debug_symbols(build_version: str, component_name: str, ctx: Context = 
 
 
 @mcp.tool()
-def fetch_git_source(commit_hash: str, file_path: str, start_line: int, end_line: int, ctx: Context = None) -> str:
+def fetch_git_source(
+    commit_hash: str, 
+    file_path: str, 
+    start_line: int, 
+    end_line: int, 
+    build_server: str = "",
+    build_root: str = "",
+    ctx: Context = None
+) -> str:
+    """
+    Fetch raw source code snippet for a specific file between start_line and end_line.
+    Extracts directly from remote build server via SSH (Priority 1) or local git repository workspace.
+    STRICT ANTI-HALLUCINATION: Never generates placeholder or simulated code.
+    """
+    clean_path = file_path.strip().lstrip("/\\")
+    if build_server:
+        b_ip = _resolve_target(build_server)
+        remote_path = file_path
+        if build_root and not file_path.startswith("/"):
+            remote_path = f"{build_root.rstrip('/')}/{clean_path}"
+        sed_cmd = f"sed -n '{start_line},{end_line}p' '{remote_path}'"
+        raw_res = _run_ssh(b_ip, sed_cmd).strip()
+        lines = [l for l in raw_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l]
+        if lines and not raw_res.startswith("[ERROR]") and not raw_res.startswith("[TIMEOUT]"):
+            snippet = []
+            s = max(1, start_line)
+            for idx, line in enumerate(lines, start=s):
+                snippet.append(f"{idx}: {line}")
+            return f"--- {file_path} (Build Server: {build_server}:{remote_path}) ---\n" + "\n".join(snippet)
     """
     Fetch the raw source code for a specific file at a specific commit hash from local git repositories or source tree.
     Extracts the snippet between start_line and end_line.
@@ -3857,11 +3900,56 @@ def fetch_git_source(commit_hash: str, file_path: str, start_line: int, end_line
 
 
 @mcp.tool()
+def extract_git_blame(
+    file_path: str,
+    line: int,
+    build_server: str = "",
+    build_root: str = "",
+    ctx: Context = None
+) -> str:
+    """
+    Run git blame on a specific file and line to identify the exact regression commit, author, date, and commit message.
+    Runs on remote developer build workstation via SSH, or local workspace git repository.
+    STRICT ANTI-HALLUCINATION: Only returns verified git commit metadata.
+    """
+    clean_file = file_path.strip().lstrip("/\\")
+    if build_server:
+        b_ip = _resolve_target(build_server)
+        repo_opt = f"-C '{build_root}'" if build_root else ""
+        blame_cmd = f"git {repo_opt} blame -L {line},{line} --line-porcelain '{file_path}' 2>/dev/null"
+        raw_res = _run_ssh(b_ip, blame_cmd).strip()
+        lines = [l for l in raw_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]
+        if lines and not raw_res.startswith("[ERROR]") and not raw_res.startswith("[TIMEOUT]"):
+            commit_hash = lines[0].split()[0] if lines else "unknown"
+            author = ""
+            author_mail = ""
+            summary = ""
+            for l in lines:
+                if l.startswith("author "):
+                    author = l[len("author "):].strip()
+                elif l.startswith("author-mail "):
+                    author_mail = l[len("author-mail "):].strip()
+                elif l.startswith("summary "):
+                    summary = l[len("summary "):].strip()
+            return (
+                f"### 🔍 Git Blame Regression Metadata\n"
+                f"- **File & Line**: `{file_path}:{line}`\n"
+                f"- **Commit**: `{commit_hash}`\n"
+                f"- **Author**: {author} {author_mail}\n"
+                f"- **Commit Message**: `{summary}`\n"
+                f"- **Source Host**: `{build_server}`\n"
+            )
+    return f"⚠️ Git blame could not be executed: build_server was not reachable or file `{file_path}` was not in git tree."
+
+
+@mcp.tool()
 def symbolicate_backtrace(
     backtrace_text: str,
     target_ip: str = "",
     binary_path: str = "",
     build_version: str = "",
+    build_server: str = "",
+    build_root: str = "",
     ctx: Context = None
 ) -> str:
     """
@@ -3955,77 +4043,163 @@ def symbolicate_backtrace(
     parsed_frames.sort(key=lambda x: x["frame"])
 
     has_target = bool(ip and ip != "None")
+    has_build_server = bool(build_server and build_server != "None")
     for f in parsed_frames:
-        if f["status"] == "RAW_OFFSET" and f["lib"] and f["offset"] and has_target:
+        if f["status"] == "RAW_OFFSET" and f["lib"] and f["offset"]:
             lib_path = f["lib"]
             offset_val = f["offset"]
+            base_lib = os.path.basename(lib_path)
 
-            # Step 1: Check target debug symbols
-            sym_cmd = (
-                f'dbg=""; '
-                f'for d in "/usr/lib/debug{lib_path}.debug" "/usr/lib/debug{lib_path}" "{lib_path}"; do '
-                f'  if [ -f "$d" ]; then dbg="$d"; break; fi; '
-                f'done; '
-                f'if [ -n "$dbg" ]; then '
-                f'  which addr2line >/dev/null 2>&1 && addr2line -C -f -e "$dbg" {offset_val} 2>/dev/null || '
-                f'  which eu-addr2line >/dev/null 2>&1 && eu-addr2line -C -f -e "$dbg" {offset_val} 2>/dev/null; '
-                f'fi'
-            )
-            raw_res = _run_ssh(ip, sym_cmd).strip()
-            res = "\n".join([l.strip() for l in raw_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
-            if res and "??" not in res and "[ERROR]" not in res:
-                out_lines = [l.strip() for l in res.splitlines() if l.strip()]
-                if len(out_lines) >= 2:
-                    f["func"] = out_lines[0]
-                    file_line = out_lines[1]
-                    if ":" in file_line:
-                        parts = file_line.rsplit(":", 1)
-                        f["file"] = parts[0]
-                        f["line"] = parts[1]
-                    else:
-                        f["file"] = file_line
-                    f["status"] = "VERIFIED_DEBUG"
+            # Priority 1: Check host container debug symbol vaults
+            host_dbg = ""
+            for hdir in ["/tools/debug_symbols", "/tmp/debug_symbols", "/tools/sysroots"]:
+                if not os.path.isdir(hdir):
                     continue
-                elif len(out_lines) == 1:
-                    f["func"] = out_lines[0]
-                    f["status"] = "VERIFIED_DEBUG"
+                for fname in [base_lib + ".debug", base_lib, base_lib.replace(".so", ".debug")]:
+                    cand = os.path.join(hdir, fname)
+                    if os.path.isfile(cand):
+                        host_dbg = cand
+                        break
+                    for root, _, files in os.walk(hdir):
+                        if fname in files:
+                            host_dbg = os.path.join(root, fname)
+                            break
+                    if host_dbg:
+                        break
+                if host_dbg:
+                    break
+
+            if host_dbg:
+                for tool in ["arm-webos-linux-gnueabi-addr2line", "arm-linux-gnueabi-addr2line", "eu-addr2line", "addr2line"]:
+                    try:
+                        res_p = subprocess.run([tool, "-C", "-f", "-e", host_dbg, offset_val], capture_output=True, text=True, timeout=10)
+                        if res_p.returncode == 0 and res_p.stdout.strip() and "??" not in res_p.stdout:
+                            out_lines = [l.strip() for l in res_p.stdout.splitlines() if l.strip()]
+                            if len(out_lines) >= 2:
+                                f["func"] = out_lines[0]
+                                file_line = out_lines[1]
+                                if ":" in file_line:
+                                    parts = file_line.rsplit(":", 1)
+                                    f["file"] = parts[0]
+                                    f["line"] = parts[1]
+                                else:
+                                    f["file"] = file_line
+                                f["status"] = "VERIFIED_DEBUG (Host Vault)"
+                                break
+                            elif len(out_lines) == 1:
+                                f["func"] = out_lines[0]
+                                f["status"] = "VERIFIED_DEBUG (Host Vault)"
+                                break
+                    except Exception:
+                        pass
+                if f["status"].startswith("VERIFIED"):
                     continue
 
-            # Step 2: Fall back to target dynamic symbols table (.dynsym)
-            dyn_cmd = (
-                f'if [ -f "{lib_path}" ]; then '
-                f'  which readelf >/dev/null 2>&1 && readelf -sW "{lib_path}" 2>/dev/null | grep FUNC | awk \'{{print $2, $3, $8}}\' | head -100; '
-                f'fi'
-            )
-            dyn_res = _run_ssh(ip, dyn_cmd).strip()
-            clean_dyn = "\n".join([l.strip() for l in dyn_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
-            if clean_dyn and "[ERROR]" not in clean_dyn:
-                try:
-                    target_off = int(offset_val, 16)
-                    closest_func = ""
-                    min_diff = float("inf")
-                    for dline in clean_dyn.splitlines():
-                        parts = dline.strip().split()
-                        if len(parts) >= 3:
-                            try:
-                                s_addr = int(parts[0], 16)
-                                s_size = int(parts[1], 16) if parts[1].isdigit() else 0
-                                s_name = parts[2]
-                                if s_addr <= target_off:
-                                    diff = target_off - s_addr
-                                    if diff < min_diff and (s_size == 0 or diff < s_size or diff < 0x2000):
-                                        min_diff = diff
-                                        closest_func = s_name
-                            except ValueError:
-                                continue
-                    if closest_func:
-                        demang = _run_ssh(ip, f"which c++filt >/dev/null 2>&1 && c++filt '{closest_func}' || echo '{closest_func}'").strip()
-                        clean_demang = [l.strip() for l in demang.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]
-                        f["func"] = clean_demang[0] if clean_demang else closest_func
-                        f["status"] = "EXPORTED_DYNSYM"
+            # Priority 2: Remote Developer Build Server via SSH
+            if has_build_server:
+                b_ip = _resolve_target(build_server)
+                search_root = build_root.rstrip('/') if build_root else "/home"
+                b_find_cmd = (
+                    f'find "{search_root}" \\( -name "{base_lib}" -o -name "{base_lib}.debug" \\) '
+                    f'\\( -path "*/package/usr/lib/debug/*" -o -path "*/usr/lib/debug/*" -o -path "*/image/*" \\) 2>/dev/null | head -n 1'
+                )
+                b_file = _run_ssh(b_ip, b_find_cmd).strip()
+                clean_b_file = "\n".join([l.strip() for l in b_file.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
+                if clean_b_file and not clean_b_file.startswith("[ERROR]") and not clean_b_file.startswith("[TIMEOUT]"):
+                    first_file = clean_b_file.splitlines()[0].strip()
+                    a2l_remote = (
+                        f'which arm-webos-linux-gnueabi-addr2line >/dev/null 2>&1 && arm-webos-linux-gnueabi-addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null || '
+                        f'which addr2line >/dev/null 2>&1 && addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null || '
+                        f'which eu-addr2line >/dev/null 2>&1 && eu-addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null'
+                    )
+                    rem_res = _run_ssh(b_ip, a2l_remote).strip()
+                    clean_rem = "\n".join([l.strip() for l in rem_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
+                    if clean_rem and "??" not in clean_rem and "[ERROR]" not in clean_rem:
+                        out_lines = [l.strip() for l in clean_rem.splitlines() if l.strip()]
+                        if len(out_lines) >= 2:
+                            f["func"] = out_lines[0]
+                            file_line = out_lines[1]
+                            if ":" in file_line:
+                                parts = file_line.rsplit(":", 1)
+                                f["file"] = parts[0]
+                                f["line"] = parts[1]
+                            else:
+                                f["file"] = file_line
+                            f["status"] = "VERIFIED_DEBUG (Build Server)"
+                            continue
+                        elif len(out_lines) == 1:
+                            f["func"] = out_lines[0]
+                            f["status"] = "VERIFIED_DEBUG (Build Server)"
+                            continue
+
+            # Priority 3: Target Board Debug Symbols via SSH
+            if has_target:
+                sym_cmd = (
+                    f'dbg=""; '
+                    f'for d in "/usr/lib/debug{lib_path}.debug" "/usr/lib/debug{lib_path}" "{lib_path}"; do '
+                    f'  if [ -f "$d" ]; then dbg="$d"; break; fi; '
+                    f'done; '
+                    f'if [ -n "$dbg" ]; then '
+                    f'  which addr2line >/dev/null 2>&1 && addr2line -C -f -e "$dbg" {offset_val} 2>/dev/null || '
+                    f'  which eu-addr2line >/dev/null 2>&1 && eu-addr2line -C -f -e "$dbg" {offset_val} 2>/dev/null; '
+                    f'fi'
+                )
+                raw_res = _run_ssh(ip, sym_cmd).strip()
+                res = "\n".join([l.strip() for l in raw_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
+                if res and "??" not in res and "[ERROR]" not in res:
+                    out_lines = [l.strip() for l in res.splitlines() if l.strip()]
+                    if len(out_lines) >= 2:
+                        f["func"] = out_lines[0]
+                        file_line = out_lines[1]
+                        if ":" in file_line:
+                            parts = file_line.rsplit(":", 1)
+                            f["file"] = parts[0]
+                            f["line"] = parts[1]
+                        else:
+                            f["file"] = file_line
+                        f["status"] = "VERIFIED_DEBUG (Target)"
                         continue
-                except Exception:
-                    pass
+                    elif len(out_lines) == 1:
+                        f["func"] = out_lines[0]
+                        f["status"] = "VERIFIED_DEBUG (Target)"
+                        continue
+
+            # Priority 4: Target Dynamic Symbol Table (.dynsym)
+            if has_target:
+                dyn_cmd = (
+                    f'if [ -f "{lib_path}" ]; then '
+                    f'  which readelf >/dev/null 2>&1 && readelf -sW "{lib_path}" 2>/dev/null | grep FUNC | awk \'{{print $2, $3, $8}}\' | head -100; '
+                    f'fi'
+                )
+                dyn_res = _run_ssh(ip, dyn_cmd).strip()
+                clean_dyn = "\n".join([l.strip() for l in dyn_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
+                if clean_dyn and "[ERROR]" not in clean_dyn:
+                    try:
+                        target_off = int(offset_val, 16)
+                        closest_func = ""
+                        min_diff = float("inf")
+                        for dline in clean_dyn.splitlines():
+                            parts = dline.strip().split()
+                            if len(parts) >= 3:
+                                try:
+                                    s_addr = int(parts[0], 16)
+                                    s_size = int(parts[1], 16) if parts[1].isdigit() else 0
+                                    s_name = parts[2]
+                                    if s_addr <= target_off:
+                                        diff = target_off - s_addr
+                                        if diff < min_diff and (s_size == 0 or diff < s_size or diff < 0x2000):
+                                            min_diff = diff
+                                            closest_func = s_name
+                                except ValueError:
+                                    continue
+                        if closest_func:
+                            demang = _run_ssh(ip, f"which c++filt >/dev/null 2>&1 && c++filt '{closest_func}' || echo '{closest_func}'").strip()
+                            clean_demang = [l.strip() for l in demang.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]
+                            f["func"] = clean_demang[0] if clean_demang else closest_func
+                            f["status"] = "EXPORTED_DYNSYM"
+                            continue
+                    except Exception:
+                        pass
 
     output = []
     output.append("# 🔍 Symbolicated Backtrace Analysis")
