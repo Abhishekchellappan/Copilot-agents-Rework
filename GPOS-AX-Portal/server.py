@@ -27,6 +27,7 @@ import jwt
 import hashlib
 from cryptography.fernet import Fernet
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from cachetools import TTLCache, cached
 
 # Load env variables
@@ -207,6 +208,11 @@ class ProfilesPutRequest(BaseModel):
     profiles: List[CredentialProfileIn] = Field(default_factory=list)
     activeId: Optional[str] = None
     baseUpdatedAt: Optional[str] = None
+
+
+class ProfileCopyRequest(BaseModel):
+    owner: str
+    profileId: str
 
 
 def _create_jwt_token(username: str) -> str:
@@ -432,6 +438,8 @@ async def save_bug_watchdog_settings(req: BugWatchdogSettingsRequest, request: R
 
 
 _PROFILE_SECRET_FIELDS = ('jiraPat', 'llmUrl', 'llmKey', 'llmModel', 'collabPat')
+_PROFILE_PRIVATE_FIELDS = ('jiraPat', 'llmKey', 'collabPat')
+_PROFILE_OWNER_RE = re.compile(r'^[A-Za-z0-9._@-]{1,200}$')
 
 
 def _require_profile_cipher() -> Fernet:
@@ -513,10 +521,48 @@ def _load_profile_row(conn, username: str):
     ).fetchone()
 
 
-@app.get('/api/profiles')
-async def get_credential_profiles(username: str = Depends(get_current_user)):
-    """Return this user's credential profiles. Empty when nothing has been saved."""
-    cipher = _require_profile_cipher()
+def _profile_store_enabled() -> bool:
+    return bool(os.environ.get('PROFILE_STORE_URL', '').strip())
+
+
+def _public_profile_document(body: dict) -> dict:
+    return {
+        'profiles': body.get('profiles') or [],
+        'activeId': body.get('activeId'),
+        'updatedAt': body.get('updatedAt'),
+    }
+
+
+def _profile_store_call(method: str, path: str, body: Optional[dict] = None):
+    base = os.environ.get('PROFILE_STORE_URL', '').strip().rstrip('/')
+    token = os.environ.get('PROFILE_STORE_TOKEN', '').strip()
+    if not base or not token:
+        raise HTTPException(status_code=503, detail='Profile store is not configured')
+    try:
+        response = requests.request(
+            method,
+            base + path,
+            headers={'X-Profile-Store-Token': token, 'Content-Type': 'application/json'},
+            json=body,
+            timeout=10,
+        )
+    except requests.RequestException:
+        logger.exception('Profile store request failed')
+        raise HTTPException(status_code=503, detail='Profile store is unavailable')
+    try:
+        payload = response.json() if response.content else {}
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    if response.status_code >= 400 and response.status_code != 409:
+        detail = payload.get('detail') if isinstance(payload.get('detail'), str) else 'Profile store request failed'
+        status = response.status_code if response.status_code < 500 else 503
+        raise HTTPException(status_code=status, detail=detail)
+    return response.status_code, payload
+
+
+def _read_local_profiles(username: str) -> dict:
     conn = get_db()
     try:
         row = _load_profile_row(conn, username)
@@ -524,14 +570,54 @@ async def get_credential_profiles(username: str = Depends(get_current_user)):
         conn.close()
     if row is None:
         return _empty_profile_document()
-    return _decode_profile_row(cipher, row)
+    return _decode_profile_row(_require_profile_cipher(), row)
 
 
-@app.put('/api/profiles')
-async def put_credential_profiles(req: ProfilesPutRequest, username: str = Depends(get_current_user)):
-    """Replace this user's credential profiles. 409 when baseUpdatedAt is stale."""
+def _delete_local_profile_row(username: str) -> None:
+    conn = get_db()
+    try:
+        conn.execute('DELETE FROM user_credential_profiles WHERE username = ?', (username,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _read_profiles_for_user(username: str) -> dict:
+    if not _profile_store_enabled():
+        return _read_local_profiles(username)
+    _status, remote = _profile_store_call('GET', '/v1/users/' + quote(username, safe=''))
+    if remote.get('exists'):
+        return _public_profile_document(remote)
+    if remote.get('deleted'):
+        _delete_local_profile_row(username)
+        return _empty_profile_document()
+    local = _read_local_profiles(username)
+    if not local.get('profiles'):
+        return _empty_profile_document()
+    status, saved = _profile_store_call('PUT', '/v1/users/' + quote(username, safe=''), {
+        'profiles': local['profiles'],
+        'activeId': local.get('activeId'),
+        'baseUpdatedAt': None,
+    })
+    if status == 409:
+        return _public_profile_document(saved)
+    logger.info('Moved local credential profiles for %s into the shared store', username)
+    return _public_profile_document(saved)
+
+
+def _save_profile_document(username: str, document: dict, base_updated_at: Optional[str]):
+    if _profile_store_enabled():
+        status, body = _profile_store_call('PUT', '/v1/users/' + quote(username, safe=''), {
+            'profiles': document['profiles'],
+            'activeId': document['activeId'],
+            'baseUpdatedAt': base_updated_at,
+        })
+        if status == 409:
+            return JSONResponse(status_code=409, content=_public_profile_document(body))
+        logger.info('Saved credential profiles for %s', username)
+        return _public_profile_document(body)
+
     cipher = _require_profile_cipher()
-    document = _normalize_profiles(req)
     payload = json.dumps(
         {'profiles': document['profiles'], 'activeId': document['activeId']},
         separators=(',', ':')
@@ -544,7 +630,7 @@ async def put_credential_profiles(req: ProfilesPutRequest, username: str = Depen
     try:
         conn.execute('BEGIN IMMEDIATE')
         row = _load_profile_row(conn, username)
-        if row is not None and (not req.baseUpdatedAt or req.baseUpdatedAt != row['updated_at']):
+        if row is not None and (not base_updated_at or base_updated_at != row['updated_at']):
             conflict_body = _decode_profile_row(cipher, row)
             conn.rollback()
         else:
@@ -574,10 +660,143 @@ async def put_credential_profiles(req: ProfilesPutRequest, username: str = Depen
         return JSONResponse(status_code=409, content=conflict_body)
     return response_body
 
+
+def _catalog_entry(owner: str, profile: dict) -> dict:
+    return {
+        'owner': owner,
+        'id': profile.get('id') or '',
+        'name': profile.get('name') or 'Untitled Profile',
+        'llmUrl': profile.get('llmUrl') or '',
+        'llmModel': profile.get('llmModel') or '',
+        'isDefault': bool(profile.get('isDefault')),
+        'includesSecrets': any(profile.get(field) for field in _PROFILE_PRIVATE_FIELDS),
+    }
+
+
+def _local_profile_catalog(_viewer: str) -> dict:
+    cipher = _require_profile_cipher()
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            'SELECT username, payload, updated_at FROM user_credential_profiles ORDER BY username'
+        ).fetchall()
+    finally:
+        conn.close()
+    entries = []
+    for row in rows:
+        try:
+            document = _decode_profile_row(cipher, row)
+        except HTTPException:
+            continue
+        for profile in document.get('profiles') or []:
+            entries.append(_catalog_entry(row['username'], profile))
+    return {'profiles': entries}
+
+
+def _check_profile_owner(owner: str) -> str:
+    if not isinstance(owner, str) or not _PROFILE_OWNER_RE.match(owner):
+        raise HTTPException(status_code=400, detail='Unknown profile owner')
+    return owner
+
+
+@app.get('/api/profiles')
+async def get_credential_profiles(username: str = Depends(get_current_user)):
+    """Return this user's credential profiles. Empty when nothing has been saved."""
+    return _read_profiles_for_user(username)
+
+
+@app.put('/api/profiles')
+async def put_credential_profiles(req: ProfilesPutRequest, username: str = Depends(get_current_user)):
+    """Replace this user's credential profiles. 409 when baseUpdatedAt is stale."""
+    document = _normalize_profiles(req)
+    return _save_profile_document(username, document, req.baseUpdatedAt)
+
+
+@app.get('/api/profiles/catalog')
+async def catalog_credential_profiles(username: str = Depends(get_current_user)):
+    """List profile names and model settings. Tokens and API keys are never included."""
+    if _profile_store_enabled():
+        _status, body = _profile_store_call('GET', '/v1/catalog?username=' + quote(username, safe=''))
+        entries = []
+        for item in body.get('profiles') or []:
+            if not isinstance(item, dict):
+                continue
+            entries.append({
+                'owner': item.get('owner') or '',
+                'id': item.get('id') or '',
+                'name': item.get('name') or 'Untitled Profile',
+                'llmUrl': item.get('llmUrl') or '',
+                'llmModel': item.get('llmModel') or '',
+                'isDefault': bool(item.get('isDefault')),
+                'includesSecrets': bool(item.get('includesSecrets')),
+            })
+        return {'profiles': entries}
+    return _local_profile_catalog(username)
+
+
+@app.post('/api/profiles/copy')
+async def copy_credential_profile(req: ProfileCopyRequest, username: str = Depends(get_current_user)):
+    """Copy one profile into the signed-in user's document. Another user's tokens stay behind."""
+    owner = _check_profile_owner(req.owner)
+    if _profile_store_enabled():
+        _status, source_document = _profile_store_call('GET', '/v1/users/' + quote(owner, safe=''))
+        source_document = _public_profile_document(source_document)
+    else:
+        source_document = _read_local_profiles(owner)
+    source = next((item for item in source_document.get('profiles') or [] if item.get('id') == req.profileId), None)
+    if source is None:
+        raise HTTPException(status_code=404, detail='Profile was not found')
+    current = _read_profiles_for_user(username)
+    include_secrets = owner == username
+    name = source.get('name') or 'Untitled Profile'
+    taken = {item.get('name') for item in current.get('profiles') or []}
+    while name in taken:
+        name = name + ' (copy)'
+    copied = {
+        'id': 'prof_' + uuid.uuid4().hex[:12],
+        'name': name,
+        'isDefault': False,
+        'jiraPat': source.get('jiraPat') or '' if include_secrets else '',
+        'llmUrl': source.get('llmUrl') or '',
+        'llmKey': source.get('llmKey') or '' if include_secrets else '',
+        'llmModel': source.get('llmModel') or '',
+        'collabPat': source.get('collabPat') or '' if include_secrets else '',
+    }
+    profiles = []
+    for item in current.get('profiles') or []:
+        profiles.append(CredentialProfileIn(**{
+            'id': item.get('id') or '',
+            'name': item.get('name') or 'Untitled Profile',
+            'isDefault': bool(item.get('isDefault')),
+            'jiraPat': item.get('jiraPat') or '',
+            'llmUrl': item.get('llmUrl') or '',
+            'llmKey': item.get('llmKey') or '',
+            'llmModel': item.get('llmModel') or '',
+            'collabPat': item.get('collabPat') or '',
+        }))
+    profiles.append(CredentialProfileIn(**copied))
+    document = _normalize_profiles(ProfilesPutRequest(
+        profiles=profiles,
+        activeId=current.get('activeId'),
+        baseUpdatedAt=current.get('updatedAt'),
+    ))
+    return _save_profile_document(username, document, current.get('updatedAt'))
+
+
+@app.delete('/api/profiles')
+async def delete_credential_profiles(username: str = Depends(get_current_user)):
+    """Delete this user's profiles from the shared database and from this portal."""
+    if _profile_store_enabled():
+        _profile_store_call('DELETE', '/v1/users/' + quote(username, safe=''))
+    _delete_local_profile_row(username)
+    logger.info('Deleted credential profiles for %s', username)
+    return _empty_profile_document()
+
+
 @app.middleware("http")
 async def verify_api_auth(request: Request, call_next):
     if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/artifacts") and request.url.path not in [
-        "/api/login", "/api/auth/verify", "/api/device/info", "/api/device/screen/frame",
+        "/api/login", "/api/auth/verify", "/api/build-info", "/api/device/info", "/api/device/screen/frame",
         "/api/device/webrtc/offer", "/api/device/webrtc/close", "/api/device/screen/stream"
     ]:
         if request.method != "OPTIONS":  # Skip auth check for CORS preflight
@@ -1179,13 +1398,17 @@ un_perf_profile or are asked to generate a call stack execution tree for perform
 {{mermaid_code}}
 ```
 
-CRITICAL CRASH ANALYSIS RULE:
-If `auto_triage_service` detects a "SEGFAULT (CRASH)", automatically chain a call to `run_gdb_backtrace`.
+CRITICAL CRASH ANALYSIS & ANTI-HALLUCINATION RULES:
+- If `auto_triage_service` detects a "SEGFAULT (CRASH)", automatically chain a call to `run_gdb_backtrace`.
+- When the user pastes or provides a raw crash backtrace (offsets like /usr/lib/libcbe.so+0x567944b, SIGSEGV_MAPERR, or call stack text), YOU MUST ALWAYS CALL `symbolicate_backtrace(backtrace_text=..., target_ip=...)`.
+- STRICT ANTI-HALLUCINATION: NEVER fabricate, guess, or provide hypothetical C/C++ function names, variable names, file paths, or line numbers.
+- If `symbolicate_backtrace` cannot resolve exact symbols because debug packages are not installed, report ONLY the verified raw library name and offset, and explain that debug packages (-dbg) are needed.
+- NEVER generate mock `<source-blame-widget>` blocks with imagined or placeholder code. Only display source code blocks if the exact code was returned by a real tool!
+- When reproducible steps are provided, you can call `autonomous_reproduce_bug` to reproduce the crash on the board and capture a live core dump.
+- When analyzing crashes, call `extract_pre_crash_timeline` to display the chronological events leading to the crash.
 
 CRITICAL SWARM TESTING RULE:
 If the user asks to run a command across multiple devices, or mentions "swarm testing", ALWAYS use the swarm_execute tool. Do NOT use a loop of execute_device_command calls!
-
-
 
 If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for your commands. Always make your UI futuristic and professional.
 """
@@ -2225,6 +2448,9 @@ async def llm_chat(req: ChatRequest, request: Request):
       
     8. **Confirmation Workflows**:
     If you ask the user for confirmation (e.g. "Reply 1 to confirm deletion") and the user confirms, YOU MUST ACTUALLY EXECUTE THE TOOL. Do NOT just output a success message without calling the tool.
+
+    9. **Crash Analysis & Strict Truthfulness**:
+    When analyzing crash logs, stack traces, or Jira tickets: NEVER fabricate hypothetical function names, file paths, or line numbers. If debug symbols are missing, report only the verified raw library name and offset, and explain that debug packages (-dbg) are needed.
     """
             messages = [{"role": "system", "content": sys_prompt}]
             for h in req.history[-10:]: # Limit to last 10 messages for context window
@@ -3674,6 +3900,16 @@ def agent_action(request: Request, action_req: AgentAction):
             raise HTTPException(status_code=500, detail=f"Audit failed: {str(e)}")
             
     return {"status": "success", "action": action, "result": f"Action '{action}' processed for {project_key}."}
+
+
+@app.get("/api/build-info")
+def build_info():
+    """Environment label for the page badge. Set by the deploy job, not baked into the image."""
+    return {
+        "env": os.environ.get("PORTAL_ENV", "").strip().lower(),
+        "branch": os.environ.get("PORTAL_GIT_BRANCH", "").strip(),
+        "sha": os.environ.get("PORTAL_GIT_SHA", "").strip(),
+    }
 
 
 # Mount static frontend

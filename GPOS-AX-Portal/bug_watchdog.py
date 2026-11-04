@@ -136,6 +136,12 @@ def _init_watchdog_db():
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_watchdog_audit_key ON watchdog_audit(issue_key)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS watchdog_reminders (
+                issue_key TEXT PRIMARY KEY,
+                last_reminded_at TEXT NOT NULL
+            )
+        """)
         conn.commit()
         conn.close()
     except Exception as e:
@@ -200,15 +206,43 @@ def _get_enrolled_users() -> List[Dict[str, Any]]:
         return []
 
 
+def _record_reminder_time(issue_key: str):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute("""
+            INSERT INTO watchdog_reminders (issue_key, last_reminded_at)
+            VALUES (?, ?)
+            ON CONFLICT(issue_key) DO UPDATE SET last_reminded_at = excluded.last_reminded_at
+        """, (issue_key, now_iso))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Could not record reminder time for {issue_key}: {e}")
+
+
 def _get_last_reminder_time(issue_key: str) -> Optional[str]:
-    # 1. Check in-memory log first
+    # 1. Check dedicated watchdog_reminders table first
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        row = conn.execute(
+            "SELECT last_reminded_at FROM watchdog_reminders WHERE issue_key = ?",
+            (issue_key,)
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        pass
+
+    # 2. Check in-memory log
     for e in reversed(_audit_log):
         if e.get("issue_key") == issue_key and e.get("action") == "PREREQ_MISSING":
-            t = e.get("reminded_at") or e.get("cycle_at")
+            t = e.get("reminded_at")
             if t:
                 return t
 
-    # 2. Fall back to SQLite database
+    # 3. Fall back to watchdog_audit table
     try:
         conn = sqlite3.connect(DB_PATH, timeout=5)
         row = conn.execute(
@@ -351,16 +385,21 @@ Evaluate the 4 prerequisites using the following exact conditional rules:
    - Clear, numbered or detailed steps to reproduce the bug present in the summary or description.
 3. Related Test Cases (ALWAYS MANDATORY):
    - Reference to a test case in description (e.g., 'TC-', 'Test Case', 'Test Scenario', 'TC_') OR a test file/automation script attached.
-4. Core dump file (CONDITIONAL PREREQUISITE):
+4. Core dump file or Crash Diagnostics (CONDITIONAL PREREQUISITE):
    - Carefully check the ticket Summary, Description, and Comments: Does the bug explicitly describe a process CRASH, SIGSEGV, segmentation fault, fatal exception, abort, panic, or core dump?
-   - CRASHING BUG: A coredump file (filename containing 'core' or 'dump') OR an explicit note stating why core dump is not available / N/A is REQUIRED. If missing, flag Coredump as MISSING.
+   - CRASHING BUG: 
+     a) A physical coredump file (filename containing 'core' or 'dump') attached, OR
+     b) An explicit raw backtrace / stack trace provided in the Summary, Description, Comments, or attached logs (e.g., lines containing '#0 0x... (/usr/lib/...)'), OR
+     c) An explicit note stating why core dump is not available / N/A.
+     If ANY of (a), (b), or (c) is present, mark Crash Diagnostics as SATISFIED (PASS) and proceed with analysis using backtrace symbolication or core analysis!
+     Only if it describes a crash and NONE of (a), (b), or (c) is present, flag Core dump / crash diagnostics as MISSING.
    - NON-CRASHING BUG: If the ticket describes a non-crashing issue (such as a UI visual bug, functional defect, display error, button behavior, data synchronization error, or memory leak/retention without crash), SKIP the core dump check! Mark Coredump as NOT REQUIRED (PASS) and proceed with analysis.
 
 ════════════════════════════════════════════════════════════════════════════════
 PHASE 4: OUTCOME & ACTIONS
 ════════════════════════════════════════════════════════════════════════════════
 - IF ANY MANDATORY PREREQUISITE IS MISSING:
-  - If 'AX_AutoTriage-Pending' is NOT in labels, OR if allow_reminder is True:
+  - If 'AX_AutoTriage-Pending' is NOT in labels:
     - Formulate a clear, professional comment addressed to the reporter using Jira user mention format `[~{reporter_username}]`:
       Hi [~{reporter_username}],
 
@@ -370,13 +409,24 @@ PHASE 4: OUTCOME & ACTIONS
       Please attach or provide the missing items so automated root cause analysis can proceed.
     - Post via `jira_add_comment(issue_key="{issue_key}", body=...)`.
     - Update issue labels: add 'AX_AutoTriage-Pending'.
+  - Else if 'AX_AutoTriage-Pending' is ALREADY in labels AND allow_reminder is True:
+    - Formulate a polite 24-hour follow-up reminder comment:
+      Hi [~{reporter_username}],
+
+      ### ⏰ 24-Hour Follow-Up: Prerequisites Still Required
+      This is an automated follow-up reminder. Automated root cause analysis cannot proceed because the following mandatory items are still missing:
+      - [Item Name]: [Clear explanation]
+      Please provide or attach the missing items so automated root cause analysis can proceed.
+    - Post via `jira_add_comment(issue_key="{issue_key}", body=...)`.
   - CRITICAL RULE: Never send any notification email when prerequisites are missing. Stop triage for this issue.
 
 - IF ALL PREREQUISITES ARE PRESENT (OR SATISFIED UNDER CONDITIONAL RULES):
   - Download the logs/archives using `jira_download_attachment`.
   - If compressed, extract the archive.
   - Search logs for errors, exceptions, stack traces, or warnings using `search_log_contents` or `read_log_snippet`.
+  - If raw backtrace is present in the ticket, run `symbolicate_backtrace(backtrace_text=..., target_ip=...)`.
   - If coredump is present and Device Agent tools are available, run `run_gdb_backtrace` or `analyze_core_dump`.
+  - If reproducible steps and target IP are present, optionally run `autonomous_reproduce_bug`.
   - Call `jira_add_comment(issue_key="{issue_key}", body=...)` with the comprehensive "### 🔎 Initial Automated Bug Analysis" report.
   - Update issue labels: remove 'AX_AutoTriage-Pending' if present, and add 'AX_AutoTriage-Done'.
   - Call `notify_assignee_email(issue_key="{issue_key}")` to notify the assigned developer that initial analysis is posted.
@@ -559,8 +609,8 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                         if "[autonomous ticket assistant reply]" in body.lower():
                             has_unresolved_inquiry = False
                             break
-                        # If another user asked a question or asked for details:
-                        if author.lower() != username.lower() and ("?" in body or any(w in body.lower() for w in ["confirm", "verify", "what", "which", "could you", "please provide", "analyse"])):
+                        # If another user posted ANY comment after our assistant reply:
+                        if author.lower() != username.lower() and not body.strip().startswith("[Autonomous Ticket Assistant Reply]"):
                             has_unresolved_inquiry = True
                             break
                     
@@ -570,6 +620,40 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                         continue
                 except Exception as check_err:
                     logger.debug(f"Could not check comments pre-filter for {issue_key}: {check_err}")
+
+            # If ticket is AX_AutoTriage-Pending, respect 24h cooldown unless QE submitted new comments or attachments
+            elif is_pending:
+                allow_reminder = _should_post_reminder(issue_key)
+                if not allow_reminder:
+                    try:
+                        c_resp = await jira_session.call_tool("jira_get_comments", arguments={"issue_key": issue_key})
+                        c_text = ""
+                        if isinstance(c_resp.content, list):
+                            c_text = "\n".join(str(c.text) for c in c_resp.content if hasattr(c, "text"))
+                        else:
+                            c_text = str(c_resp.content)
+                        c_data = json.loads(c_text)
+                        c_list = c_data.get("comments", []) if isinstance(c_data, dict) else (c_data if isinstance(c_data, list) else [])
+
+                        has_new_human_comment = False
+                        for c in reversed(c_list[-5:]):
+                            body = str(c.get("body") or "")
+                            author = c.get("author", {}).get("name") if isinstance(c.get("author"), dict) else str(c.get("author") or "")
+                            if "prerequisites check: failed" in body.lower() or "24-hour follow-up" in body.lower():
+                                break
+                            if author.lower() != username.lower() and not body.strip().startswith("[Autonomous Ticket Assistant Reply]"):
+                                has_new_human_comment = True
+                                break
+
+                        attachments_val = candidate.get("attachment") or raw_fields.get("attachment") or []
+                        has_attachments = bool(attachments_val)
+
+                        if not has_new_human_comment and not has_attachments:
+                            logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key} and no new evidence submitted. Skipping.")
+                            _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Pending reporter evidence (24h cooldown active)", analysis_ok=False)
+                            continue
+                    except Exception as check_err:
+                        logger.debug(f"Could not check pending pre-filter for {issue_key}: {check_err}")
 
             llm_failed = False
             llm_error_msg = ""
@@ -681,6 +765,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                         res = await jira_session.call_tool(fn, arguments=args)
                                         call_res = str(res.content)
                                         if is_failure_comment:
+                                            _record_reminder_time(issue_key)
                                             missing_desc = "Missing evidence (logs/coredump/repro/tests)"
                                             for line in comment_text.splitlines():
                                                 if "missing" in line.lower() and (":" in line or "-" in line):

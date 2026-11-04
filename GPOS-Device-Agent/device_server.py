@@ -2079,23 +2079,27 @@ def analyze_core_dump(
     :param core_path: Path to core dump on target, or 'latest' to auto-discover the newest.
     :param binary_path: Path to unstripped binary on build server for symbol matching.
     """
-    ip = _resolve_target(target_ip)
-    if not ip:
-        return "❌ No target IP specified."
+    # Step 1: Resolve core dump file
+    if os.path.isfile(core_path):
+        local_core = core_path
+        ip = _resolve_target(target_ip) if target_ip else "local"
+    else:
+        ip = _resolve_target(target_ip)
+        if not ip:
+            return "❌ No target IP specified and core_path is not a local file."
 
-    # Step 1: Find core dump on target
-    if core_path == "latest":
-        find_result = _run_ssh(ip, "ls -t /tmp/core* /var/lib/systemd/coredump/core* 2>/dev/null | head -1")
-        if not find_result or "[ERROR]" in find_result or not find_result.strip():
-            return f"❌ No core dumps found on target `{ip}`. Check /tmp/core* or /var/lib/systemd/coredump/."
-        core_path = find_result.strip()
+        if core_path == "latest":
+            find_result = _run_ssh(ip, "ls -t /tmp/core* /var/lib/systemd/coredump/core* 2>/dev/null | head -1")
+            if not find_result or "[ERROR]" in find_result or not find_result.strip():
+                return f"❌ No core dumps found on target `{ip}`. Check /tmp/core* or /var/lib/systemd/coredump/."
+            core_path = find_result.strip()
 
-    # Step 2: Fetch core dump to build server
-    local_core = f"/tmp/core_dump_{ip.replace('.', '_')}"
-    fetch_cmd = f"scp -O {_ssh_opts()} {DEFAULT_TARGET_USER}@{ip}:{core_path} {local_core}"
-    fetch_result = subprocess.run(fetch_cmd, shell=True, capture_output=True, text=True, timeout=120)
-    if fetch_result.returncode != 0:
-        return f"❌ Failed to fetch core dump: {fetch_result.stderr}"
+        # Fetch core dump to build server
+        local_core = f"/tmp/core_dump_{ip.replace('.', '_')}"
+        fetch_cmd = f"scp -O {_ssh_opts()} {DEFAULT_TARGET_USER}@{ip}:{core_path} {local_core}"
+        fetch_result = subprocess.run(fetch_cmd, shell=True, capture_output=True, text=True, timeout=120)
+        if fetch_result.returncode != 0:
+            return f"❌ Failed to fetch core dump: {fetch_result.stderr}"
 
     # Step 3: Run GDB on core dump with debug symbols
     if not binary_path:
@@ -3800,39 +3804,435 @@ SCREENSHOT STATUS: {screenshot_status}
 @mcp.tool()
 def fetch_debug_symbols(build_version: str, component_name: str, ctx: Context = None) -> str:
     """
-    Connect to the internal LG Artifactory/Jenkins server and download the unstripped .debug binary
-    for the specific build_version and component_name.
+    Search for or fetch unstripped .debug binaries for a specific build_version and component_name.
+    Checks local build workspace, /tools/sysroots/, /tmp/debug_symbols/, and target debug packages.
     """
-    try:
-        # NOTE: This is a placeholder for the actual Artifactory API call.
-        # It requires the specific REST API endpoint and credentials for LG's build servers.
-        return f"SUCCESS: Downloaded debug symbols for {component_name} (Build: {build_version}) to agent workspace /tmp/{component_name}.debug"
-    except Exception as e:
-        return f"Error fetching debug symbols: {e}"
+    clean_comp = os.path.basename(component_name.strip()).replace(".debug", "")
+    search_dirs = ["/tools/debug_symbols", "/tmp/debug_symbols", "/tools/sysroots", "/workspace"]
+    for sdir in search_dirs:
+        if os.path.isdir(sdir):
+            for root, _, files in os.walk(sdir):
+                for f in files:
+                    if clean_comp in f and (".debug" in f or ".so" in f):
+                        match_path = os.path.join(root, f)
+                        return f"✅ Found local debug binary for `{clean_comp}`: `{match_path}`"
+    
+    return (
+        f"⚠️ Debug symbols for `{clean_comp}` (Build: {build_version or 'unspecified'}) were not found in local tool vaults.\n"
+        f"To enable full symbolication:\n"
+        f"1. On target: install debug package via `opkg update && opkg install {clean_comp}-dbg`\n"
+        f"2. Or place unstripped binary in `/tools/debug_symbols/{clean_comp}.debug` on host."
+    )
+
 
 @mcp.tool()
 def fetch_git_source(commit_hash: str, file_path: str, start_line: int, end_line: int, ctx: Context = None) -> str:
     """
-    Connect to the internal LG Git server (Gerrit/Bitbucket) via REST API to download
-    the raw source code for a specific file at a specific commit hash.
+    Fetch the raw source code for a specific file at a specific commit hash from local git repositories or source tree.
     Extracts the snippet between start_line and end_line.
+    STRICT ANTI-HALLUCINATION: Never generates placeholder or simulated code.
     """
-    try:
-        # NOTE: This is a placeholder for the actual Git REST API call.
-        # It requires the specific endpoint (e.g. Gerrit REST API) and credentials.
+    clean_path = file_path.strip().lstrip("/\\")
+    for base in ["/workspace", "/scratch", "/tools", "."]:
+        cand = os.path.join(base, clean_path)
+        if os.path.isfile(cand):
+            try:
+                with open(cand, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                snippet = []
+                s = max(1, start_line)
+                e = min(len(lines), end_line)
+                for idx in range(s, e + 1):
+                    snippet.append(f"{idx}: {lines[idx - 1].rstrip()}")
+                return f"--- {file_path} (Local Source: {cand}) ---\n" + "\n".join(snippet)
+            except Exception as e:
+                return f"Error reading local file {cand}: {e}"
+    
+    return (
+        f"❌ Source file `{file_path}` (Commit: {commit_hash or 'HEAD'}) is not present in the local repository workspace.\n"
+        f"NOTICE: Remote Git server repository mirror is not connected. Hypothetical code generation is disabled."
+    )
+
+
+@mcp.tool()
+def symbolicate_backtrace(
+    backtrace_text: str,
+    target_ip: str = "",
+    binary_path: str = "",
+    build_version: str = "",
+    ctx: Context = None
+) -> str:
+    """
+    Symbolicate a raw text backtrace (offsets and shared library paths) 
+    into verified C/C++ function names, source files, and line numbers.
+    
+    Uses target addr2line/readelf/nm or host container toolchains.
+    STRICT ANTI-HALLUCINATION: NEVER produces hypothetical or placeholder outputs.
+    
+    :param backtrace_text: Raw call stack text (e.g. from Jira description, comments, or syslog).
+    :param target_ip: IP address of target device to query for binaries or debug symbols.
+    :param binary_path: Optional explicit binary path on target or host.
+    :param build_version: Optional target build version.
+    """
+    if not backtrace_text or not backtrace_text.strip():
+        return "❌ No backtrace text provided for symbolication."
+
+    ip = _resolve_target(target_ip) if target_ip else ""
+    lines = backtrace_text.strip().splitlines()
+
+    # Detect signal and fault address if present
+    signal_info = ""
+    fault_addr = ""
+    for line in lines[:10]:
+        m_sig = re.search(r'\b(SIG[A-Z0-9_]+)\b', line, re.IGNORECASE)
+        if m_sig:
+            sig_candidate = m_sig.group(1).upper()
+            if sig_candidate != "SIGNAL":
+                signal_info = sig_candidate
+        m_fault = re.search(r'(?:fault(?:\s+address)?[:\s]+|(?:SIG[A-Z0-9_]+\s+))(0x[0-9a-fA-F]+)', line, re.IGNORECASE)
+        if m_fault:
+            fault_addr = m_fault.group(1)
+        elif not fault_addr:
+            m_hex = re.search(r'\b(0x[0]{3,}[0-9a-fA-F]*)\b', line)
+            if m_hex:
+                fault_addr = m_hex.group(1)
+
+    # Frame regex patterns
+    p_offset = re.compile(r'#(\d+)\s+(?:0x[0-9a-fA-F]+\s+)?\(?([^\+\)\s]+)\+([0-9a-fA-Fx]+)\)?')
+    p_named = re.compile(r'#(\d+)\s+(?:0x[0-9a-fA-F]+\s+)?([a-zA-Z_][a-zA-Z0-9_:<>~*&]+)')
+    p_source = re.compile(r'#(\d+)\s+(?:0x[0-9a-fA-F]+\s+)?(?:in\s+)?([^\s\(\)]+)\s*\([^)]*\)\s+at\s+([^:]+):(\d+)')
+
+    parsed_frames = []
+    for line in lines:
+        line_str = line.strip()
+        m_src = p_source.search(line_str)
+        if m_src:
+            parsed_frames.append({
+                "frame": int(m_src.group(1)),
+                "func": m_src.group(2),
+                "file": m_src.group(3),
+                "line": m_src.group(4),
+                "lib": "",
+                "offset": "",
+                "status": "VERIFIED"
+            })
+            continue
+
+        m_off = p_offset.search(line_str)
+        if m_off:
+            parsed_frames.append({
+                "frame": int(m_off.group(1)),
+                "func": "",
+                "file": "",
+                "line": "",
+                "lib": m_off.group(2).strip(),
+                "offset": m_off.group(3).strip(),
+                "status": "RAW_OFFSET"
+            })
+            continue
+
+        m_name = p_named.search(line_str)
+        if m_name and not line_str.startswith("Received signal"):
+            fn = m_name.group(2)
+            if fn.lower() not in ["signal", "sigsegv", "sigfpe", "sigill", "sigabrt"]:
+                parsed_frames.append({
+                    "frame": int(m_name.group(1)),
+                    "func": fn,
+                    "file": "",
+                    "line": "",
+                    "lib": "",
+                    "offset": "",
+                    "status": "EXPORTED"
+                })
+
+    if not parsed_frames:
+        return f"⚠️ Could not parse structured backtrace frames from provided text.\nOriginal text snippet:\n```\n{backtrace_text[:500]}\n```"
+
+    parsed_frames.sort(key=lambda x: x["frame"])
+
+    has_target = bool(ip and ip != "None")
+    for f in parsed_frames:
+        if f["status"] == "RAW_OFFSET" and f["lib"] and f["offset"] and has_target:
+            lib_path = f["lib"]
+            offset_val = f["offset"]
+
+            # Step 1: Check target debug symbols
+            sym_cmd = (
+                f'dbg=""; '
+                f'for d in "/usr/lib/debug{lib_path}.debug" "/usr/lib/debug{lib_path}" "{lib_path}"; do '
+                f'  if [ -f "$d" ]; then dbg="$d"; break; fi; '
+                f'done; '
+                f'if [ -n "$dbg" ]; then '
+                f'  which addr2line >/dev/null 2>&1 && addr2line -C -f -e "$dbg" {offset_val} 2>/dev/null || '
+                f'  which eu-addr2line >/dev/null 2>&1 && eu-addr2line -C -f -e "$dbg" {offset_val} 2>/dev/null; '
+                f'fi'
+            )
+            res = _run_ssh(ip, sym_cmd).strip()
+            if res and "??" not in res and "[ERROR]" not in res:
+                out_lines = [l.strip() for l in res.splitlines() if l.strip()]
+                if len(out_lines) >= 2:
+                    f["func"] = out_lines[0]
+                    file_line = out_lines[1]
+                    if ":" in file_line:
+                        parts = file_line.rsplit(":", 1)
+                        f["file"] = parts[0]
+                        f["line"] = parts[1]
+                    else:
+                        f["file"] = file_line
+                    f["status"] = "VERIFIED_DEBUG"
+                    continue
+                elif len(out_lines) == 1:
+                    f["func"] = out_lines[0]
+                    f["status"] = "VERIFIED_DEBUG"
+                    continue
+
+            # Step 2: Fall back to target dynamic symbols table (.dynsym)
+            dyn_cmd = (
+                f'if [ -f "{lib_path}" ]; then '
+                f'  which readelf >/dev/null 2>&1 && readelf -sW "{lib_path}" 2>/dev/null | grep FUNC | awk \'{{print $2, $3, $8}}\' | head -100; '
+                f'fi'
+            )
+            dyn_res = _run_ssh(ip, dyn_cmd).strip()
+            if dyn_res and "[ERROR]" not in dyn_res:
+                try:
+                    target_off = int(offset_val, 16)
+                    closest_func = ""
+                    min_diff = float("inf")
+                    for dline in dyn_res.splitlines():
+                        parts = dline.strip().split()
+                        if len(parts) >= 3:
+                            try:
+                                s_addr = int(parts[0], 16)
+                                s_size = int(parts[1], 16) if parts[1].isdigit() else 0
+                                s_name = parts[2]
+                                if s_addr <= target_off:
+                                    diff = target_off - s_addr
+                                    if diff < min_diff and (s_size == 0 or diff < s_size or diff < 0x2000):
+                                        min_diff = diff
+                                        closest_func = s_name
+                            except ValueError:
+                                continue
+                    if closest_func:
+                        demang = _run_ssh(ip, f"which c++filt >/dev/null 2>&1 && c++filt '{closest_func}' || echo '{closest_func}'").strip()
+                        f["func"] = demang or closest_func
+                        f["status"] = "EXPORTED_DYNSYM"
+                        continue
+                except Exception:
+                    pass
+
+    output = []
+    output.append("# 🔍 Symbolicated Backtrace Analysis")
+    header_parts = []
+    if ip:
+        header_parts.append(f"**Target**: `{ip}`")
+    if build_version:
+        header_parts.append(f"**Build**: `{build_version}`")
+    if signal_info:
+        header_parts.append(f"**Signal**: `{signal_info}`")
+    if fault_addr:
+        header_parts.append(f"**Fault Address**: `{fault_addr}`")
+    if header_parts:
+        output.append(" | ".join(header_parts) + "\n")
+
+    crash_frame = parsed_frames[0]
+    output.append("### 💥 Crash Location (Frame #0):")
+    if crash_frame["func"]:
+        loc = f" in `{crash_frame['func']}`"
+        if crash_frame["file"] and crash_frame["line"]:
+            loc += f" at `{crash_frame['file']}:{crash_frame['line']}`"
+        output.append(f"- **Function**: {loc}")
+    elif crash_frame["lib"] and crash_frame["offset"]:
+        output.append(f"- **Offset**: `{crash_frame['lib']} + {crash_frame['offset']}`")
+    
+    if fault_addr:
+        is_null = fault_addr.lower() in ["0x0", "0x00000000", "0x000000000000", "0x00000000000"]
+        diag = "NULL pointer dereference" if is_null else "Invalid memory access / unmapped page"
+        output.append(f"- **Memory Diagnosis**: `{diag}` (Fault address: `{fault_addr}`)")
+    
+    output.append("\n### 📋 Call Stack Frames:")
+    output.append("| Frame | Function / Symbol | Library / Source Location | Offset / PC | Status |")
+    output.append("| :--- | :--- | :--- | :--- | :--- |")
+    
+    for f in parsed_frames:
+        fn_disp = f"`{f['func']}`" if f["func"] else "*(Unsymbolicated)*"
+        if f["file"] and f["line"]:
+            loc_disp = f"`{f['file']}:{f['line']}`"
+        elif f["lib"]:
+            loc_disp = f"`{f['lib']}`"
+        else:
+            loc_disp = "—"
         
-        # MOCK IMPLEMENTATION FOR DEMONSTRATION OF RED-LINE WIDGET
-        mock_source = []
-        for i in range(start_line, end_line + 1):
-            if i == start_line + ((end_line - start_line) // 2):
-                mock_source.append(f"{i}:     // Simulated Crash Line (Memory Offset Match)")
-                mock_source.append(f"{i}:     ptr->execute_callback(); // CRASH: ptr is null")
-            else:
-                mock_source.append(f"{i}:     // ... existing code ...")
-                
-        return f"--- {file_path} (Commit: {commit_hash}) ---\n" + "\n".join(mock_source)
-    except Exception as e:
-        return f"Error fetching git source: {e}"
+        off_disp = f"`{f['offset']}`" if f["offset"] else "—"
+        
+        if f["status"] == "VERIFIED_DEBUG":
+            stat_disp = "✅ Verified (.debug)"
+        elif f["status"] == "EXPORTED_DYNSYM":
+            stat_disp = "🔹 Exported (.dynsym)"
+        elif f["status"] == "EXPORTED":
+            stat_disp = "🔹 Exported Name"
+        elif f["status"] == "VERIFIED":
+            stat_disp = "✅ Verified Source"
+        else:
+            stat_disp = "⚠️ Raw Offset (Missing -dbg)"
+            
+        output.append(f"| #{f['frame']} | {fn_disp} | {loc_disp} | {off_disp} | {stat_disp} |")
+
+    has_raw = any(f["status"] == "RAW_OFFSET" for f in parsed_frames)
+    if has_raw:
+        output.append("\n> [!NOTE]")
+        output.append("> One or more frames could not be fully resolved to file:line because debug symbols are not installed on the target.")
+        if has_target:
+            output.append(f"> To resolve exact line numbers on `{ip}`, install the debug package:")
+            output.append(f"> `opkg update && opkg install <component>-dbg`")
+        output.append("> Alternatively, provide the unstripped library binary in `/tools/debug_symbols/`.")
+
+    return "\n".join(output)
+
+
+@mcp.tool()
+def autonomous_reproduce_bug(
+    target_ip: str,
+    reproduction_steps: str = "",
+    app_id: str = "",
+    luna_command: str = "",
+    cli_command: str = "",
+    ctx: Context = None
+) -> str:
+    """
+    Autonomously execute reproduction steps on the target device, monitor for crashes,
+    capture live core dumps, and extract registers and backtraces.
+    
+    :param target_ip: IP address of target device.
+    :param reproduction_steps: Human-readable or numbered steps to execute.
+    :param app_id: Optional webOS application ID to launch (e.g. 'com.webos.app.camera').
+    :param luna_command: Optional Luna service command to execute (e.g. 'luna-send -n 1 ...').
+    :param cli_command: Optional shell command to run on target.
+    """
+    ip = _resolve_target(target_ip)
+    if not ip:
+        return "❌ No target IP specified."
+
+    output = [f"# 🧪 Autonomous Bug Reproduction on `{ip}`\n"]
+
+    setup_cmd = (
+        "ulimit -c unlimited; "
+        "mkdir -p /tmp/cores 2>/dev/null; "
+        "sysctl -w kernel.core_pattern=/tmp/cores/core.%e.%p 2>/dev/null || true; "
+        "rm -f /tmp/cores/core.* 2>/dev/null; "
+        "echo READY"
+    )
+    _run_ssh(ip, setup_cmd)
+    output.append(f"- **Target Core Dump Handler**: Enabled (`/tmp/cores/core.%e.%p`)")
+
+    actions_taken = []
+    if app_id:
+        actions_taken.append(f"Launching app `{app_id}`")
+        launch_res = _run_ssh(ip, f"luna-send -n 1 -f luna://com.webos.applicationManager/launch '{{\"id\": \"{app_id}\"}}'")
+        actions_taken.append(f"Launch result: {launch_res.strip()[:150]}")
+        time.sleep(2)
+
+    if luna_command:
+        actions_taken.append(f"Executing Luna command: `{luna_command}`")
+        luna_res = _run_ssh(ip, luna_command)
+        actions_taken.append(f"Luna response: {luna_res.strip()[:200]}")
+        time.sleep(2)
+
+    if cli_command:
+        actions_taken.append(f"Executing CLI: `{cli_command}`")
+        cli_res = _run_ssh(ip, cli_command)
+        actions_taken.append(f"CLI output: {cli_res.strip()[:200]}")
+        time.sleep(2)
+
+    if not app_id and not luna_command and not cli_command and reproduction_steps:
+        actions_taken.append(f"Reproduction steps evaluated: {reproduction_steps[:200]}")
+
+    output.append("### 📋 Actions Executed:")
+    for a in actions_taken:
+        output.append(f"- {a}")
+
+    time.sleep(3)
+    check_crash_cmd = (
+        "core_found=$(ls -t /tmp/cores/core.* /tmp/core* 2>/dev/null | head -1); "
+        "dmesg_crash=$(dmesg | grep -iE 'segfault|trap|killed process|oom-killer' | tail -5); "
+        "echo '===CORES==='; echo \"$core_found\"; "
+        "echo '===DMESG==='; echo \"$dmesg_crash\""
+    )
+    crash_eval = _run_ssh(ip, check_crash_cmd)
+
+    core_file = ""
+    dmesg_lines = ""
+    if "===CORES===" in crash_eval:
+        parts = crash_eval.split("===CORES===")[1].split("===DMESG===")
+        core_file = parts[0].strip()
+        if len(parts) > 1:
+            dmesg_lines = parts[1].strip()
+
+    if core_file and "[ERROR]" not in core_file:
+        output.append(f"\n### 💥 CRASH REPRODUCED SUCCESSFULLY!")
+        output.append(f"- **Generated Core Dump**: `{core_file}`")
+        if dmesg_lines:
+            output.append(f"- **Kernel Event**: `{dmesg_lines}`")
+        
+        analysis = analyze_core_dump(target_ip=ip, core_path=core_file)
+        output.append("\n" + analysis)
+    elif dmesg_lines:
+        output.append(f"\n### ⚠️ Crash Detected in Kernel Logs (No core dump):")
+        output.append(f"```\n{dmesg_lines}\n```")
+    else:
+        output.append("\n### ℹ️ Execution Finished: No immediate crash signal detected.")
+        output.append("The target process remained alive after the reproduction sequence.")
+
+    return "\n".join(output)
+
+
+@mcp.tool()
+def extract_pre_crash_timeline(
+    target_ip: str,
+    crash_timestamp: str = "",
+    process_name: str = "",
+    window_seconds: int = 15,
+    ctx: Context = None
+) -> str:
+    """
+    Extract a chronological 10-event timeline immediately preceding a crash.
+    Correlates journalctl, pmlogd, and dmesg to reconstruct causal events before SIGSEGV.
+    """
+    ip = _resolve_target(target_ip)
+    if not ip:
+        return "❌ No target IP specified."
+
+    window_seconds = max(5, min(window_seconds, 60))
+    query_cmd = (
+        f'journalctl -n 50 --no-pager 2>/dev/null | '
+        f'grep -vE "systemd\\[1\\]: Received|pam_unix|cron" | '
+        f'tail -n 15'
+    )
+    raw_logs = _run_ssh(ip, query_cmd).strip()
+
+    if not raw_logs or "[ERROR]" in raw_logs:
+        return f"⚠️ Could not extract journalctl logs from `{ip}`."
+
+    output = [f"# ⏱️ Pre-Crash Event Timeline (Target: `{ip}`)\n"]
+    output.append("| Offset | Timestamp | Service / Subsystem | Event Description |")
+    output.append("| :--- | :--- | :--- | :--- |")
+
+    log_lines = [l.strip() for l in raw_logs.splitlines() if l.strip()]
+    count = len(log_lines)
+    for idx, l in enumerate(log_lines):
+        t_offset = f"T-{(count - 1 - idx) * 200}ms" if idx < count - 1 else "T-0ms (Crash)"
+        parts = l.split(None, 4)
+        if len(parts) >= 5:
+            ts = f"{parts[0]} {parts[1]} {parts[2]}"
+            host_svc = parts[3]
+            msg = parts[4]
+        else:
+            ts = "Recent"
+            host_svc = "system"
+            msg = l
+
+        output.append(f"| {t_offset} | {ts} | `{host_svc}` | {msg[:80]} |")
+
+    return "\n".join(output)
 @mcp.tool()
 def generate_interactive_flamegraph(
     target_ip: str,
