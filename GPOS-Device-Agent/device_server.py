@@ -674,22 +674,29 @@ def deploy_and_mount_binary(
             )
             found_raw = _run_ssh(b_ip, find_cmd).strip()
             clean_found = [l.strip() for l in found_raw.splitlines() if not l.startswith("[") and "/" in l]
-            if clean_found:
-                resolved_binary_path = clean_found[-1]
-                steps.append(f"🔍 **Auto-Discovered Binary**: Found compiled artifact in `{search_root}` at:\n   `{resolved_binary_path}`")
-            else:
+            if not clean_found:
                 # Fallback POSIX find
-                fallback_cmd = f"find '{search_root}' -name '{binary_name}' -type f ! -path '*/.git/*' 2>/dev/null | head -n 1"
+                fallback_cmd = f"find '{search_root}' -name '{binary_name}' -type f ! -path '*/.git/*' 2>/dev/null | head -n 5"
                 fb_raw = _run_ssh(b_ip, fallback_cmd).strip()
-                clean_fb = [l.strip() for l in fb_raw.splitlines() if not l.startswith("[") and "/" in l]
-                if clean_fb:
-                    resolved_binary_path = clean_fb[0]
-                    steps.append(f"🔍 **Auto-Discovered Binary**: Found compiled artifact in `{search_root}` at:\n   `{resolved_binary_path}`")
-                else:
-                    return (
-                        f"❌ Binary `{binary_path}` not found directly on build server `{build_server}`.\n"
-                        f"Auto-discovery across workspace `{search_root}` yielded no matches for `{binary_name}`."
-                    )
+                clean_found = [l.strip() for l in fb_raw.splitlines() if not l.startswith("[") and "/" in l]
+
+            if not clean_found:
+                return (
+                    f"❌ Binary `{binary_path}` not found directly on build server `{build_server}`.\n"
+                    f"Auto-discovery across workspace `{search_root}` yielded no matches for `{binary_name}`."
+                )
+
+            # If user provided only a filename and multiple target builds exist, prompt the user to choose
+            if len(clean_found) > 1 and "/" not in binary_path.strip():
+                opts = "\n".join([f"{idx+1}. `{p}`" for idx, p in enumerate(clean_found[-5:])])
+                return (
+                    f"⚠️ **Multiple build targets found for `{binary_name}` in `{search_root}`:**\n\n"
+                    f"{opts}\n\n"
+                    f"Please specify which target build path you would like to deploy (e.g. reply with the option number or path)."
+                )
+
+            resolved_binary_path = clean_found[-1]
+            steps.append(f"🔍 **Auto-Discovered Binary**: Found compiled artifact in `{search_root}` at:\n   `{resolved_binary_path}`")
 
         # Robust 2-Hop Agent-Mediated Transfer (Build Server -> Local Agent Container -> Target Board)
         local_staging = f"/tmp/{binary_name}"
@@ -4201,7 +4208,16 @@ def symbolicate_backtrace(
                     break
 
             if host_dbg:
-                for tool in ["k26apl-webos-linux-addr2line", "x86_64-webos-linux-addr2line", "arm-webos-linux-gnueabi-addr2line", "arm-linux-gnueabi-addr2line", "eu-addr2line", "addr2line"]:
+                discovered_tools = ["addr2line", "eu-addr2line"]
+                for p_dir in os.environ.get("PATH", "").split(os.pathsep):
+                    if os.path.isdir(p_dir):
+                        try:
+                            for fn in os.listdir(p_dir):
+                                if fn.endswith("addr2line") and fn not in discovered_tools:
+                                    discovered_tools.insert(0, fn)
+                        except Exception:
+                            pass
+                for tool in discovered_tools:
                     try:
                         res_p = subprocess.run([tool, "-C", "-f", "-e", host_dbg, offset_val], capture_output=True, text=True, timeout=10)
                         if res_p.returncode == 0 and res_p.stdout.strip() and "??" not in res_p.stdout:
@@ -4239,7 +4255,7 @@ def symbolicate_backtrace(
                 if clean_b_file and not clean_b_file.startswith("[ERROR]") and not clean_b_file.startswith("[TIMEOUT]"):
                     first_file = clean_b_file.splitlines()[0].strip()
                     a2l_remote = (
-                        f'A2L=$(which k26apl-webos-linux-addr2line x86_64-webos-linux-addr2line arm-webos-linux-gnueabi-addr2line *-webos-linux*-addr2line 2>/dev/null | head -n 1); '
+                        f'A2L=$(which *-addr2line addr2line eu-addr2line 2>/dev/null | head -n 1); '
                         f'if [ -n "$A2L" ]; then $A2L -C -f -e "{first_file}" {offset_val} 2>/dev/null; '
                         f'elif which addr2line >/dev/null 2>&1; then addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null; '
                         f'elif which eu-addr2line >/dev/null 2>&1; then eu-addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null; fi'
