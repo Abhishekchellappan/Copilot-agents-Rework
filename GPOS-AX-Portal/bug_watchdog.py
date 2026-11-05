@@ -367,8 +367,13 @@ PHASE 1: INGEST ALL TICKET FIELDS & COMMENTS
 ════════════════════════════════════════════════════════════════════════════════
 PHASE 2: AUTONOMOUS COMMENT RESOLUTION (RULE 2)
 ════════════════════════════════════════════════════════════════════════════════
-- Monitor the comments section. Check if any user, QE, or developer has asked a question, requested clarification, or inquired about the bug (e.g., asking for build version, device logs, board IP, reproduction steps, test environment details, error codes, or clarification).
-- If there is an unanswered question in the comments that CAN be answered using the ticket's summary, description, attachments, or prior comment history:
+- Monitor the comments section.
+- CRITICAL DUPLICATION & SELF-REPLY GUARD:
+  * Check the comment history. If the MOST RECENT comment is ALREADY an "[Autonomous Ticket Assistant Reply]", or if the question was already answered in any previous comment:
+    YOU MUST NOT POST ANOTHER COMMENT! DO NOT CALL `jira_add_comment`! Stop and proceed without comments.
+  * NEVER reply to [~{username}] (the assignee). You are acting as the assistant of {username}. Only reply to external reporters or testers (e.g. QE) if they asked an unanswered question.
+  * If no external user asked a new, unanswered question AFTER the latest bot comment, SKIP Phase 2 completely!
+- If and ONLY if there is a genuine UNANSWERED question from an external user:
   - Generate an immediate, clear, professional answer citing the facts from the ticket.
   - Mention the user who asked using Jira user mention format `[~username]`.
   - Format the reply exactly as:
@@ -611,68 +616,68 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
             else:
                 reporter_username = ""
 
-            # DEDUPLICATION & QUOTA GUARD:
-            # If the ticket is already marked AX_AutoTriage-Done, only invoke LLM if there is an actual NEW unresolved inquiry.
-            if "AX_AutoTriage-Done" in current_labels:
-                try:
-                    c_resp = await jira_session.call_tool("jira_get_comments", arguments={"issue_key": issue_key})
-                    c_text = ""
-                    if isinstance(c_resp.content, list):
-                        c_text = "\n".join(str(c.text) for c in c_resp.content if hasattr(c, "text"))
-                    else:
-                        c_text = str(c_resp.content)
-                    c_data = json.loads(c_text)
-                    c_list = c_data.get("comments", []) if isinstance(c_data, dict) else (c_data if isinstance(c_data, list) else [])
-                    
-                    has_unresolved_inquiry = False
+            # DEDUPLICATION & LOOP GUARD (Applies to ALL tickets):
+            # Fetch comments to inspect whether our bot already replied or if there is actually a new external inquiry
+            c_list = []
+            latest_comment_is_bot_reply = False
+            has_unresolved_inquiry = False
+            try:
+                c_resp = await jira_session.call_tool("jira_get_comments", arguments={"issue_key": issue_key})
+                c_text = ""
+                if isinstance(c_resp.content, list):
+                    c_text = "\n".join(str(c.text) for c in c_resp.content if hasattr(c, "text"))
+                else:
+                    c_text = str(c_resp.content)
+                c_data = json.loads(c_text)
+                c_list = c_data.get("comments", []) if isinstance(c_data, dict) else (c_data if isinstance(c_data, list) else [])
+
+                if c_list:
+                    latest_c = c_list[-1]
+                    latest_body = str(latest_c.get("body") or "")
+                    latest_author = latest_c.get("author", {}).get("name") if isinstance(latest_c.get("author"), dict) else str(latest_c.get("author") or "")
+
+                    # Check if the absolute latest comment is ALREADY an autonomous reply
+                    if "[autonomous ticket assistant reply]" in latest_body.lower() or "autonomous" in latest_body.lower():
+                        latest_comment_is_bot_reply = True
+
+                    # Check for genuine external questions posted AFTER the latest bot comment
                     for c in reversed(c_list[-10:]):
                         body = str(c.get("body") or "")
                         author = c.get("author", {}).get("name") if isinstance(c.get("author"), dict) else str(c.get("author") or "")
-                        # If latest relevant comment is already our autonomous reply, all inquiries are resolved!
                         if "[autonomous ticket assistant reply]" in body.lower():
-                            has_unresolved_inquiry = False
                             break
-                        # If another user posted ANY comment after our assistant reply:
+                        # External comment from someone other than the assignee
                         if author.lower() != username.lower() and not body.strip().startswith("[Autonomous Ticket Assistant Reply]"):
                             has_unresolved_inquiry = True
                             break
-                    
-                    if not has_unresolved_inquiry:
-                        logger.info(f"Bug watchdog [{username}]: {issue_key} already triaged and no new inquiries. Skipping.")
-                        _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", True, "", "Analysis completed & all inquiries resolved", analysis_ok=True)
-                        continue
-                except Exception as check_err:
-                    logger.debug(f"Could not check comments pre-filter for {issue_key}: {check_err}")
+            except Exception as check_err:
+                logger.debug(f"Could not check comments pre-filter for {issue_key}: {check_err}")
 
-            # If ticket is AX_AutoTriage-Pending, respect 24h cooldown unless QE submitted new comments or attachments
+            # 1. LOOP GUARD: If the latest comment is already an autonomous assistant reply, NEVER post again!
+            if latest_comment_is_bot_reply:
+                logger.info(f"Bug watchdog [{username}]: Latest comment on {issue_key} is already an Autonomous Assistant Reply. Skipping duplicate loop.")
+                _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", True, "", "All inquiries already resolved (loop guard active)", analysis_ok=True)
+                continue
+
+            # 2. If the ticket is already triaged (AX_AutoTriage-Done) and has NO new external inquiry, skip LLM!
+            if "AX_AutoTriage-Done" in current_labels:
+                if not has_unresolved_inquiry:
+                    logger.info(f"Bug watchdog [{username}]: {issue_key} already triaged and no new inquiries. Skipping.")
+                    _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", True, "", "Analysis completed & all inquiries resolved", analysis_ok=True)
+                    continue
+
+            # 3. If ticket is AX_AutoTriage-Pending, respect 24h cooldown unless QE submitted new comments or attachments
             elif is_pending:
                 allow_reminder = _should_post_reminder(issue_key)
                 if not allow_reminder:
-                    try:
-                        c_resp = await jira_session.call_tool("jira_get_comments", arguments={"issue_key": issue_key})
-                        c_text = ""
-                        if isinstance(c_resp.content, list):
-                            c_text = "\n".join(str(c.text) for c in c_resp.content if hasattr(c, "text"))
-                        else:
-                            c_text = str(c_resp.content)
-                        c_data = json.loads(c_text)
-                        c_list = c_data.get("comments", []) if isinstance(c_data, dict) else (c_data if isinstance(c_data, list) else [])
+                    has_new_human_comment = has_unresolved_inquiry
+                    attachments_val = candidate.get("attachment") or raw_fields.get("attachment") or []
+                    has_attachments = bool(attachments_val)
 
-                        has_new_human_comment = False
-                        for c in reversed(c_list[-5:]):
-                            body = str(c.get("body") or "")
-                            author = c.get("author", {}).get("name") if isinstance(c.get("author"), dict) else str(c.get("author") or "")
-                            if "prerequisites check: failed" in body.lower() or "24-hour follow-up" in body.lower():
-                                break
-                            if author.lower() != username.lower() and not body.strip().startswith("[Autonomous Ticket Assistant Reply]"):
-                                has_new_human_comment = True
-                                break
-
-                        attachments_val = candidate.get("attachment") or raw_fields.get("attachment") or []
-                        has_attachments = bool(attachments_val)
-
-                        if not has_new_human_comment and not has_attachments:
-                            logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key} and no new evidence submitted. Skipping.")
+                    if not has_new_human_comment and not has_attachments:
+                        logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key} and no new evidence submitted. Skipping.")
+                        _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Pending reporter evidence (24h cooldown active)", analysis_ok=False)
+                        continue
                             _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Pending reporter evidence (24h cooldown active)", analysis_ok=False)
                             continue
                     except Exception as check_err:
@@ -805,6 +810,10 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                         logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key}; skipping duplicate reminder comment.")
                                         call_res = json.dumps({"status": "skipped", "message": f"Reminder comment skipped: 24h cooldown active. Already reminded within {BUG_WATCHDOG_REMIND_HOURS} hours."})
                                         _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Reminder skipped due to 24h cooldown", analysis_ok=False)
+                                    elif is_autonomous_reply and (latest_comment_is_bot_reply or not has_unresolved_inquiry):
+                                        logger.warning(f"Bug watchdog [{username}]: Intercepted & blocked duplicate autonomous reply for {issue_key}.")
+                                        call_res = json.dumps({"status": "skipped", "message": "Duplicate autonomous reply blocked: Question was already answered or no new external inquiry."})
+                                        _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", True, "", "Duplicate autonomous reply blocked", analysis_ok=True)
                                     else:
                                         res = await jira_session.call_tool(fn, arguments=args)
                                         call_res = str(res.content)
@@ -837,6 +846,8 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                                 logger.warning(f"Could not update done label for {issue_key}: {err}")
                                             _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Analysis comment posted on ticket", analysis_ok=True)
                                         elif is_autonomous_reply:
+                                            latest_comment_is_bot_reply = True
+                                            has_unresolved_inquiry = False
                                             _record_audit(issue_key, username, pri_name, "COMMENT_RESOLVED", True, "", "Autonomous answer posted to user/QE inquiry", analysis_ok=True)
                                         else:
                                             _record_audit(issue_key, username, pri_name, "COMMENTED", False, "", "Comment posted on ticket", analysis_ok=False)
