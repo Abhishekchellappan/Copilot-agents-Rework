@@ -678,10 +678,6 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                         logger.info(f"Bug watchdog [{username}]: 24h cooldown active for {issue_key} and no new evidence submitted. Skipping.")
                         _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Pending reporter evidence (24h cooldown active)", analysis_ok=False)
                         continue
-                            _record_audit(issue_key, username, pri_name, "PREREQ_MISSING", False, "Missing evidence (cooldown active)", "Pending reporter evidence (24h cooldown active)", analysis_ok=False)
-                            continue
-                    except Exception as check_err:
-                        logger.debug(f"Could not check pending pre-filter for {issue_key}: {check_err}")
 
             llm_failed = False
             llm_error_msg = ""
