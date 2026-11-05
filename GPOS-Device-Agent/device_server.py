@@ -4201,7 +4201,7 @@ def symbolicate_backtrace(
                     break
 
             if host_dbg:
-                for tool in ["arm-webos-linux-gnueabi-addr2line", "arm-linux-gnueabi-addr2line", "eu-addr2line", "addr2line"]:
+                for tool in ["k26apl-webos-linux-addr2line", "x86_64-webos-linux-addr2line", "arm-webos-linux-gnueabi-addr2line", "arm-linux-gnueabi-addr2line", "eu-addr2line", "addr2line"]:
                     try:
                         res_p = subprocess.run([tool, "-C", "-f", "-e", host_dbg, offset_val], capture_output=True, text=True, timeout=10)
                         if res_p.returncode == 0 and res_p.stdout.strip() and "??" not in res_p.stdout:
@@ -4239,9 +4239,10 @@ def symbolicate_backtrace(
                 if clean_b_file and not clean_b_file.startswith("[ERROR]") and not clean_b_file.startswith("[TIMEOUT]"):
                     first_file = clean_b_file.splitlines()[0].strip()
                     a2l_remote = (
-                        f'which arm-webos-linux-gnueabi-addr2line >/dev/null 2>&1 && arm-webos-linux-gnueabi-addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null || '
-                        f'which addr2line >/dev/null 2>&1 && addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null || '
-                        f'which eu-addr2line >/dev/null 2>&1 && eu-addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null'
+                        f'A2L=$(which k26apl-webos-linux-addr2line x86_64-webos-linux-addr2line arm-webos-linux-gnueabi-addr2line *-webos-linux*-addr2line 2>/dev/null | head -n 1); '
+                        f'if [ -n "$A2L" ]; then $A2L -C -f -e "{first_file}" {offset_val} 2>/dev/null; '
+                        f'elif which addr2line >/dev/null 2>&1; then addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null; '
+                        f'elif which eu-addr2line >/dev/null 2>&1; then eu-addr2line -C -f -e "{first_file}" {offset_val} 2>/dev/null; fi'
                     )
                     rem_res = _run_ssh(b_ip, a2l_remote).strip()
                     clean_rem = "\n".join([l.strip() for l in rem_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]).strip()
