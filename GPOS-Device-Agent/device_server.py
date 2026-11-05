@@ -166,13 +166,20 @@ def _run_ssh(target_ip: str, command: str, user: str = None, timeout: int = 30) 
     
     Uses -tt to force PTY allocation — required because luna-send on webOS
     only produces output when connected to a terminal.
+    Automatically parses user@host if provided.
     """
-    u = user or DEFAULT_TARGET_USER
+    target_clean = (target_ip or "").strip()
+    if "@" in target_clean:
+        u_parsed, host = target_clean.split("@", 1)
+        u = user or u_parsed
+        target_clean = host
+    else:
+        u = user or DEFAULT_TARGET_USER
     
     cmd = ["ssh", "-tt", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
     if os.path.isfile(SSH_KEY_PATH):
         cmd.extend(["-i", SSH_KEY_PATH])
-    cmd.extend([f"{u}@{target_ip}", command])
+    cmd.extend([f"{u}@{target_clean}", command])
     
     try:
         result = subprocess.run(
@@ -198,15 +205,40 @@ def _run_ssh(target_ip: str, command: str, user: str = None, timeout: int = 30) 
 
 def _run_scp(local_path: str, target_ip: str, remote_path: str, user: str = None) -> str:
     """Copy a local file to the target device via SCP using legacy SCP protocol (-O) for embedded compatibility."""
-    u = user or DEFAULT_TARGET_USER
-    cmd = f"scp -O {_ssh_opts()} {local_path} {u}@{target_ip}:{remote_path}"
+    target_clean = (target_ip or "").strip()
+    if "@" in target_clean:
+        u_parsed, host = target_clean.split("@", 1)
+        u = user or u_parsed
+        target_clean = host
+    else:
+        u = user or DEFAULT_TARGET_USER
+    cmd = f"scp -O {_ssh_opts()} {local_path} {u}@{target_clean}:{remote_path}"
     try:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             return f"[ERROR] SCP failed: {result.stderr.strip()}"
-        return f"✅ Copied {local_path} → {u}@{target_ip}:{remote_path}"
+        return f"✅ Copied {local_path} → {u}@{target_clean}:{remote_path}"
     except Exception as e:
         return f"[ERROR] SCP execution failed: {str(e)}"
+
+
+def _run_scp_from_remote(remote_ip: str, remote_path: str, local_path: str, user: str = None) -> tuple:
+    """Copy a file from a remote server to the local container via SCP."""
+    remote_clean = (remote_ip or "").strip()
+    if "@" in remote_clean:
+        u_parsed, host = remote_clean.split("@", 1)
+        u = user or u_parsed
+        remote_clean = host
+    else:
+        u = user or DEFAULT_TARGET_USER
+    cmd = f"scp -O {_ssh_opts()} {u}@{remote_clean}:'{remote_path}' '{local_path}'"
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            return False, f"[ERROR] SCP download failed: {result.stderr.strip()}"
+        return True, f"✅ Downloaded {u}@{remote_clean}:{remote_path} → {local_path}"
+    except Exception as e:
+        return False, f"[ERROR] SCP download execution failed: {str(e)}"
 
 
 def _fetch_remote_binary(target_ip: str, remote_path: str, timeout: int = 25) -> bytes:
@@ -622,25 +654,69 @@ def deploy_and_mount_binary(
     if not ip:
         return "❌ No target IP specified."
 
-    binary_name = os.path.basename(binary_path)
+    binary_name = os.path.basename(binary_path.strip())
+    resolved_binary_path = binary_path.strip()
     remote_staging = f"{staging_path}/{binary_name}"
     steps = []
 
-    # Step 2A: Transfer binary to writable staging on target
-    if build_server and not os.path.isfile(binary_path):
+    # Step 2A: Resolve and Transfer binary to writable staging on target
+    if build_server and not os.path.isfile(resolved_binary_path):
         b_ip = _resolve_target(build_server)
-        chk = _run_ssh(b_ip, f"test -f '{binary_path}' && echo 'EXISTS' || echo 'MISSING'").strip()
-        if "EXISTS" in chk:
-            scp_cmd = f"scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '{binary_path}' root@{ip}:{remote_staging}"
+
+        # Check if file exists directly at resolved_binary_path on build server
+        chk = _run_ssh(b_ip, f"test -f '{resolved_binary_path}' && echo 'EXISTS' || echo 'MISSING'").strip()
+        if "EXISTS" not in chk:
+            # Auto-discovery in build workspace tree
+            search_root = (build_root or "").strip() or "."
+            find_cmd = (
+                f"find '{search_root}' -name '{binary_name}' -type f ! -path '*/.git/*' "
+                f"-printf '%T@ %p\\n' 2>/dev/null | sort -n | tail -n 1 | awk '{{print $2}}'"
+            )
+            found_raw = _run_ssh(b_ip, find_cmd).strip()
+            clean_found = [l.strip() for l in found_raw.splitlines() if not l.startswith("[") and "/" in l]
+            if clean_found:
+                resolved_binary_path = clean_found[-1]
+                steps.append(f"🔍 **Auto-Discovered Binary**: Found compiled artifact in `{search_root}` at:\n   `{resolved_binary_path}`")
+            else:
+                # Fallback POSIX find
+                fallback_cmd = f"find '{search_root}' -name '{binary_name}' -type f ! -path '*/.git/*' 2>/dev/null | head -n 1"
+                fb_raw = _run_ssh(b_ip, fallback_cmd).strip()
+                clean_fb = [l.strip() for l in fb_raw.splitlines() if not l.startswith("[") and "/" in l]
+                if clean_fb:
+                    resolved_binary_path = clean_fb[0]
+                    steps.append(f"🔍 **Auto-Discovered Binary**: Found compiled artifact in `{search_root}` at:\n   `{resolved_binary_path}`")
+                else:
+                    return (
+                        f"❌ Binary `{binary_path}` not found directly on build server `{build_server}`.\n"
+                        f"Auto-discovery across workspace `{search_root}` yielded no matches for `{binary_name}`."
+                    )
+
+        # Robust 2-Hop Agent-Mediated Transfer (Build Server -> Local Agent Container -> Target Board)
+        local_staging = f"/tmp/{binary_name}"
+        ok, msg = _run_scp_from_remote(b_ip, resolved_binary_path, local_staging)
+        if not ok:
+            # Fallback direct SCP if agent-mediated download fails
+            scp_cmd = f"scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '{resolved_binary_path}' root@{ip}:{remote_staging}"
             scp_res = _run_ssh(b_ip, scp_cmd).strip()
             clean_scp = '\n'.join([l.strip() for l in scp_res.splitlines() if not l.startswith('[STDERR]') and 'Connection to' not in l and l.strip()])
-            steps.append(f"📥 **Step 2A (Build Server Transfer)**: Transferred from \`{build_server}:{binary_path}\` to \`{ip}:{remote_staging}\` — {clean_scp or 'OK'}")
+            steps.append(f"📥 **Step 2A (Direct Build Server Transfer)**: {clean_scp or 'OK'}")
         else:
-            return f"❌ Binary not found on build server \`{build_server}\`: \`{binary_path}\`"
+            steps.append(f"📥 **Step 2A (Pulled from Build Server)**: `{resolved_binary_path}`")
+            scp_result = _run_scp(local_staging, ip, remote_staging)
+            if "[ERROR]" in scp_result:
+                if os.path.isfile(local_staging):
+                    os.remove(local_staging)
+                return f"❌ Failed to transfer binary to target device `{ip}`:\n{scp_result}"
+            steps.append(f"🚀 **Step 2A (Deployed to Target)**: Staged at `{ip}:{remote_staging}`")
+            if os.path.isfile(local_staging):
+                try:
+                    os.remove(local_staging)
+                except Exception:
+                    pass
     else:
-        if not os.path.isfile(binary_path):
-            return f"❌ Binary not found on host or build server: \`{binary_path}\`"
-        scp_result = _run_scp(binary_path, ip, remote_staging)
+        if not os.path.isfile(resolved_binary_path):
+            return f"❌ Binary not found on host or build server: `{resolved_binary_path}`"
+        scp_result = _run_scp(resolved_binary_path, ip, remote_staging)
         steps.append(f"📥 **Step 2A (Transfer)**: {scp_result}")
 
     # Set executable permissions
@@ -685,6 +761,61 @@ def deploy_and_mount_binary(
     steps.append(f"\n📋 **Verification**: `{verify}`")
 
     return f"🚀 **Deployment Complete to {ip}**\n\n" + "\n".join(steps)
+
+
+@mcp.tool()
+def find_build_artifact(
+    binary_name: str,
+    build_server: str = "",
+    build_root: str = "",
+    ctx: Context = None
+) -> str:
+    """
+    Search the remote developer build workspace tree for a compiled binary, shared library (.so),
+    or debug artifact by filename.
+    Returns matched file paths with modification timestamps and file sizes.
+
+    :param binary_name: Name of the binary or library (e.g. 'libapp.so', 'appliancehome').
+    :param build_server: Remote build server IP or username@IP.
+    :param build_root: Root workspace directory to search within (e.g. '/home/user/build-starfish').
+    """
+    b_ip = _resolve_target(build_server)
+    if not b_ip:
+        return "❌ No build server specified."
+
+    search_root = (build_root or "").strip() or "."
+    clean_name = os.path.basename(binary_name.strip())
+
+    find_cmd = (
+        f"find '{search_root}' -name '{clean_name}' -type f ! -path '*/.git/*' "
+        f"-exec ls -lh --time-style=+%Y-%m-%d_%H:%M:%S {{}} + 2>/dev/null | tail -n 10"
+    )
+    raw_res = _run_ssh(b_ip, find_cmd).strip()
+    lines = [l.strip() for l in raw_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]
+
+    if not lines or (len(lines) == 1 and "[ERROR]" in lines[0]):
+        # Try fallback simple find
+        fb_cmd = f"find '{search_root}' -name '{clean_name}' -type f ! -path '*/.git/*' 2>/dev/null | head -n 5"
+        fb_res = _run_ssh(b_ip, fb_cmd).strip()
+        lines = [l.strip() for l in fb_res.splitlines() if not l.startswith("[STDERR]") and "Connection to" not in l and l.strip()]
+
+    if not lines:
+        return f"🔍 No artifacts matching `{clean_name}` found in `{search_root}` on `{build_server}`."
+
+    out = [f"### 🔍 Discovered Artifacts for `{clean_name}` on `{build_server}`\n"]
+    out.append(f"**Search Root**: `{search_root}`\n")
+    out.append("| File Path | Size / Details |")
+    out.append("| :--- | :--- |")
+    for l in lines:
+        parts = l.split(None, 8)
+        if len(parts) >= 9:
+            size = parts[4]
+            date = parts[5]
+            fpath = parts[8]
+            out.append(f"| `{fpath}` | {size} ({date}) |")
+        else:
+            out.append(f"| `{l}` | Matched |")
+    return "\n".join(out)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -529,7 +529,7 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                         "search_log_contents", "read_log_snippet", "extract_archive", 
                         "profile_memory_leaks", "symbolicate_backtrace", "extract_git_blame", 
                         "fetch_git_source", "fetch_debug_symbols", "extract_pre_crash_timeline", 
-                        "autonomous_reproduce_bug", "deploy_and_mount_binary"
+                        "autonomous_reproduce_bug", "deploy_and_mount_binary", "find_build_artifact"
                     }
                 ]
             except Exception:
@@ -770,6 +770,15 @@ async def process_user_bugs(user_config: Dict[str, Any], mcp_server_url: str):
                                 call_res = _send_email_to_assignee(user_email, subject, body)
                                 _record_audit(issue_key, username, pri_name, "ANALYSIS_DONE", True, "", "Email sent to assignee", analysis_ok=True)
                             elif device_session and any(t["function"]["name"] == fn for t in device_tools):
+                                if fn in ("deploy_and_mount_binary", "find_build_artifact", "fetch_git_source", "extract_git_blame"):
+                                    u_b_ip = user_config.get("build_server_ip", "")
+                                    u_b_root = user_config.get("build_root_path", "")
+                                    if not args.get("build_server") and u_b_ip:
+                                        args["build_server"] = u_b_ip
+                                    if not args.get("build_root") and u_b_root:
+                                        args["build_root"] = u_b_root
+                                    if args.get("build_server") and "@" not in str(args["build_server"]):
+                                        args["build_server"] = f"{username}@{args['build_server']}"
                                 res = await device_session.call_tool(fn, arguments=args)
                                 call_res = str(res.content)
                             else:

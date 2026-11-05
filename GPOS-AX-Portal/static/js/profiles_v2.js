@@ -895,8 +895,30 @@
             const bRootEl = document.getElementById('user-bug-watchdog-build-root');
             if (bIpEl) bIpEl.value = cfg.build_server_ip || '';
             if (bRootEl) bRootEl.value = cfg.build_root_path || '';
+            const uBadge = document.getElementById('current-user-badge');
+            if (uBadge) {
+              const uName = cfg.current_username || localStorage.getItem('gpos_user') || (window.auth && window.auth.user ? window.auth.user.username : '') || 'active user';
+              uBadge.textContent = uName;
+            }
           }
         }).catch(err => console.warn('Could not load bug watchdog settings:', err));
+      }
+    },
+
+    async copyAgentPublicKey() {
+      try {
+        const token = localStorage.getItem('gpos_token') || localStorage.getItem('jwt_token') || '';
+        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        const res = await fetch('/api/user/ssh-public-key', { headers });
+        const data = await res.json();
+        if (data && data.public_key) {
+          await navigator.clipboard.writeText(data.public_key);
+          this.showToast('✅ Agent SSH public key copied to clipboard! Paste into ~/.ssh/authorized_keys on your build machine.');
+        } else {
+          this.showToast('ℹ️ No standalone SSH public key file found on pod. Standard cluster lab keys are used.');
+        }
+      } catch (err) {
+        this.showToast('Could not retrieve agent public key: ' + err.message);
       }
     },
 

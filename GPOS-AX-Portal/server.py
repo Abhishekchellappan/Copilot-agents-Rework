@@ -377,6 +377,7 @@ async def get_bug_watchdog_settings(request: Request):
                 "llm_key": "",
                 "build_server_ip": "",
                 "build_root_path": "",
+                "current_username": username,
                 "updated_at": None
             }
         return {
@@ -389,10 +390,35 @@ async def get_bug_watchdog_settings(request: Request):
             "llm_key": row["llm_key"] or "",
             "build_server_ip": row["build_server_ip"] or "" if "build_server_ip" in row.keys() else "",
             "build_root_path": row["build_root_path"] or "" if "build_root_path" in row.keys() else "",
+            "current_username": username,
             "updated_at": row["updated_at"]
         }
     finally:
         conn.close()
+
+
+@app.get("/api/user/ssh-public-key")
+async def get_ssh_public_key(request: Request):
+    """Return the Agent's SSH public key so developers can add it to authorized_keys."""
+    candidates = [
+        "/root/.ssh/id_rsa.pub",
+        "/root/.ssh/id_ed25519.pub",
+        os.path.expanduser("~/.ssh/id_rsa.pub"),
+        os.path.expanduser("~/.ssh/id_ed25519.pub"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    key = f.read().strip()
+                if key:
+                    return {"public_key": key, "path": path}
+            except Exception:
+                pass
+    env_key = os.environ.get("SSH_PUBLIC_KEY", "").strip()
+    if env_key:
+        return {"public_key": env_key, "path": "env:SSH_PUBLIC_KEY"}
+    return {"public_key": "", "path": None}
 
 
 @app.post("/api/user/bug-watchdog/settings")
@@ -1058,7 +1084,7 @@ def unwrap_exception(e: BaseException) -> str:
         return unwrap_exception(getattr(e, "exceptions")[0])
     return str(e)
 
-async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
+async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict, current_user: str = ""):
     from mcp.client.sse import sse_client
     from mcp.client.session import ClientSession
     from contextlib import AsyncExitStack
@@ -1070,9 +1096,32 @@ async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict):
     import base64
     import traceback
 
+    user_build_ip = ""
+    user_build_root = ""
+    if current_user:
+        try:
+            conn = get_db()
+            row = conn.execute(
+                "SELECT build_server_ip, build_root_path FROM user_bug_watchdog_config WHERE username = ?",
+                (current_user,)
+            ).fetchone()
+            if row:
+                user_build_ip = row["build_server_ip"] or ""
+                user_build_root = row["build_root_path"] or ""
+            conn.close()
+        except Exception:
+            pass
 
     sys_prompt = """You are the GPOS Device Agent Studio.
 You help embedded Linux developers debug, profile, and deploy to their target webOS boards via SSH.
+
+CRITICAL BINARY DEPLOYMENT & WORKSPACE AUTO-DISCOVERY RULE:
+- When the user asks to deploy an application, service, binary, or shared library (.so) to the target board (e.g. "Deploy libapp.so to target", "deploy my service", "deploy app on target"):
+  * If the user specifies only a filename (e.g. "libapp.so") or a relative path without an absolute path, DO NOT refuse, DO NOT claim you cannot access the workspace directly, and DO NOT ask the user for the absolute path!
+  * Call `deploy_and_mount_binary` directly with `binary_path="<filename>"`. The backend engine automatically connects to the developer's registered build server via SSH, executes an intelligent workspace auto-discovery (`find`), locates the most recently compiled artifact, and performs the 2-hop transfer to the target board!
+  * Always formulate the 2-phase confirmation plan with the target path and service to restart.
+- When the user asks to locate or search for a binary/library in their build workspace (e.g. "Where is libapp.so?", "Find libapp.so in my build tree"):
+  * Call `find_build_artifact(binary_name=..., build_server=..., build_root=...)`.
 
 CRITICAL TOOL EXECUTION RULE:
 You MUST actually call the appropriate tool (e.g., `execute_device_command`, `launch_app`, `close_app`) to perform the action. 
@@ -1545,6 +1594,15 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 if not func_args.get("collab_url"):
                                     func_args["collab_url"] = COLLAB_BASE_URL
 
+                            # Auto-inject developer build registry and AD username
+                            if func_name in ("deploy_and_mount_binary", "find_build_artifact", "fetch_git_source", "extract_git_blame"):
+                                if not func_args.get("build_server") and user_build_ip:
+                                    func_args["build_server"] = user_build_ip
+                                if not func_args.get("build_root") and user_build_root:
+                                    func_args["build_root"] = user_build_root
+                                if func_args.get("build_server") and current_user and "@" not in str(func_args["build_server"]):
+                                    func_args["build_server"] = f"{current_user}@{func_args['build_server']}"
+
                             tool_result = await dev_session.call_tool(func_name, arguments=func_args)
                             
                             res_text = ""
@@ -1770,7 +1828,7 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
             "message": f"⚠️ Could not connect to the Device MCP Server ({DEVICE_MCP_SERVER_URL}).\n\nThe device container may still be starting up or restarting. Please verify your connection or try again in a few moments.\n\nDetails: {err_msg}"
         }
 
-async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat: str):
+async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat: str, current_user: str = ""):
     from mcp.client.sse import sse_client
     from mcp.client.session import ClientSession
     from contextlib import AsyncExitStack
@@ -1780,6 +1838,22 @@ async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat
     import re
     import uuid
     import base64
+
+    user_build_ip = ""
+    user_build_root = ""
+    if current_user:
+        try:
+            conn = get_db()
+            row = conn.execute(
+                "SELECT build_server_ip, build_root_path FROM user_bug_watchdog_config WHERE username = ?",
+                (current_user,)
+            ).fetchone()
+            if row:
+                user_build_ip = row["build_server_ip"] or ""
+                user_build_root = row["build_root_path"] or ""
+            conn.close()
+        except Exception:
+            pass
     
     async with AsyncExitStack() as stack:
         try:
@@ -2005,6 +2079,15 @@ Format Device output as a <gdb-widget> or <swarm-widget> HTML block. For crash s
                                     func_args["collab_pat"] = collab_pat
                                 if not func_args.get("collab_url"):
                                     func_args["collab_url"] = COLLAB_BASE_URL
+
+                            # Auto-inject developer build registry and AD username
+                            if func_name in ("deploy_and_mount_binary", "find_build_artifact", "fetch_git_source", "extract_git_blame"):
+                                if not func_args.get("build_server") and user_build_ip:
+                                    func_args["build_server"] = user_build_ip
+                                if not func_args.get("build_root") and user_build_root:
+                                    func_args["build_root"] = user_build_root
+                                if func_args.get("build_server") and current_user and "@" not in str(func_args["build_server"]):
+                                    func_args["build_server"] = f"{current_user}@{func_args['build_server']}"
 
                             tool_result = await target_session.call_tool(func_name, arguments=func_args)
                             res_text = ""
@@ -2265,10 +2348,18 @@ async def llm_chat(req: ChatRequest, request: Request):
     )
     req.collab_pat = effective_collab_pat
 
+    current_user = ""
+    try:
+        current_user = get_current_user(request)
+    except Exception:
+        pass
+    if not current_user:
+        current_user = req.username or "dev"
+
     if req.agent_id == 'supervisor-agent':
-        return await supervisor_llm_chat(req, llm_url, headers, pat)
+        return await supervisor_llm_chat(req, llm_url, headers, pat, current_user=current_user)
     elif req.agent_id == 'device-agent' or '[Target Board IP:' in req.message:
-        return await device_llm_chat(req, llm_url, headers)
+        return await device_llm_chat(req, llm_url, headers, current_user=current_user)
     
     # We will use the official mcp python SDK to connect to the MCP server
     from mcp.client.sse import sse_client
