@@ -1098,22 +1098,38 @@ async def device_llm_chat(req: ChatRequest, llm_url: str, headers: dict, current
 
     user_build_ip = ""
     user_build_root = ""
+    user_target_ip = ""
     if current_user:
         try:
             conn = get_db()
             row = conn.execute(
-                "SELECT build_server_ip, build_root_path FROM user_bug_watchdog_config WHERE username = ?",
+                "SELECT build_server_ip, build_root_path, target_board_ip FROM user_bug_watchdog_config WHERE username = ?",
                 (current_user,)
             ).fetchone()
             if row:
                 user_build_ip = row["build_server_ip"] or ""
                 user_build_root = row["build_root_path"] or ""
+                user_target_ip = row["target_board_ip"] or ""
             conn.close()
         except Exception:
             pass
 
-    sys_prompt = """You are the GPOS Device Agent Studio.
+    sys_prompt = f"""You are the GPOS Device Agent Studio.
 You help embedded Linux developers debug, profile, and deploy to their target webOS boards via SSH.
+
+ACTIVE DEVELOPER PROFILE CONTEXT:
+- Active Logged-in Username: {current_user or 'Unknown'}
+- Configured Build Server: {user_build_ip or 'NOT CONFIGURED'}
+- Configured Build Workspace Root: {user_build_root or 'NOT CONFIGURED'}
+- Configured Target Board IP: {user_target_ip or 'NOT CONFIGURED'}
+
+CRITICAL DEVELOPER ISOLATION & CONFIGURATION RULES:
+- NEVER assume, suggest, or mention another developer's username or directory paths (e.g. NEVER mention /home/abhishek15.c).
+- If the user asks to deploy or locate a binary/library and their Configured Build Server is 'NOT CONFIGURED', and they did not provide a build server IP in their chat message:
+  Politely inform the user:
+  "Your Build Server IP and Workspace Root are not yet configured in your profile.
+  Please configure them in **Settings (gear icon) -> Credential & LLM Profiles -> Automated Bug Analyser** (Build Server Host / IP and Build Workspace Root Path), or provide your build server IP directly in this chat (e.g. `<username>@<build_ip>`)."
+- When the user asks to deploy to target, if `target_ip` is not specified in the message, use their Configured Target Board IP ({user_target_ip}) if available, or ask them for their target board IP.
 
 CRITICAL BINARY DEPLOYMENT & WORKSPACE AUTO-DISCOVERY RULE:
 - When the user asks to deploy an application, service, binary, or shared library (.so) to the target board (e.g. "Deploy libapp.so to target", "deploy my service", "deploy app on target"):
@@ -1612,6 +1628,11 @@ If the user's prompt includes a "[Target Board IP: <ip>]" tag, use that IP for y
                                 if func_args.get("build_server") and current_user and "@" not in str(func_args["build_server"]):
                                     func_args["build_server"] = f"{current_user}@{func_args['build_server']}"
 
+                            # Auto-inject user target board IP for device tools if omitted by user
+                            if func_name in ("deploy_and_mount_binary", "execute_device_command", "launch_app", "close_app", "run_perf_benchmark", "profile_memory_leaks", "stream_device_logs", "take_screenshot"):
+                                if not func_args.get("target_ip") and user_target_ip:
+                                    func_args["target_ip"] = user_target_ip
+
                             tool_result = await dev_session.call_tool(func_name, arguments=func_args)
                             
                             res_text = ""
@@ -1850,16 +1871,18 @@ async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat
 
     user_build_ip = ""
     user_build_root = ""
+    user_target_ip = ""
     if current_user:
         try:
             conn = get_db()
             row = conn.execute(
-                "SELECT build_server_ip, build_root_path FROM user_bug_watchdog_config WHERE username = ?",
+                "SELECT build_server_ip, build_root_path, target_board_ip FROM user_bug_watchdog_config WHERE username = ?",
                 (current_user,)
             ).fetchone()
             if row:
                 user_build_ip = row["build_server_ip"] or ""
                 user_build_root = row["build_root_path"] or ""
+                user_target_ip = row["target_board_ip"] or ""
             conn.close()
         except Exception:
             pass
@@ -1944,6 +1967,20 @@ async def supervisor_llm_chat(req: ChatRequest, llm_url: str, headers: dict, pat
 You have access to TWO domains of tools:
 1. JIRA TOOLS: For checking tickets, bugs, and governance in project {req.project_key or 'SIGPOSDEV'}.
 2. DEVICE TOOLS: For executing SSH commands, running GDB, pulling logs, and swarm testing on target boards.
+
+ACTIVE DEVELOPER PROFILE CONTEXT:
+- Active Logged-in Username: {current_user or 'Unknown'}
+- Configured Build Server: {user_build_ip or 'NOT CONFIGURED'}
+- Configured Build Workspace Root: {user_build_root or 'NOT CONFIGURED'}
+- Configured Target Board IP: {user_target_ip or 'NOT CONFIGURED'}
+
+CRITICAL DEVELOPER ISOLATION & CONFIGURATION RULES:
+- NEVER assume, suggest, or mention another developer's username or directory paths (e.g. NEVER mention /home/abhishek15.c).
+- If the user asks to deploy or locate a binary/library and their Configured Build Server is 'NOT CONFIGURED', and they did not provide a build server IP in their chat message:
+  Politely inform the user:
+  "Your Build Server IP and Workspace Root are not yet configured in your profile.
+  Please configure them in **Settings (gear icon) -> Credential & LLM Profiles -> Automated Bug Analyser** (Build Server Host / IP and Build Workspace Root Path), or provide your build server IP directly in this chat (e.g. `<username>@<build_ip>`)."
+- When the user asks to deploy to target, if `target_ip` is not specified in the message, use their Configured Target Board IP ({user_target_ip}) if available, or ask them for their target board IP.
 
 When checking bugs or triage, check Jira first. 
 When investigating a crash, connect to the board and run 'run_gdb_backtrace' or 'auto_triage_service'.

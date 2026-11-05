@@ -573,7 +573,7 @@ def _provision_tool_for_arch(target_ip: str, arch: str, tool_name: str) -> str:
 @mcp.tool()
 def generate_fast_search_command(
     component_name: str,
-    build_workspace: str = "/home/abhishek15.c/build_dir/build-starfish",
+    build_workspace: str = "",
     artifact_type: str = "ipk",
     ctx: Context = None
 ) -> str:
@@ -586,7 +586,7 @@ def generate_fast_search_command(
     Only use this tool if the user explicitly asks to "find", "locate", or "deploy" an IPK or binary.
 
     :param component_name: Name of the component (e.g. 'audiod', 'webappmanager', 'sam').
-    :param build_workspace: Root of the build directory (default: '/home/abhishek15.c/build_dir/build-starfish').
+    :param build_workspace: Root of the build directory (e.g. '$BUILD_WORKSPACE' or '/path/to/build/workspace').
     :param artifact_type: 'ipk' for package search, 'binary' for compiled executable. MUST BE 'binary' IF USER ASKS FOR BINARY!
     """
     clean_name = component_name.strip()
@@ -595,7 +595,7 @@ def generate_fast_search_command(
     if clean_name.startswith("lib32-"):
         clean_name = clean_name[6:]
 
-    ws = build_workspace.rstrip("/")
+    ws = build_workspace.rstrip("/") if build_workspace else "$BUILD_WORKSPACE"
 
     if artifact_type.lower() == "binary":
         # Ultra-fast binary search (only traverse inside 'image' directories)
@@ -669,7 +669,7 @@ def deploy_and_mount_binary(
             # Auto-discovery in build workspace tree
             search_root = (build_root or "").strip() or "."
             find_cmd = (
-                f"find '{search_root}' -name '{binary_name}' -type f ! -path '*/.git/*' "
+                f"find '{search_root}' \\( -name '{binary_name}' -o -path '*{binary_path.strip()}*' \\) -type f ! -path '*/.git/*' "
                 f"-printf '%T@ %p\\n' 2>/dev/null | sort -n | tail -n 1 | awk '{{print $2}}'"
             )
             found_raw = _run_ssh(b_ip, find_cmd).strip()
@@ -794,7 +794,7 @@ def find_build_artifact(
     clean_name = os.path.basename(binary_name.strip())
 
     find_cmd = (
-        f"find '{search_root}' -name '{clean_name}' -type f ! -path '*/.git/*' "
+        f"find '{search_root}' \\( -name '{clean_name}' -o -path '*{binary_name.strip()}*' \\) -type f ! -path '*/.git/*' "
         f"-exec ls -lh --time-style=+%Y-%m-%d_%H:%M:%S {{}} + 2>/dev/null | tail -n 10"
     )
     raw_res = _run_ssh(b_ip, find_cmd).strip()
