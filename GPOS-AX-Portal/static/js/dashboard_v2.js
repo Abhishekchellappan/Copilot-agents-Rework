@@ -21,15 +21,15 @@ const dashboard = {
 
     this.showSkeletonLoading();
 
-    // 12-second safety timeout so dashboard is NEVER stuck loading forever
+    // 35-second safety timeout so dashboard never hangs indefinitely
     if (this._safetyTimeout) clearTimeout(this._safetyTimeout);
     this._safetyTimeout = setTimeout(() => {
       if (this._isLoading) {
-        console.warn("Dashboard load safety timeout reached after 12s, unblurring");
+        console.warn("Dashboard load safety timeout reached after 35s, unblurring");
         this.hideSkeletonLoading();
         this._isLoading = false;
       }
-    }, 12000);
+    }, 35000);
 
     try {
       const [reportResult, burndownResult, mentionsResult] = await Promise.allSettled([

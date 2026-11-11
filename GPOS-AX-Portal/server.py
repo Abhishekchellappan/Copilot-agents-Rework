@@ -1019,28 +1019,40 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
     except Exception as e:
         logger.warning(f"openSprints JQL failed: {e}")
 
-    # 2. Try Agile Board API across all project boards to resolve active sprint
+    # 2. Try Agile Board API across project boards to resolve active sprint
     try:
         boards_data = fetch_jira("agile/1.0/board", {"projectKeyOrId": project_key}, pat)
         boards = boards_data.get("values", [])
-        for b in boards[:4]:
-            board_id = b.get("id")
-            if not board_id:
-                continue
+        scrum_boards = [b for b in boards if b.get("type", "").lower() == "scrum"]
+        candidate_boards = scrum_boards if scrum_boards else boards
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _check_board_sprint(b):
+            b_id = b.get("id")
+            if not b_id:
+                return None
             try:
-                sprints_data = fetch_jira(f"agile/1.0/board/{board_id}/sprint", {"state": "active"}, pat)
-                sprints = sprints_data.get("values", [])
-                if sprints:
-                    sprint_id = sprints[0]["id"]
-                    sprint_title = sprints[0].get("name", f"Sprint {sprint_id}")
+                sprints_data = fetch_jira(f"agile/1.0/board/{b_id}/sprint", {"state": "active,future"}, pat)
+                for s in sprints_data.get("values", []):
+                    if s.get("state") == "active":
+                        return s.get("id"), s.get("name")
+            except Exception:
+                pass
+            return None
+
+        # Query candidate boards in parallel for speed
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(_check_board_sprint, b) for b in candidate_boards[:10]]
+            for f in as_completed(futures):
+                res = f.result()
+                if res:
+                    sprint_id, sprint_title = res
                     sprint_jql = f"project = {project_key} AND sprint = {sprint_id}"
                     data = fetch_jira("api/2/search", {"jql": sprint_jql, "maxResults": 200, "fields": fields_str}, pat)
                     issues = data.get("issues", [])
                     if issues:
-                        return issues, sprint_title, field_names
-            except Exception as e:
-                logger.debug(f"Board {board_id} sprint query skipped: {e}")
-                continue
+                        return issues, sprint_title or f"Sprint {sprint_id}", field_names
     except Exception as e:
         logger.warning(f"Agile Board sprint query failed: {e}")
 
