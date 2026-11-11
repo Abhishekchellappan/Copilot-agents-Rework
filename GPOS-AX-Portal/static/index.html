@@ -951,7 +951,7 @@
                         pointer-events: none;
                     }
                     #sprint-loading-overlay.hidden-overlay {
-                        display: none;
+                        display: none !important;
                     }
 
                     /* ── Agent Core Animation ── */
@@ -1073,7 +1073,7 @@
                     }
                 </style>
 
-                <div id="sprint-loading-overlay" class="hidden-overlay">
+                <div id="sprint-loading-overlay">
                     <!-- Scan Line Effect -->
                     <div class="scan-line-effect"></div>
 
@@ -2533,7 +2533,7 @@
 
     <script src="/static/js/profiles_v2.js?v=44"></script>
     <script src="/static/js/api_v2.js?v=41"></script>
-    <script src="/static/js/dashboard_v2.js?v=34"></script>
+    <script src="/static/js/dashboard_v2.js?v=35"></script>
     <script src="/static/js/chat_v2.js?v=32"></script>
     <script src="/static/js/device_hud.js?v=20261028_1625"></script>
     <script>
@@ -2637,6 +2637,9 @@
             
             // Refresh data if switching to dashboard
             if (viewId === 'dashboard' && typeof dashboard !== 'undefined') {
+                if (typeof dashboard.showSkeletonLoading === 'function') {
+                    dashboard.showSkeletonLoading();
+                }
                 dashboard.loadData();
             }
 

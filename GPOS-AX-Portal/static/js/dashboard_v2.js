@@ -198,6 +198,7 @@ const dashboard = {
       overlay.classList.remove('hidden-overlay', 'fade-out', 'error-state');
       overlay.style.opacity = '1';
       overlay.style.display = 'flex';
+      overlay.style.pointerEvents = 'auto';
 
       // Reset stage ticker
       this._stageIndex = 0;
