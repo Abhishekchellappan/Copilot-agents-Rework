@@ -12,8 +12,25 @@ const dashboard = {
     setInterval(() => this.loadData(), 60000);
   },
 
+  _isLoading: false,
+  _safetyTimeout: null,
+
   async loadData() {
+    if (this._isLoading) return;
+    this._isLoading = true;
+
     this.showSkeletonLoading();
+
+    // 12-second safety timeout so dashboard is NEVER stuck loading forever
+    if (this._safetyTimeout) clearTimeout(this._safetyTimeout);
+    this._safetyTimeout = setTimeout(() => {
+      if (this._isLoading) {
+        console.warn("Dashboard load safety timeout reached after 12s, unblurring");
+        this.hideSkeletonLoading();
+        this._isLoading = false;
+      }
+    }, 12000);
+
     try {
       const [reportResult, burndownResult, mentionsResult] = await Promise.allSettled([
         API.getSprintReport(),
@@ -21,6 +38,7 @@ const dashboard = {
         API.getMentions()
       ]);
 
+      if (this._safetyTimeout) clearTimeout(this._safetyTimeout);
       this.hideSkeletonLoading();
 
       // 1. Process Sprint Report
@@ -68,6 +86,7 @@ const dashboard = {
 
     } catch (error) {
       console.error("Critical failure in dashboard loadData:", error);
+      if (this._safetyTimeout) clearTimeout(this._safetyTimeout);
       this.showLoadingError("Dashboard load failed — please refresh or check Settings.");
       this.renderEmptyReport("Dashboard load failed. Please refresh or check Settings.");
       const connEl = document.getElementById('connection-status');
@@ -75,6 +94,8 @@ const dashboard = {
         connEl.classList.remove('bg-green-500');
         connEl.classList.add('bg-red-500');
       }
+    } finally {
+      this._isLoading = false;
     }
   },
 
@@ -193,6 +214,9 @@ const dashboard = {
   showSkeletonLoading() {
     document.querySelectorAll('.kpi-card').forEach(function(el) { el.classList.add('animate-pulse'); });
 
+    const dashView = document.getElementById('view-dashboard');
+    if (dashView) dashView.classList.add('is-loading');
+
     const overlay = document.getElementById('sprint-loading-overlay');
     if (overlay) {
       overlay.classList.remove('hidden-overlay', 'fade-out', 'error-state');
@@ -231,6 +255,9 @@ const dashboard = {
   },
   hideSkeletonLoading() {
     document.querySelectorAll('.kpi-card').forEach(function(el) { el.classList.remove('animate-pulse'); });
+
+    const dashView = document.getElementById('view-dashboard');
+    if (dashView) dashView.classList.remove('is-loading');
 
     // Clear stage ticker
     if (this._stageInterval) {

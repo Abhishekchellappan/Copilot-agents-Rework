@@ -927,24 +927,40 @@
             </div>
 
             <!-- VIEW 2: Dashboard -->
-            <div id="view-dashboard" class="view-section hidden space-y-6" style="position: relative;">
+            <div id="view-dashboard" class="view-section hidden is-loading" style="position: relative;">
                 <!-- ═══ SPRINT LOADING OVERLAY ═══ -->
                 <style>
+                    /* ── Dashboard Content Blur & Dim ── */
+                    #view-dashboard.is-loading #dashboard-content {
+                        filter: blur(8px);
+                        opacity: 0.35;
+                        pointer-events: none;
+                        user-select: none;
+                        transition: filter 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+                    }
+                    #view-dashboard:not(.is-loading) #dashboard-content {
+                        filter: blur(0px);
+                        opacity: 1;
+                        pointer-events: auto;
+                        transition: filter 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+                    }
+
                     #sprint-loading-overlay {
                         position: absolute;
                         inset: 0;
-                        background: rgba(2, 6, 23, 0.88);
-                        backdrop-filter: blur(12px);
-                        -webkit-backdrop-filter: blur(12px);
+                        background: rgba(11, 18, 33, 0.45);
+                        backdrop-filter: blur(4px);
+                        -webkit-backdrop-filter: blur(4px);
                         display: flex;
                         flex-direction: column;
                         align-items: center;
                         justify-content: center;
-                        z-index: 30;
+                        z-index: 40;
                         opacity: 1;
                         transition: opacity 0.4s ease-out;
                         pointer-events: auto;
-                        border-radius: 0.5rem;
+                        border-radius: 0.75rem;
+                        min-height: 520px;
                     }
                     #sprint-loading-overlay.fade-out {
                         opacity: 0;
@@ -1200,6 +1216,8 @@
                     </button>
                 </div>
 
+                <!-- Dashboard Content Container (blurred while loading) -->
+                <div id="dashboard-content" class="space-y-6">
                 <!-- KPI Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div class="bg-slate-800 rounded-lg p-4 border border-slate-700 shadow-sm">
@@ -1329,6 +1347,7 @@
 
                 <!-- Bug Watchdog Status Panel -->
                 <div id="bug-watchdog-container" class="mt-6"></div>
+                </div><!-- /dashboard-content -->
             </div>
 
             <!-- VIEW: Device Agent HUD -->
@@ -2533,7 +2552,7 @@
 
     <script src="/static/js/profiles_v2.js?v=44"></script>
     <script src="/static/js/api_v2.js?v=41"></script>
-    <script src="/static/js/dashboard_v2.js?v=35"></script>
+    <script src="/static/js/dashboard_v2.js?v=36"></script>
     <script src="/static/js/chat_v2.js?v=32"></script>
     <script src="/static/js/device_hud.js?v=20261028_1625"></script>
     <script>

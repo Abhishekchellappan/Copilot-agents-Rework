@@ -954,7 +954,7 @@ def _get_field_names(project_key: str, pat: str) -> dict:
         logger.warning(f"Failed to fetch field names for {project_key}: {e}")
         return {}
 
-sprint_cache = TTLCache(maxsize=100, ttl=15)
+sprint_cache = TTLCache(maxsize=100, ttl=60)
 
 @cached(cache=sprint_cache, key=lambda project_key, sprint_name, pat: (project_key, sprint_name, pat))
 def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[List[dict], str, dict]:
@@ -1023,7 +1023,7 @@ def _get_sprint_issues(project_key: str, sprint_name: str, pat: str) -> Tuple[Li
     try:
         boards_data = fetch_jira("agile/1.0/board", {"projectKeyOrId": project_key}, pat)
         boards = boards_data.get("values", [])
-        for b in boards:
+        for b in boards[:4]:
             board_id = b.get("id")
             if not board_id:
                 continue
