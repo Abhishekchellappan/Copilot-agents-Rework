@@ -68,7 +68,7 @@ const dashboard = {
 
     } catch (error) {
       console.error("Critical failure in dashboard loadData:", error);
-      this.hideSkeletonLoading();
+      this.showLoadingError("Dashboard load failed — please refresh or check Settings.");
       this.renderEmptyReport("Dashboard load failed. Please refresh or check Settings.");
       const connEl = document.getElementById('connection-status');
       if (connEl) {
@@ -178,11 +178,96 @@ const dashboard = {
     return raw;
   },
 
+  // ── Loading Stage Ticker ──
+  _loadingStages: [
+    "Connecting to Jira workspace...",
+    "Fetching active sprint issues & velocity points...",
+    "Calculating ideal vs. actual burndown trajectory...",
+    "Compiling developer workload & ticket distribution...",
+    "Scanning for at-risk deliverables & missing estimates...",
+    "Rendering dashboard visualizations..."
+  ],
+  _stageIndex: 0,
+  _stageInterval: null,
+
   showSkeletonLoading() {
     document.querySelectorAll('.kpi-card').forEach(function(el) { el.classList.add('animate-pulse'); });
+
+    const overlay = document.getElementById('sprint-loading-overlay');
+    if (overlay) {
+      overlay.classList.remove('hidden-overlay', 'fade-out', 'error-state');
+      overlay.style.opacity = '1';
+      overlay.style.display = 'flex';
+
+      // Reset stage ticker
+      this._stageIndex = 0;
+      this.setLoadingStage(this._loadingStages[0]);
+
+      // Hide error button
+      const errBtn = document.getElementById('loading-error-btn');
+      if (errBtn) errBtn.classList.add('hidden');
+
+      // Start rotating stages
+      if (this._stageInterval) clearInterval(this._stageInterval);
+      this._stageInterval = setInterval(() => {
+        this._stageIndex = (this._stageIndex + 1) % this._loadingStages.length;
+        this.setLoadingStage(this._loadingStages[this._stageIndex]);
+      }, 1800);
+    }
+  },
+
+  setLoadingStage(text) {
+    const el = document.getElementById('loading-stage-text');
+    if (el) {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(6px)';
+      setTimeout(() => {
+        el.textContent = text;
+        el.style.opacity = '1';
+        el.style.transform = 'translateY(0)';
+      }, 150);
+    }
   },
   hideSkeletonLoading() {
     document.querySelectorAll('.kpi-card').forEach(function(el) { el.classList.remove('animate-pulse'); });
+
+    // Clear stage ticker
+    if (this._stageInterval) {
+      clearInterval(this._stageInterval);
+      this._stageInterval = null;
+    }
+
+    const overlay = document.getElementById('sprint-loading-overlay');
+    if (overlay && !overlay.classList.contains('hidden-overlay')) {
+      // Set final stage message
+      this.setLoadingStage("Dashboard ready ✓");
+
+      // Fade out after a brief moment
+      setTimeout(() => {
+        overlay.classList.add('fade-out');
+        // Remove from DOM flow after transition
+        setTimeout(() => {
+          overlay.classList.add('hidden-overlay');
+          overlay.style.display = 'none';
+        }, 400);
+      }, 300);
+    }
+  },
+
+  showLoadingError(message) {
+    if (this._stageInterval) {
+      clearInterval(this._stageInterval);
+      this._stageInterval = null;
+    }
+
+    const overlay = document.getElementById('sprint-loading-overlay');
+    if (overlay) {
+      overlay.classList.add('error-state');
+      this.setLoadingStage(message || "Connection failed — check your Jira PAT in Settings");
+
+      const errBtn = document.getElementById('loading-error-btn');
+      if (errBtn) errBtn.classList.remove('hidden');
+    }
   },
 
   renderKPICards(data) {
